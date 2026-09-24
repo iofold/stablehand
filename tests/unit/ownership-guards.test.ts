@@ -12,9 +12,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createContainer } from '../../packages/ctxmill/src/config/container.js';
-import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
-import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
+import { createContainer } from '../../packages/stablehand/src/config/container.js';
+import { createServer } from '../../packages/stablehand/src/orchestrator/server.js';
+import type { AppContainer } from '../../packages/stablehand/src/config/container.js';
 import { resolveTestDatabaseUrl } from '../utils/test-db.js';
 
 const AGENT_PAYLOAD = {
@@ -31,7 +31,7 @@ describe('Ownership enforcement on routes', () => {
   let dataDir: string;
 
   beforeAll(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-ownership-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'stablehand-ownership-'));
 
     container = await createContainer(
       {
@@ -243,7 +243,7 @@ describe('Ownership enforcement on routes', () => {
         agentId,
         role: 'assistant',
         content: '',
-        toolCalls: [{ id: 'tc-1', name: 'search', arguments: { query: 'ctxmill' } }],
+        toolCalls: [{ id: 'tc-1', name: 'search', arguments: { query: 'stablehand' } }],
         createdAt: 2,
       });
       await container.db.addMessage({
@@ -280,7 +280,7 @@ describe('Ownership enforcement on routes', () => {
             expect.objectContaining({
               id: 'tc-1',
               name: 'search',
-              arguments: { query: 'ctxmill' },
+              arguments: { query: 'stablehand' },
             }),
           ],
         }),

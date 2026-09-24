@@ -12,9 +12,9 @@
 
 ## Executive Summary
 
-The client spec proposes workspace-based middleware for LangGraph with harness-specific hooks. After deep analysis of all three harness implementations and external middleware patterns, **we recommend a two-tier design**: a **unified ctxmill middleware contract** as the portable default, plus explicit **harness extension escape hatches** for SDK-specific power features.
+The client spec proposes workspace-based middleware for LangGraph with harness-specific hooks. After deep analysis of all three harness implementations and external middleware patterns, **we recommend a two-tier design**: a **unified stablehand middleware contract** as the portable default, plus explicit **harness extension escape hatches** for SDK-specific power features.
 
-The client spec's approach ("paths are universal, hooks are harness-specific") gives shared config with non-shared semantics — the worst DX long-term. Instead: one write-once middleware surface at the ctxmill abstraction level, with native SDK hooks available as opt-in extensions.
+The client spec's approach ("paths are universal, hooks are harness-specific") gives shared config with non-shared semantics — the worst DX long-term. Instead: one write-once middleware surface at the stablehand abstraction level, with native SDK hooks available as opt-in extensions.
 
 ---
 
@@ -79,7 +79,7 @@ runner.ts killSession()
 | **Extension model** | Event subscriptions: `session.subscribe(listener)` — 20+ event types |
 | **Tool interception** | Via `convertTools()` (lines 155-209) — wraps each tool's execute fn, mutable `ConvertToolsContext` |
 | **Model interception** | ❌ Not exposed |
-| **Event mapping** | `_piMapAgentEvent()` (lines 293-346) — transforms SDK events → ctxmill `AgentEvent` |
+| **Event mapping** | `_piMapAgentEvent()` (lines 293-346) — transforms SDK events → stablehand `AgentEvent` |
 | **Key limitation** | No `getMessages()` on native session — harness maintains own transcript array |
 
 ### Comparison Matrix
@@ -120,7 +120,7 @@ All 3 harnesses wrap tool execution through a converter function (`convertTools`
 
 ### Tier 1: Portable Middleware Contract (runs at runner.ts level)
 
-These hooks are **truly universal** — they work identically across all 3 harnesses because they operate at the ctxmill abstraction level, not the SDK level.
+These hooks are **truly universal** — they work identically across all 3 harnesses because they operate at the stablehand abstraction level, not the SDK level.
 
 ```typescript
 // packages/sandbox-daemon/src/middleware/types.ts
@@ -369,7 +369,7 @@ The PI agent's event-subscription model is fundamentally different from LangGrap
 | `beforeTurn` | Called before `nativeSession.prompt()` in `deliverTurn()` |
 | `afterTurn` | Called after the event subscription completes |
 | `wrapToolCall` | **Injected into `convertTools()` execute wrapper** — wrap the `def.handler(params, ctx)` call at line 188 |
-| `mapEvent` | **Wrap `_piMapAgentEvent()` output** — after SDK event → ctxmill event conversion, before yielding |
+| `mapEvent` | **Wrap `_piMapAgentEvent()` output** — after SDK event → stablehand event conversion, before yielding |
 | `exportState` | Called during `exportState()` — middleware state serialized alongside harness state |
 | `onSessionClose` | Called before `nativeSession.dispose()` |
 
@@ -442,7 +442,7 @@ The client spec's 3 changes map cleanly into this architecture:
 
 ```typescript
 // middleware/block-dangerous-tools.ts
-import { defineMiddleware } from '@ctxmill/sandbox-daemon/middleware';
+import { defineMiddleware } from '@stablehand/sandbox-daemon/middleware';
 
 const BLOCKED = new Set(['rm_rf', 'drop_database', 'exec_raw_sql']);
 
@@ -467,7 +467,7 @@ export default defineMiddleware({
 
 ```typescript
 // middleware/budget-tracker.ts
-import { defineMiddleware } from '@ctxmill/sandbox-daemon/middleware';
+import { defineMiddleware } from '@stablehand/sandbox-daemon/middleware';
 
 const MAX_BUDGET_USD = 13.50;
 

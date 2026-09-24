@@ -39,7 +39,7 @@ export function TokenGate() {
         ? caught.body as Record<string, unknown>
         : null;
       if (caught instanceof ApiError && caught.status === 403 && body?.requiredCapability === null) {
-        setError('Scoped keys cannot unlock the dashboard. Enter the master CTXMILL_API_TOKEN.');
+        setError('Scoped keys cannot unlock the dashboard. Enter the master STABLEHAND_API_TOKEN.');
       } else {
         setError('Token was not accepted.');
       }
@@ -69,7 +69,7 @@ export function TokenGate() {
                 API token required
               </h1>
               <p className="mt-1 text-xs text-surface-400">
-                Enter the CTXMILL_API_TOKEN for this deployment.
+                Enter the STABLEHAND_API_TOKEN for this deployment.
               </p>
             </div>
           </div>

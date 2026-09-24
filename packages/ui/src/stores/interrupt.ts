@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ApiInterruptPayload } from '@ctxmill/shared';
+import type { ApiInterruptPayload } from '@stablehand/shared';
 
 type InterruptPayload = ApiInterruptPayload;
 

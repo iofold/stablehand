@@ -3,7 +3,7 @@ import {
   API_TURN_STATUSES,
   SANDBOX_SESSION_STATUSES,
   type ApiSandboxSessionStatusCounts,
-} from '@ctxmill/shared';
+} from '@stablehand/shared';
 
 const KNOWN_SANDBOX_SESSION_STATUSES = new Set<string>(SANDBOX_SESSION_STATUSES);
 const KNOWN_TURN_STATUSES = new Set<string>(API_TURN_STATUSES);

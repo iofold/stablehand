@@ -9,7 +9,7 @@ import { createConnectTransport } from '@connectrpc/connect-node';
 import {
   HarnessService,
   KillSessionRequestSchema,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {

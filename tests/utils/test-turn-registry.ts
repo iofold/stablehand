@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { vi } from 'vitest';
-import type { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
-import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
-import type { SessionEvent } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
+import type { TypedEventBus } from '../../packages/stablehand/src/events/bus.js';
+import type { AgentDefinition, Message } from '@stablehand/sandbox-daemon';
+import type { SessionEvent } from '../../packages/stablehand/src/orchestrator/session-turn-service.js';
 
 export const MAX_CONCURRENT_TURNS_PER_AGENT = 3;
 

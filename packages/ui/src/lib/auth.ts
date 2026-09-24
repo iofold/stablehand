@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export const API_TOKEN_STORAGE_KEY = 'ctxmill.apiToken';
+export const API_TOKEN_STORAGE_KEY = 'stablehand.apiToken';
 
 interface ApiAuthState {
   token: string;

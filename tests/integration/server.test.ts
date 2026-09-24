@@ -3,7 +3,7 @@ import { allowConsoleErrors } from '../setup-strict.js';
 
 import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
-describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
+describe('Stablehand Server Integration (ORC-01, ORC-02)', () => {
   let app: TestAppHandle['app'];
   let container: TestAppHandle['container'];
   let testApp: TestAppHandle | undefined;
@@ -12,7 +12,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
 
   beforeAll(async () => {
     testApp = await createTestApp({
-      dirPrefix: 'ctxmill-test-',
+      dirPrefix: 'stablehand-test-',
     });
     app = testApp.app;
     container = testApp.container;
@@ -138,7 +138,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
     const sandboxSession = await container.db.createSandboxSession({
       conversationId: conversation.id,
       agentId: agent.id,
-      containerName: 'ctxmill-sandbox-stream-test',
+      containerName: 'stablehand-sandbox-stream-test',
       containerId: 'container-stream-test',
       harnessName: 'langgraph',
       status: 'ACTIVE',
@@ -162,7 +162,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
       const reader = res.body!.getReader();
       let text = '';
 
-      while (!text.includes('ctxmill.sandbox_session.snapshot')) {
+      while (!text.includes('stablehand.sandbox_session.snapshot')) {
         const { value, done } = await Promise.race([
           reader.read(),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for state snapshot')), 2_000)),
@@ -176,7 +176,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
       }
 
       expect(text).toContain('"type":"CUSTOM"');
-      expect(text).toContain('"name":"ctxmill.sandbox_session.snapshot"');
+      expect(text).toContain('"name":"stablehand.sandbox_session.snapshot"');
       expect(text).not.toContain('"subtype":"state_snapshot"');
       expect(text).toContain(`"agentId":"${agent.id}"`);
       expect(text).toContain(`"conversationId":"${conversation.id}"`);
@@ -184,7 +184,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
       expect(text).toContain(`"activeTurnId":"${turnId}"`);
       expect(text).toContain('"status":"ACTIVE"');
       expect(text).toContain('"harnessName":"langgraph"');
-      expect(text).toContain('"containerName":"ctxmill-sandbox-stream-test"');
+      expect(text).toContain('"containerName":"stablehand-sandbox-stream-test"');
       expect(text).toMatch(/"timestamp":\d+/);
 
       controller.abort();

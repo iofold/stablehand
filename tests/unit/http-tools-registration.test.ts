@@ -1,15 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
-import type { SecretProvider } from '../../packages/ctxmill/src/secrets/types.js';
-import type { ToolContext } from '@ctxmill/sandbox-daemon';
-import { DefaultToolRegistry } from '../../packages/ctxmill/src/tool/registry.js';
-import { HTTPToolProvider } from '../../packages/ctxmill/src/tool/providers/http.js';
+import type { AgentDefinition } from '@stablehand/sandbox-daemon';
+import type { SecretProvider } from '../../packages/stablehand/src/secrets/types.js';
+import type { ToolContext } from '@stablehand/sandbox-daemon';
+import { DefaultToolRegistry } from '../../packages/stablehand/src/tool/registry.js';
+import { HTTPToolProvider } from '../../packages/stablehand/src/tool/providers/http.js';
 import {
   getAgentHttpToolProviderName,
   mapAgentHttpToolsToConfigs,
   registerAgentHttpTools,
   registerExistingAgentHttpTools,
-} from '../../packages/ctxmill/src/orchestrator/http-tools.js';
+} from '../../packages/stablehand/src/orchestrator/http-tools.js';
 
 type RegistrationAgent = Parameters<typeof registerAgentHttpTools>[1];
 type AgentRepository = Parameters<typeof registerExistingAgentHttpTools>[0];
@@ -270,7 +270,7 @@ describe('http tools registration lifecycle', () => {
     const provider = registry.getProvider('search-api');
     expect(provider).toBeDefined();
 
-    await provider?.execute('search-api', { query: 'ctxmill' }, mockCtx);
+    await provider?.execute('search-api', { query: 'stablehand' }, mockCtx);
 
     expect(secretProvider.list).toHaveBeenCalledWith('agent-1');
     expect(secretProvider.get).toHaveBeenCalledWith('agent-1', 'API_TOKEN');
@@ -294,7 +294,7 @@ describe('http tools registration lifecycle', () => {
     const provider = registry.getProvider('search-api');
     expect(provider).toBeDefined();
 
-    await expect(provider?.execute('search-api', { query: 'ctxmill' }, mockCtx)).rejects.toThrow(
+    await expect(provider?.execute('search-api', { query: 'stablehand' }, mockCtx)).rejects.toThrow(
       'HTTPToolProvider: missing secret "API_TOKEN" for tool "search-api"',
     );
 
@@ -321,7 +321,7 @@ describe('http tools registration lifecycle', () => {
     const provider = registry.getProvider('search-api');
     expect(provider).toBeDefined();
 
-    await provider?.execute('search-api', { query: 'ctxmill' }, mockCtx);
+    await provider?.execute('search-api', { query: 'stablehand' }, mockCtx);
 
     expect(fetchMock).toHaveBeenCalledWith(
       'https://example.com/search',

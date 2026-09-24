@@ -1,10 +1,10 @@
 import { describe, expect, test, vi } from 'vitest';
 
-import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
-import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
-import { buildAgentDefinition } from '../../packages/ctxmill/src/orchestrator/agent-definition.js';
-import { TurnSecretEnvelopeCodec } from '../../packages/ctxmill/src/orchestrator/turn-secret-envelope.js';
-import { TurnStartupService } from '../../packages/ctxmill/src/orchestrator/turn-startup-service.js';
+import type { DatabaseRepository } from '../../packages/stablehand/src/database/repository.js';
+import { TypedEventBus } from '../../packages/stablehand/src/events/bus.js';
+import { buildAgentDefinition } from '../../packages/stablehand/src/orchestrator/agent-definition.js';
+import { TurnSecretEnvelopeCodec } from '../../packages/stablehand/src/orchestrator/turn-secret-envelope.js';
+import { TurnStartupService } from '../../packages/stablehand/src/orchestrator/turn-startup-service.js';
 
 type StoredAgent = NonNullable<Awaited<ReturnType<DatabaseRepository['getAgent']>>>;
 const TEST_TURN_SECRET_CODEC = new TurnSecretEnvelopeCodec(Buffer.alloc(32, 3));

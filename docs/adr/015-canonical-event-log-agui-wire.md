@@ -23,7 +23,7 @@ the SSE wire.
   (`orchestrator/canonical/projector.ts`) maps internal bus events onto the
   canonical frame set — the 12 AG-UI spec event types plus `CUSTOM`
   (`canonical/frames.ts`); orchestrator-specific signals ride as
-  `CUSTOM { name: 'ctxmill.*' }`. One server-side instance synthesizes message
+  `CUSTOM { name: 'stablehand.*' }`. One server-side instance synthesizes message
   boundaries exactly once with stable ids (`${turnId}-m${n}`) and detects
   `a2ui-render` blocks, so replay reproduces in-flight partials rather than
   minting new ids per connection.
@@ -35,7 +35,7 @@ the SSE wire.
   (ADR 006).
 - **Durable replay via `Last-Event-ID`.** The `/:id/stream` route
   (`routes/agents/stream.ts`) opens with a snapshot of open turns plus a
-  `CUSTOM name: ctxmill.sandbox_session.snapshot` for each
+  `CUSTOM name: stablehand.sandbox_session.snapshot` for each
   `ACTIVE`/`RESTORING` session, replays from the
   durable log when the client presents a seq-format `Last-Event-ID`, then tails
   the database from the same cursor. Replay is paginated through a fixed
@@ -79,7 +79,7 @@ the SSE wire.
   Mixed-version rolling operation is unsupported because an old writer does not
   advance the committed watermark.
 - The canonical frame set is the contract for every AG-UI client; a new
-  orchestrator signal must map to an existing type or a `ctxmill.*` CUSTOM frame.
+  orchestrator signal must map to an existing type or a `stablehand.*` CUSTOM frame.
 - The `?wire=legacy` transition mechanism this ADR originally staged — dual
   rendering, `WireMode` negotiation, and the `formatNativeLegacy` converter — was
   removed on 2026-07-10 (commit `baa2c7a`) once the last external proxy moved to

@@ -14,8 +14,8 @@
     "sourceMap": false,
     "baseUrl": ".",
     "paths": {
-      "@ctxmill/client": ["../../client/src/index.ts"],
-      "@ctxmill/react": ["../../react/src/index.ts"]
+      "@stablehand/client": ["../../client/src/index.ts"],
+      "@stablehand/react": ["../../react/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"]

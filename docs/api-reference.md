@@ -1,4 +1,4 @@
-# CTXMill API Reference
+# Stablehand API Reference
 
 ## 1. Overview
 
@@ -7,15 +7,15 @@
 - **Exceptions:**
   - `GET /api/agents/:id/stream` uses `text/event-stream`
   - `POST /api/agents/:id/workspace` expects `application/gzip` or `application/x-gzip`
-- **Authentication:** `CTXMILL_API_TOKEN` is the operator master token. Capability-scoped `cmk_...` keys are available for extensions. Production startup fails without a master token unless `CTXMILL_AUTH_DISABLED=true` is explicitly set.
-- **Canonical API contracts:** CTXMill exports strict schemas and inferred types from `@ctxmill/contracts` (for example `AgentSchema`, `TurnSchema`, `ConversationSummarySchema`, `Agent`, and `Turn`). Streaming-only types remain in `@ctxmill/shared`.
+- **Authentication:** `STABLEHAND_API_TOKEN` is the operator master token. Capability-scoped `cmk_...` keys are available for extensions. Production startup fails without a master token unless `STABLEHAND_AUTH_DISABLED=true` is explicitly set.
+- **Canonical API contracts:** Stablehand exports strict schemas and inferred types from `@stablehand/contracts` (for example `AgentSchema`, `TurnSchema`, `ConversationSummarySchema`, `Agent`, and `Turn`). Streaming-only types remain in `@stablehand/shared`.
 
 ### Authentication
 
-Set `CTXMILL_API_TOKEN` to a high-entropy value and pass it on operator control-plane requests:
+Set `STABLEHAND_API_TOKEN` to a high-entropy value and pass it on operator control-plane requests:
 
 ```bash
-curl -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+curl -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
   http://localhost:3002/api/agents
 ```
 
@@ -26,9 +26,9 @@ secrets, workspaces, or other master-only routes. See the complete
 
 `GET /health` and `GET /api/health` are public for load balancers and container health checks. Other `/api/*` routes return `401 Unauthorized` when the token is missing, invalid, expired, or revoked. A valid scoped key receives `403 Forbidden` when it lacks the route capability or attempts a master-only route.
 
-Browser `EventSource` cannot set custom headers, so `GET /api/agents/:id/stream` also accepts `?access_token=...` for SSE clients. Query-token authentication is intentionally limited to that route. Prefer an authorization header whenever the client permits it because query values can escape into browser history and intermediary logs; CTXMill redacts the value in its own request logs.
+Browser `EventSource` cannot set custom headers, so `GET /api/agents/:id/stream` also accepts `?access_token=...` for SSE clients. Query-token authentication is intentionally limited to that route. Prefer an authorization header whenever the client permits it because query values can escape into browser history and intermediary logs; Stablehand redacts the value in its own request logs.
 
-Capability scoping is not resource or tenant isolation. Keep reverse-proxy auth, network allowlists, TLS, and rate limits in front of any shared deployment. Sandbox ConnectRPC callbacks are additionally protected by session-scoped HMAC credentials derived from `CTXMILL_CALLBACK_TOKEN_SECRET` or `CTXMILL_API_TOKEN`, but the ConnectRPC surface should still remain on private networks.
+Capability scoping is not resource or tenant isolation. Keep reverse-proxy auth, network allowlists, TLS, and rate limits in front of any shared deployment. Sandbox ConnectRPC callbacks are additionally protected by session-scoped HMAC credentials derived from `STABLEHAND_CALLBACK_TOKEN_SECRET` or `STABLEHAND_API_TOKEN`, but the ConnectRPC surface should still remain on private networks.
 
 ### Breaking changes — 2026-08-19 contract normalization
 
@@ -223,7 +223,7 @@ Also used by specific endpoints:
 
 ### Shared types
 
-Useful exported types from `@ctxmill/shared`:
+Useful exported types from `@stablehand/shared`:
 
 - API resources: `Agent`, `Turn`, `ConversationSummary`, `Message`
 - Streaming: `AgentSessionEvent`, `AgentSessionEventType`, `MessageCommittedEvent`
@@ -307,7 +307,7 @@ Per-agent sandbox resource limits:
   "system": {
     "version": "0.1.0",
     "uptimeMs": 123456,
-    "dbPath": ".ctxmill"
+    "dbPath": ".stablehand"
   },
   "agentDefaults": {
     "harness": "langgraph",
@@ -372,7 +372,7 @@ Per-agent sandbox resource limits:
   "name": "Support Agent",
   "harness": "langgraph",
   "harnessConfig": { "model": "gpt-5.4-mini" },
-  "systemPrompt": "You help customers troubleshoot CTXMill deployments.",
+  "systemPrompt": "You help customers troubleshoot Stablehand deployments.",
   "tools": ["web_search"],
   "httpTools": [
     {
@@ -380,7 +380,7 @@ Per-agent sandbox resource limits:
       "description": "Look up a customer in CRM",
       "endpoint": "https://crm.example.com/api/customers/lookup",
       "method": "POST",
-      "headers": { "X-App": "ctxmill" },
+      "headers": { "X-App": "stablehand" },
       "timeoutMs": 15000
     }
   ],
@@ -404,7 +404,7 @@ Per-agent sandbox resource limits:
   "name": "Support Agent",
   "harness": "langgraph",
   "harnessConfig": { "model": "gpt-5.4-mini" },
-  "systemPrompt": "You help customers troubleshoot CTXMill deployments.",
+  "systemPrompt": "You help customers troubleshoot Stablehand deployments.",
   "tools": ["web_search", "crm_lookup"],
   "workspaceDir": "/data/agents/1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e/base",
   "resourceLimits": {
@@ -422,7 +422,7 @@ Per-agent sandbox resource limits:
   - `httpTools` entries must include `name`, `description`, and `endpoint`. `timeoutMs` is integer milliseconds with a minimum of `100`.
   - An invalid body returns `400` with `code: "invalid_agent_definition"` (or `"invalid_agent_update"` on PATCH) and `issues: [{ "path": "...", "message": "..." }]`.
   - An invalid `harnessConfig` returns `400` with `code: "invalid_harness_config"` and `issues: [{ "path": "...", "message": "..." }]`.
-  - If workspaces are enabled, CTXMill creates and seeds a base workspace automatically.
+  - If workspaces are enabled, Stablehand creates and seeds a base workspace automatically.
 
 #### `GET /api/agents/:id`
 
@@ -529,10 +529,10 @@ Per-agent sandbox resource limits:
 ```
 
 - **Notes:**
-  - If `conversationId` is omitted, CTXMill creates one.
+  - If `conversationId` is omitted, Stablehand creates one.
   - The actual run starts asynchronously through the durable turn queue.
   - SSE clients receive `TEXT_MESSAGE_*` user-message bootstrap events plus
-    `CUSTOM name: ctxmill.turn.pending` before the canonical `RUN_STARTED`.
+    `CUSTOM name: stablehand.turn.pending` before the canonical `RUN_STARTED`.
 - **Queue rejections** (applies to every turn-creating route — this one,
   `POST /api/agents/:id/turns`, and trigger-driven starts):
   - `429` with body `{ "error": <human message>, "code": "queue_full",
@@ -573,10 +573,10 @@ Per-agent sandbox resource limits:
 
 - **Notes:**
   - Updates the agent status to `running` and returns before the run completes. No sandbox session exists yet at accept time, so the response carries only the turn and conversation identities; read `sandboxSessionId` back from the turn once dispatch assigns one.
-  - `sandboxSecrets` is optional and scoped to the created turn. CTXMill carries the exact map on that turn's `DeliverTurn` RPC as immutable harness context. Harness adapters pass it explicitly to the relevant model or child-process environment without mutating the daemon's stable process environment.
-  - To support queued restart and checkpointed HITL continuation, CTXMill retains an authenticated encrypted envelope while the turn is open and deletes it atomically when terminal finalization succeeds. Plaintext is never written to task messages, agent records, container startup configuration, events, or checkpoints.
+  - `sandboxSecrets` is optional and scoped to the created turn. Stablehand carries the exact map on that turn's `DeliverTurn` RPC as immutable harness context. Harness adapters pass it explicitly to the relevant model or child-process environment without mutating the daemon's stable process environment.
+  - To support queued restart and checkpointed HITL continuation, Stablehand retains an authenticated encrypted envelope while the turn is open and deletes it atomically when terminal finalization succeeds. Plaintext is never written to task messages, agent records, container startup configuration, events, or checkpoints.
   - Use per-agent stored secrets for model/provider credentials initialized when a persistent harness session opens. Use per-turn values for short-lived integration credentials consumed by that turn.
-  - `CTXMILL_*`, `ORCHESTRATOR_URL`, `SANDBOX_PORT`, `PTC_PORT`, and `NODE_OPTIONS` are reserved runtime controls and are rejected.
+  - `STABLEHAND_*`, `ORCHESTRATOR_URL`, `SANDBOX_PORT`, `PTC_PORT`, and `NODE_OPTIONS` are reserved runtime controls and are rejected.
 
 #### `POST /api/agents/:id/turns/:turnId/cancel`
 
@@ -766,7 +766,7 @@ Per-agent sandbox resource limits:
     "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
     "status": "ACTIVE",
     "harnessName": "langgraph",
-    "containerName": "ctxmill-session-3f9a2c1e",
+    "containerName": "stablehand-session-3f9a2c1e",
     "containerId": "9f8e7d6c5b4a",
     "checkpointRef": null,
     "createdAt": 1712140000000,
@@ -794,12 +794,12 @@ Per-agent sandbox resource limits:
 - **Notes:**
   - Sends an initial `CONNECTED` event immediately, carrying `latestSeq`.
   - Streams the canonical AG-UI vocabulary (ADR-015): spec frame types plus
-    `CUSTOM{name:'ctxmill.*'}` for orchestrator signals, with stable
+    `CUSTOM{name:'stablehand.*'}` for orchestrator signals, with stable
     `${turnId}-m${n}` message ids.
   - **Identity mapping:** AG-UI spec frames identify the run with the
     spec-owned names `runId`/`threadId`, and `runId` = `turnId`,
-    `threadId` = `conversationId`. The `CUSTOM name: ctxmill.*` events on the
-    same stream use the canonical CTXMill names `turnId`/`conversationId`
+    `threadId` = `conversationId`. The `CUSTOM name: stablehand.*` events on the
+    same stream use the canonical Stablehand names `turnId`/`conversationId`
     directly.
   - Accepts the `Last-Event-ID` header for replay. The SSE `id:` (and the
     snapshot `eventCursor`) is the durable global event `seq` rendered as a
@@ -807,7 +807,7 @@ Per-agent sandbox resource limits:
     it keeps string comparison consistent with numeric order for
     lexicographic resume. Replay is served from the persisted event log
     (works past any in-memory cap and across orchestrator restarts).
-  - Also emits `CUSTOM name: ctxmill.sandbox_session.snapshot` events for
+  - Also emits `CUSTOM name: stablehand.sandbox_session.snapshot` events for
     active sandbox sessions when the connection opens.
   - `/api/events` rows for the run stream carry the canonical frame
     vocabulary; user-emitted custom events and system events are persisted
@@ -818,7 +818,7 @@ Example initial frames:
 ```text
 data: {"type":"CONNECTED","agentId":"1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e","latestSeq":41,"timestamp":1712140000000}
 
-data: {"type":"CUSTOM","name":"ctxmill.sandbox_session.snapshot","agentId":"1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e","conversationId":"d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20","sandboxSessionId":"b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f","activeTurnId":null,"status":"ACTIVE","harnessName":"langgraph","containerName":"ctxmill-session-3f9a2c1e","timestamp":1712140001000}
+data: {"type":"CUSTOM","name":"stablehand.sandbox_session.snapshot","agentId":"1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e","conversationId":"d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20","sandboxSessionId":"b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f","activeTurnId":null,"status":"ACTIVE","harnessName":"langgraph","containerName":"stablehand-session-3f9a2c1e","timestamp":1712140001000}
 
 id: 000000000042
 data: {"type":"RUN_STARTED","runId":"7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04","threadId":"d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20","timestamp":1712140002000}
@@ -1139,7 +1139,7 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
   - Rejects uploads unless the content type is gzip.
   - If the agent has active sandbox sessions, returns `409` unless `force=true`.
   - Maximum upload size is controlled by `maxTarUploadBytes` in `/api/settings`.
-  - The replacement is atomic: CTXMill extracts to a temp dir and swaps it into place.
+  - The replacement is atomic: Stablehand extracts to a temp dir and swaps it into place.
 
 ### i. Secrets
 
@@ -1192,7 +1192,7 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
 
 ```json
 {
-  "url": "https://example.com/ctxmill/webhook",
+  "url": "https://example.com/stablehand/webhook",
   "events": ["turn.started", "custom.eval.verdict"],
   "secret": "required-shared-secret"
 }
@@ -1205,7 +1205,7 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
 {
   "id": "5e3a1c9b-7d6f-4e2a-b8c0-4d2f6a8e0c1b",
   "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
-  "url": "https://example.com/ctxmill/webhook",
+  "url": "https://example.com/stablehand/webhook",
   "events": ["turn.started", "custom.eval.verdict"],
   "hasSecret": true,
   "active": true,
@@ -1227,7 +1227,7 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
   {
     "id": "5e3a1c9b-7d6f-4e2a-b8c0-4d2f6a8e0c1b",
     "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
-    "url": "https://example.com/ctxmill/webhook",
+    "url": "https://example.com/stablehand/webhook",
     "events": ["turn.started", "turn.completed"],
     "hasSecret": true,
     "active": true,
@@ -1246,7 +1246,7 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
 
 ```json
 {
-  "url": "https://example.com/ctxmill/webhook",
+  "url": "https://example.com/stablehand/webhook",
   "events": ["turn.completed", "message.committed"],
   "secret": "optional-shared-secret"
 }
@@ -1381,7 +1381,7 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
       "mimeType": "application/pdf",
       "sizeBytes": 23456,
       "storageKey": "artifacts/3a1c5e7f-2b4d-4d6e-9c8b-0f1e2d3c4b5a/summary.pdf",
-      "bucket": "ctxmill-artifacts",
+      "bucket": "stablehand-artifacts",
       "kind": "eval_report",
       "metadata": { "suite": "weekly" },
       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -1796,7 +1796,7 @@ history identical for manual and scheduled emissions.
 ```json
 {
   "toolName": "web_search",
-  "input": { "query": "ctxmill api reference" }
+  "input": { "query": "stablehand api reference" }
 }
 ```
 
@@ -1850,7 +1850,7 @@ history identical for manual and scheduled emissions.
 
 ### s. Scoped Access Keys (`/api/keys`)
 
-All key-management routes require the master `CTXMILL_API_TOKEN`. A scoped key
+All key-management routes require the master `STABLEHAND_API_TOKEN`. A scoped key
 receives `403` with `requiredCapability: null` on these routes, even if it holds
 every grant.
 
@@ -1892,7 +1892,7 @@ every grant.
   `expiresAt` is `null`, omitted, or a future epoch-millisecond timestamp. `note`
   is optional and at most 1024 characters.
 - **Errors:** `400` with `code: "invalid_api_key_request"` and `issues: [{ "path": "...", "message": "..." }]` for an invalid request; `409` for a duplicate name.
-- **Security:** CTXMill stores only the SHA-256 token hash. Losing the returned
+- **Security:** Stablehand stores only the SHA-256 token hash. Losing the returned
   token requires rotation; it cannot be fetched later.
 
 #### `GET /api/keys`
@@ -1970,11 +1970,11 @@ with your last processed cursor to decide whether replay is needed.
 
 Notes on actual stream behavior today:
 
-- `CONNECTED` and `CUSTOM name: ctxmill.sandbox_session.snapshot` are emitted
+- `CONNECTED` and `CUSTOM name: stablehand.sandbox_session.snapshot` are emitted
   by the stream endpoint itself.
 - Turn acceptance, durable message commits, and interrupts use
-  `CUSTOM.name`: `ctxmill.turn.pending`, `ctxmill.message.committed`,
-  `ctxmill.interrupt.requested`, and `ctxmill.interrupt.resolved`.
+  `CUSTOM.name`: `stablehand.turn.pending`, `stablehand.message.committed`,
+  `stablehand.interrupt.requested`, and `stablehand.interrupt.resolved`.
 - `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR`, `TEXT_MESSAGE_*`,
   `TOOL_CALL_*`, `STATE_DELTA`, `MESSAGES_SNAPSHOT`, and `CUSTOM` can appear
   on the live stream.
@@ -1983,7 +1983,7 @@ Notes on actual stream behavior today:
 
 - Initial `CONNECTED` event is sent immediately.
 - If the agent has active sandbox sessions, the stream starts with
-  `CUSTOM name: ctxmill.sandbox_session.snapshot` events.
+  `CUSTOM name: stablehand.sandbox_session.snapshot` events.
 - Heartbeat comments are sent every **15 seconds**:
 
 ```text
@@ -2009,17 +2009,17 @@ Notes on actual stream behavior today:
 AG-UI spec frames (`RUN_*`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `STATE_DELTA`,
 `MESSAGES_SNAPSHOT`) are strict: they identify the run only through the
 spec-owned `runId`/`threadId` pair, where `runId` = `turnId` and
-`threadId` = `conversationId`. The `CUSTOM name: ctxmill.*` events use the
+`threadId` = `conversationId`. The `CUSTOM name: stablehand.*` events use the
 canonical `turnId`/`conversationId` names directly. Spec frames also keep the
-spec-owned field name `toolCallName`; ctxmill-owned surfaces (REST, webhooks,
-`ctxmill.*` custom events) use `toolName`.
+spec-owned field name `toolCallName`; stablehand-owned surfaces (REST, webhooks,
+`stablehand.*` custom events) use `toolName`.
 
-`ctxmill.turn.pending`
+`stablehand.turn.pending`
 
 ```json
 {
   "type": "CUSTOM",
-  "name": "ctxmill.turn.pending",
+  "name": "stablehand.turn.pending",
   "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
   "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
   "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
@@ -2092,12 +2092,12 @@ spec-owned field name `toolCallName`; ctxmill-owned surfaces (REST, webhooks,
 }
 ```
 
-`ctxmill.message.committed`
+`stablehand.message.committed`
 
 ```json
 {
   "type": "CUSTOM",
-  "name": "ctxmill.message.committed",
+  "name": "stablehand.message.committed",
   "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
   "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
   "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
@@ -2153,7 +2153,7 @@ es.onmessage = (event) => {
       console.log("tool result", payload.result);
       break;
     case "CUSTOM":
-      if (payload.name === "ctxmill.interrupt.requested") {
+      if (payload.name === "stablehand.interrupt.requested") {
         console.log("approval required", payload.interruptId, payload.toolName);
       }
       break;
@@ -2364,7 +2364,7 @@ const agent = await fetch(`${base}/api/agents`, {
     name: "Support Agent",
     harness: "langgraph",
     harnessConfig: { model: "gpt-5.4-mini" },
-    systemPrompt: "Help customers integrate CTXMill.",
+    systemPrompt: "Help customers integrate Stablehand.",
     tools: []
   })
 }).then((r) => r.json());

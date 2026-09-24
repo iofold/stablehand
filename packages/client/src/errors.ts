@@ -1,22 +1,22 @@
 import type { z } from 'zod';
-import type { CapabilityVerb } from '@ctxmill/contracts';
+import type { CapabilityVerb } from '@stablehand/contracts';
 
-export type CtxmillContractDirection = 'request' | 'response' | 'stream';
+export type StablehandContractDirection = 'request' | 'response' | 'stream';
 
-export class CtxmillContractError extends Error {
-  readonly direction: CtxmillContractDirection;
+export class StablehandContractError extends Error {
+  readonly direction: StablehandContractDirection;
   readonly method: string;
   readonly path: string;
   readonly issues: z.core.$ZodIssue[];
 
   constructor(input: {
-    direction: CtxmillContractDirection;
+    direction: StablehandContractDirection;
     method: string;
     path: string;
     issues: z.core.$ZodIssue[];
   }) {
-    super(`CTXMill ${input.direction} contract failed for ${input.method} ${input.path}`);
-    this.name = 'CtxmillContractError';
+    super(`Stablehand ${input.direction} contract failed for ${input.method} ${input.path}`);
+    this.name = 'StablehandContractError';
     this.direction = input.direction;
     this.method = input.method;
     this.path = input.path;
@@ -24,7 +24,7 @@ export class CtxmillContractError extends Error {
   }
 }
 
-export class CtxmillApiError extends Error {
+export class StablehandApiError extends Error {
   readonly status: number;
   readonly code?: string;
   readonly detail?: string;
@@ -43,8 +43,8 @@ export class CtxmillApiError extends Error {
     path: string;
   }) {
     const suffix = input.code ? ` (${input.code})` : '';
-    super(`CTXMill API request failed: ${input.method} ${input.path} returned ${input.status}${suffix}`);
-    this.name = 'CtxmillApiError';
+    super(`Stablehand API request failed: ${input.method} ${input.path} returned ${input.status}${suffix}`);
+    this.name = 'StablehandApiError';
     this.status = input.status;
     this.code = input.code;
     this.detail = input.detail;
@@ -55,12 +55,12 @@ export class CtxmillApiError extends Error {
   }
 }
 
-export class CtxmillTimeoutError extends Error {
+export class StablehandTimeoutError extends Error {
   readonly timeoutMs: number;
 
   constructor(timeoutMs: number) {
-    super(`CTXMill request timed out after ${timeoutMs}ms`);
-    this.name = 'CtxmillTimeoutError';
+    super(`Stablehand request timed out after ${timeoutMs}ms`);
+    this.name = 'StablehandTimeoutError';
     this.timeoutMs = timeoutMs;
   }
 }

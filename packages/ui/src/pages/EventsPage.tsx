@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import type { EventListInput } from '@ctxmill/contracts';
+import type { EventListInput } from '@stablehand/contracts';
 import {
   Activity,
   ChevronDown,
@@ -195,21 +195,21 @@ function extractSummary(type: string, payload: unknown): string {
     }
     case 'CUSTOM': {
       const name = stringField(parsed, 'name') ?? 'custom';
-      if (name === 'ctxmill.turn.pending') {
+      if (name === 'stablehand.turn.pending') {
         return summarizeRunState(parsed, 'queued');
       }
-      if (name === 'ctxmill.message.committed') {
+      if (name === 'stablehand.message.committed') {
         return summarizeMessageCommit(parsed);
       }
-      if (name === 'ctxmill.interrupt.requested') {
+      if (name === 'stablehand.interrupt.requested') {
         const toolName = stringField(parsed, 'toolCallName') ?? 'tool';
         return truncateSummary(`Approval requested: ${toolName}`);
       }
-      if (name === 'ctxmill.interrupt.resolved') {
+      if (name === 'stablehand.interrupt.resolved') {
         const approved = parsed.approved === true ? 'approved' : parsed.approved === false ? 'rejected' : 'resolved';
         return truncateSummary(`Approval ${approved}`);
       }
-      if (name === 'ctxmill.a2ui.render') {
+      if (name === 'stablehand.a2ui.render') {
         const block = recordField(parsed, 'block') ?? recordField(recordField(parsed, 'value') ?? {}, 'block');
         const component = block ? stringField(block, 'component') : undefined;
         return truncateSummary(`UI rendered${component ? `: ${component}` : ''}`);

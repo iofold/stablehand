@@ -2,13 +2,13 @@
 set -euo pipefail
 
 OUTPUT_PATH="${1:?usage: sample-dev2-kubernetes.sh <output.jsonl>}"
-NAMESPACE="${CTXMILL_PERF_NAMESPACE:-ctxmill}"
-INTERVAL_SECONDS="${CTXMILL_PERF_SAMPLE_INTERVAL_SECONDS:-2}"
-MAX_CPU_PERCENT="${CTXMILL_PERF_MAX_NODE_CPU_PERCENT:-75}"
-MAX_MEMORY_PERCENT="${CTXMILL_PERF_MAX_NODE_MEMORY_PERCENT:-75}"
-MAX_PENDING_SANDBOX_PODS="${CTXMILL_PERF_MAX_PENDING_SANDBOX_PODS:-0}"
-PENDING_GRACE_SECONDS="${CTXMILL_PERF_PENDING_POD_GRACE_SECONDS:-30}"
-ABORT_FILE="${CTXMILL_PERF_ABORT_FILE:-}"
+NAMESPACE="${STABLEHAND_PERF_NAMESPACE:-stablehand}"
+INTERVAL_SECONDS="${STABLEHAND_PERF_SAMPLE_INTERVAL_SECONDS:-2}"
+MAX_CPU_PERCENT="${STABLEHAND_PERF_MAX_NODE_CPU_PERCENT:-75}"
+MAX_MEMORY_PERCENT="${STABLEHAND_PERF_MAX_NODE_MEMORY_PERCENT:-75}"
+MAX_PENDING_SANDBOX_PODS="${STABLEHAND_PERF_MAX_PENDING_SANDBOX_PODS:-0}"
+PENDING_GRACE_SECONDS="${STABLEHAND_PERF_PENDING_POD_GRACE_SECONDS:-30}"
+ABORT_FILE="${STABLEHAND_PERF_ABORT_FILE:-}"
 KUBECTL="${KUBECTL:-kubectl}"
 
 mkdir -p "$(dirname "$OUTPUT_PATH")"
@@ -84,16 +84,16 @@ while true; do
   running_sandbox_pods="$(jq \
     '[.[] | select(
       .phase == "Running"
-      and .labels["ctxmill.sandbox-session-id"] != null
+      and .labels["stablehand.sandbox-session-id"] != null
     )] | length' <<<"$pod_inventory")"
   pending_sandbox_pods="$(jq \
     '[.[] | select(
       .phase == "Pending"
-      and .labels["ctxmill.sandbox-session-id"] != null
+      and .labels["stablehand.sandbox-session-id"] != null
     )] | length' <<<"$pod_inventory")"
   active_sandbox_jobs="$(jq \
     '[.items[] | select(
-      .metadata.labels["ctxmill.sandbox-session-id"] != null
+      .metadata.labels["stablehand.sandbox-session-id"] != null
       and ((.status.active // 0) > 0)
     )] | length' <<<"$jobs")"
   pending_sandbox_pods_after_grace=0

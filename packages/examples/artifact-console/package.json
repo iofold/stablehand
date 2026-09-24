@@ -1,18 +1,18 @@
 {
-  "name": "@ctxmill/example-artifact-console",
+  "name": "@stablehand/example-artifact-console",
   "version": "0.1.0",
   "license": "MIT",
   "private": true,
   "type": "module",
-  "description": "Token-gated CTXMill console built for static artifact hosting (artifact-use)",
+  "description": "Token-gated Stablehand console built for static artifact hosting (artifact-use)",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ctxmill/contracts": "workspace:*",
-    "@ctxmill/react": "workspace:*",
+    "@stablehand/contracts": "workspace:*",
+    "@stablehand/react": "workspace:*",
     "clsx": "^2.1.0",
     "lucide-react": "^0.474.0",
     "react": "^19.0.0",

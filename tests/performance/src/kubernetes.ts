@@ -147,13 +147,13 @@ export function summarizeKubernetesSamples(
         (total, container) => total + parseMemoryBytes(container.memory),
         0,
       );
-      if (pod.labels['ctxmill.sandbox-session-id']) {
+      if (pod.labels['stablehand.sandbox-session-id']) {
         sandboxPods++;
         sandboxCpuCores += cpu;
         sandboxMemoryBytes += memory;
       }
       if (
-        pod.labels.app === 'ctxmill-orchestrator'
+        pod.labels.app === 'stablehand-orchestrator'
         || pod.labels['app.kubernetes.io/name'] === 'orchestrator'
       ) {
         orchestratorCpuCores += cpu;

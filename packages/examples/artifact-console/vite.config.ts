@@ -7,14 +7,14 @@ export default defineConfig({
   base: './',
   resolve: {
     alias: {
-      '@ctxmill/client': new URL('../../client/src/index.ts', import.meta.url).pathname,
-      '@ctxmill/contracts': new URL('../../contracts/src/index.ts', import.meta.url).pathname,
-      '@ctxmill/react': new URL('../../react/src/index.ts', import.meta.url).pathname,
+      '@stablehand/client': new URL('../../client/src/index.ts', import.meta.url).pathname,
+      '@stablehand/contracts': new URL('../../contracts/src/index.ts', import.meta.url).pathname,
+      '@stablehand/react': new URL('../../react/src/index.ts', import.meta.url).pathname,
       // The chart catalog lives in the ui package and imports via '@/...'.
       '@': new URL('../../ui/src', import.meta.url).pathname,
     },
   },
   server: {
-    port: Number(process.env.CTXMILL_ARTIFACT_CONSOLE_PORT ?? 3310),
+    port: Number(process.env.STABLEHAND_ARTIFACT_CONSOLE_PORT ?? 3310),
   },
 });

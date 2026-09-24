@@ -1,7 +1,7 @@
 import {
   BudgetExceededResponseSchema,
   type BudgetExceededResponse,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 
 import { ApiError } from './api';
 

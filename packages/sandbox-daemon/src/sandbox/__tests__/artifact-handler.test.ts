@@ -6,7 +6,7 @@ import { create } from '@bufbuild/protobuf';
 import {
   RegisterArtifactResponseSchema,
   TurnDeliveryCapabilitySchema,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ArtifactStore } from '../../artifact/artifact-store.js';
@@ -17,7 +17,7 @@ describe('artifact handlers', () => {
   let workspaceDir: string;
 
   beforeEach(async () => {
-    workspaceDir = await mkdtemp(join(tmpdir(), 'ctxmill-artifact-handler-'));
+    workspaceDir = await mkdtemp(join(tmpdir(), 'stablehand-artifact-handler-'));
   });
 
   afterEach(async () => {
@@ -70,7 +70,7 @@ describe('artifact handlers', () => {
         restoreFenceToken: 0n,
         containerId: 'container-1',
         agentId: 'agent-1',
-        signature: 'ctxmill-open-turn-delivery-capability-v1',
+        signature: 'stablehand-open-turn-delivery-capability-v1',
       }),
       leaseExpiresAtMs,
       abortController: new AbortController(),
@@ -164,7 +164,7 @@ describe('artifact handlers', () => {
         restoreFenceToken: 0n,
         containerId: 'container-1',
         agentId: 'agent-1',
-        signature: 'ctxmill-open-turn-delivery-capability-v1',
+        signature: 'stablehand-open-turn-delivery-capability-v1',
       }),
       leaseExpiresAtMs,
       abortController: new AbortController(),

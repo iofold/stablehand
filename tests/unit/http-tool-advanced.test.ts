@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { HTTPToolProvider } from '../../packages/ctxmill/src/tool/providers/http.js';
+import { HTTPToolProvider } from '../../packages/stablehand/src/tool/providers/http.js';
 import { createMockToolContext } from '../utils/event-bus-test-helpers.js';
-import type { HttpEndpointConfig } from '../../packages/ctxmill/src/tool/providers/http.js';
+import type { HttpEndpointConfig } from '../../packages/stablehand/src/tool/providers/http.js';
 
 const mockCtx = createMockToolContext();
 

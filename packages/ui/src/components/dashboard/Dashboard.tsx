@@ -14,7 +14,7 @@ import {
 import type {
   AgentBudgetStatus,
   ModelGatewayStatus,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 
 interface DashboardProps {
   agents: Agent[];

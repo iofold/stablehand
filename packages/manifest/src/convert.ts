@@ -3,7 +3,7 @@ import {
   AgentPatchInputSchema,
   type AgentCreateInput,
   type AgentPatchInput,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 
 import type { AgentManifest } from './types.js';
 
@@ -42,7 +42,7 @@ function resolveSystemPrompt(
   }
   if (manifest.spec.instructions.startsWith('file:')) {
     throw new Error(
-      'File-backed instructions require loadManifestProject from @ctxmill/manifest/node',
+      'File-backed instructions require loadManifestProject from @stablehand/manifest/node',
     );
   }
   return manifest.spec.instructions;

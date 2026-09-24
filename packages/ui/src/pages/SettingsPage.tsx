@@ -4,7 +4,7 @@ import {
   SYSTEM_SETTING_BOUNDS,
   SYSTEM_SETTING_FIELDS,
   validateSystemSettingValue,
-} from '@ctxmill/shared';
+} from '@stablehand/shared';
 import {
   Settings,
   Server,

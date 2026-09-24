@@ -8,7 +8,7 @@
 
 ADR 007 named the boundary (workspace files ≠ artifacts) but left the implementation surface open. `ctx-h99` requires concrete decisions on upload modes, size caps, mime policy, and session scoping.
 
-Current state: `POST /api/agents/:id/files` accepts a gzipped tar via `validateAndExtractTarball` (`packages/ctxmill/src/workspace/tar-upload.ts`); UI button at `packages/ui/src/components/agent/AgentFilesTab.tsx:75` is disabled in session view.
+Current state: `POST /api/agents/:id/files` accepts a gzipped tar via `validateAndExtractTarball` (`packages/stablehand/src/workspace/tar-upload.ts`); UI button at `packages/ui/src/components/agent/AgentFilesTab.tsx:75` is disabled in session view.
 
 ## Decision
 

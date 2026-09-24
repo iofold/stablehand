@@ -1,7 +1,7 @@
 #!/usr/bin/env npx tsx
 
 /**
- * Seed the Overnight Analyst flagship example against a running CTXMill:
+ * Seed the Overnight Analyst flagship example against a running Stablehand:
  * one agent (from the manifest), one schedule, one trigger. Manifests cannot
  * carry schedules or triggers by design, so this script wires the two-object
  * pair the docs describe: the schedule emits a custom event on a cron, the
@@ -10,8 +10,8 @@
  * Idempotent: re-running updates nothing that already exists by name.
  *
  * Environment:
- *   API_URL            CTXMill base URL       (default http://localhost:3002)
- *   CTXMILL_API_TOKEN  API token              (required unless auth disabled)
+ *   API_URL            Stablehand base URL       (default http://localhost:3002)
+ *   STABLEHAND_API_TOKEN  API token              (required unless auth disabled)
  *   ANALYST_SOURCES    sources sentence       (default HN + The Verge)
  *   ANALYST_CRON       cron expression        (default "0 7 * * *")
  *   ANALYST_TZ         IANA timezone          (default "Asia/Kolkata")
@@ -19,10 +19,10 @@
 
 import { fileURLToPath } from 'node:url';
 
-import { loadManifestProject } from '@ctxmill/manifest/node';
+import { loadManifestProject } from '@stablehand/manifest/node';
 
 const API_BASE = process.env.API_URL ?? 'http://localhost:3002';
-const API_TOKEN = process.env.CTXMILL_API_TOKEN;
+const API_TOKEN = process.env.STABLEHAND_API_TOKEN;
 const SOURCES = process.env.ANALYST_SOURCES
   ?? 'https://news.ycombinator.com and https://www.theverge.com';
 const CRON = process.env.ANALYST_CRON ?? '0 7 * * *';

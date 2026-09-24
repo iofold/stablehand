@@ -5,12 +5,12 @@ import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, relative, resolve } from 'node:path';
 import { Transform } from 'node:stream';
 import { create } from '@bufbuild/protobuf';
-import { ArtifactKindSchema, ArtifactMetadataSchema } from '@ctxmill/contracts';
+import { ArtifactKindSchema, ArtifactMetadataSchema } from '@stablehand/contracts';
 import {
   ArtifactMetaSchema,
   RegisterArtifactRequestSchema,
   ResolveArtifactRequestSchema,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 
 import { ArtifactStore } from '../artifact/artifact-store.js';
 import { stringifyJsonWithBigInts } from './json-serialization.js';
@@ -61,7 +61,7 @@ const MIME_TYPES: Record<string, string> = {
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
 
-const _maxSizeMb = Number(process.env.CTXMILL_MAX_ARTIFACT_SIZE_MB ?? 100);
+const _maxSizeMb = Number(process.env.STABLEHAND_MAX_ARTIFACT_SIZE_MB ?? 100);
 const MAX_ARTIFACT_SIZE_BYTES = (Number.isFinite(_maxSizeMb) && _maxSizeMb > 0 ? _maxSizeMb : 100) * 1024 * 1024;
 /** Files at or below this size upload as retry-safe buffers instead of streams. */
 const BUFFERED_UPLOAD_MAX_BYTES = 32 * 1024 * 1024;

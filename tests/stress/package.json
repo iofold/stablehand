@@ -1,5 +1,5 @@
 {
-  "name": "@ctxmill/stress-tests",
+  "name": "@stablehand/stress-tests",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
     "clean": "npx tsx seed.ts --clean"
   },
   "dependencies": {
-    "ctxmill": "workspace:*",
+    "stablehand": "workspace:*",
     "yaml": "^2.8.2"
   },
   "devDependencies": {

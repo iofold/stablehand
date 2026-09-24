@@ -24,7 +24,7 @@ import type {
   BudgetPolicy,
   ModelGatewayQuarantine,
   ModelGatewayStatus,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 
 import {
   fetchAgentBudgetStatuses,

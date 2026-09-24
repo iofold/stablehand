@@ -1,4 +1,4 @@
-import type { CanonicalLLMProvider } from '@ctxmill/shared';
+import type { CanonicalLLMProvider } from '@stablehand/shared';
 
 export interface ModelAuthInput {
   provider: CanonicalLLMProvider;

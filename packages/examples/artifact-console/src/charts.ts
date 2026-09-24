@@ -1,4 +1,4 @@
-import type { CtxmillA2UIComponents } from '@ctxmill/react';
+import type { StablehandA2UIComponents } from '@stablehand/react';
 import type { ComponentType } from 'react';
 
 import { TimeSeriesChart } from '@/components/charts/TimeSeriesChart';
@@ -39,15 +39,15 @@ const CATALOG: Record<string, ComponentType<Record<string, unknown>>> = {
 };
 
 /**
- * The full ctxmill chart catalog, registered under every name variant the
- * AG-UI stream may carry (bare, charts:, ctxmill.charts:).
+ * The full stablehand chart catalog, registered under every name variant the
+ * AG-UI stream may carry (bare, charts:, stablehand.charts:).
  */
-export function chartComponents(): CtxmillA2UIComponents {
-  const components: CtxmillA2UIComponents = {};
+export function chartComponents(): StablehandA2UIComponents {
+  const components: StablehandA2UIComponents = {};
   for (const [name, component] of Object.entries(CATALOG)) {
     components[name] = component;
     components[`charts:${name}`] = component;
-    components[`ctxmill.charts:${name}`] = component;
+    components[`stablehand.charts:${name}`] = component;
   }
   return components;
 }

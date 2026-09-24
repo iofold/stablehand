@@ -7,7 +7,7 @@ import { ArtifactRow } from './ArtifactRow';
 import { downloadArtifact, type Artifact } from '@/lib/api';
 import { useArtifactsStore } from '@/stores/artifacts';
 import { useAgentsStore } from '@/stores/agents';
-import { ArtifactSchema } from '@ctxmill/contracts';
+import { ArtifactSchema } from '@stablehand/contracts';
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');

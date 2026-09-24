@@ -3,7 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
-import type { Agent, ConversationSummary } from '@ctxmill/contracts';
+import type { Agent, ConversationSummary } from '@stablehand/contracts';
 import { StatusBadge } from '@/components/dashboard/StatusBadge';
 import { cn } from '@/lib/utils';
 import { harnessLabel } from '@/lib/harness';

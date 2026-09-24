@@ -3,7 +3,7 @@ import { create } from 'zustand';
 import {
   AgentStreamEventSchema,
   InterruptRequestedEventSchema,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 import { useConversationStore } from '@/stores/conversation';
 import { useInterruptStore } from '@/stores/interrupt';
 import { createSSEConnection } from '@/lib/api';
@@ -81,7 +81,7 @@ export function useSSE(
           data._eventId = event.lastEventId;
         }
 
-        if (validated.type === 'CUSTOM' && validated.name === 'ctxmill.interrupt.requested') {
+        if (validated.type === 'CUSTOM' && validated.name === 'stablehand.interrupt.requested') {
           const interrupt = InterruptRequestedEventSchema.safeParse(validated);
           if (interrupt.success) {
             setPending({

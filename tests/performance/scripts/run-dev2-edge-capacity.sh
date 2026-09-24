@@ -6,8 +6,8 @@ RAMP_PATH="${1:-$ROOT_DIR/tests/performance/profiles/dev2-edge-capacity-mixed.js
 RUN_SLUG="$(date -u +%Y%m%dT%H%M%SZ)-$(basename "$RAMP_PATH" .json)"
 OUTPUT_ROOT="${2:-$ROOT_DIR/.tmp/performance/$RUN_SLUG}"
 BUN="${BUN:-bun}"
-MAX_TOTAL_MODEL_CALLS="${CTXMILL_PERF_MAX_TOTAL_MODEL_CALLS:-500}"
-BOUNDARY_TIMEOUT_SECONDS="${CTXMILL_PERF_BOUNDARY_TIMEOUT_SECONDS:-360}"
+MAX_TOTAL_MODEL_CALLS="${STABLEHAND_PERF_MAX_TOTAL_MODEL_CALLS:-500}"
+BOUNDARY_TIMEOUT_SECONDS="${STABLEHAND_PERF_BOUNDARY_TIMEOUT_SECONDS:-360}"
 
 export KUBECONFIG="${KUBECONFIG:-/path/to/workspace/infra/.k3s-kubeconfig.yaml}"
 namespace="$(jq -r '.target.kubernetesNamespace' "$RAMP_PATH")"
@@ -18,7 +18,7 @@ sum_levels="$(jq '[.levels[]] | add' "$RAMP_PATH")"
 theoretical_calls=$((harness_count * sum_levels))
 
 if (( theoretical_calls > MAX_TOTAL_MODEL_CALLS )); then
-  printf 'Ramp can issue %d model calls, above CTXMILL_PERF_MAX_TOTAL_MODEL_CALLS=%d\n' \
+  printf 'Ramp can issue %d model calls, above STABLEHAND_PERF_MAX_TOTAL_MODEL_CALLS=%d\n' \
     "$theoretical_calls" "$MAX_TOTAL_MODEL_CALLS" >&2
   exit 2
 fi
@@ -27,16 +27,16 @@ umask 077
 mkdir -p "$OUTPUT_ROOT"
 : >"$OUTPUT_ROOT/waves.jsonl"
 
-if [[ -z "${CTXMILL_API_TOKEN:-}" ]]; then
+if [[ -z "${STABLEHAND_API_TOKEN:-}" ]]; then
   token_base64="$(
-    kubectl -n "$namespace" get secret ctxmill-core-secrets \
-      -o jsonpath='{.data.CTXMILL_API_TOKEN}'
+    kubectl -n "$namespace" get secret stablehand-core-secrets \
+      -o jsonpath='{.data.STABLEHAND_API_TOKEN}'
   )"
-  export CTXMILL_API_TOKEN="$(printf '%s' "$token_base64" | base64 -d)"
+  export STABLEHAND_API_TOKEN="$(printf '%s' "$token_base64" | base64 -d)"
 fi
 
 curl -fsS "$api_base/settings" \
-  -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+  -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
   >"$OUTPUT_ROOT/settings-before.json"
 previous_limit="$(jq -r '.maxGlobalContainers' "$OUTPUT_ROOT/settings-before.json")"
 limit_restored=0
@@ -45,7 +45,7 @@ set_limit() {
   local value="$1"
   jq -nc --argjson value "$value" '{maxGlobalContainers:$value}' \
     | curl -fsS -X PUT "$api_base/settings" \
-      -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+      -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
       -H 'Content-Type: application/json' \
       --data-binary @- >/dev/null
 }
@@ -56,7 +56,7 @@ restore_limit() {
   if (( limit_restored == 0 )); then
     set_limit "$previous_limit" || true
   fi
-  unset CTXMILL_API_TOKEN token_base64 || true
+  unset STABLEHAND_API_TOKEN token_base64 || true
   return "$status"
 }
 trap restore_limit EXIT
@@ -79,14 +79,14 @@ ensure_clean_boundary() {
     active_jobs="$(
       kubectl -n "$namespace" get jobs -o json \
         | jq '[.items[] | select(
-          .metadata.labels["ctxmill.sandbox-session-id"] != null
+          .metadata.labels["stablehand.sandbox-session-id"] != null
           and ((.status.active // 0) > 0)
         )] | length'
     )"
     local sandbox_metrics
     sandbox_metrics="$(
       curl -fsS "$api_base/sandbox/metrics" \
-        -H "Authorization: Bearer $CTXMILL_API_TOKEN"
+        -H "Authorization: Bearer $STABLEHAND_API_TOKEN"
     )" || return 1
     local active_containers queued_containers killed_sessions
     active_containers="$(jq -r '.containers.active // -1' <<<"$sandbox_metrics")"
@@ -157,7 +157,7 @@ while read -r concurrency; do
   printf 'Exploring concurrency %d\n' "$concurrency"
 
   set +e
-  CTXMILL_PERF_RAMP_PATH="$RAMP_PATH" \
+  STABLEHAND_PERF_RAMP_PATH="$RAMP_PATH" \
     "$ROOT_DIR/tests/performance/scripts/run-dev2.sh" \
       "$profile_path" "$wave_dir"
   runner_status=$?
@@ -216,7 +216,7 @@ done < <(jq -r '.levels[]' "$RAMP_PATH")
 set_limit "$previous_limit"
 limit_restored=1
 curl -fsS "$api_base/settings" \
-  -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+  -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
   >"$OUTPUT_ROOT/settings-after.json"
 
 jq -s \
@@ -237,7 +237,7 @@ jq -s \
     waves: .
   }' "$OUTPUT_ROOT/waves.jsonl" >"$OUTPUT_ROOT/edge-capacity-summary.json"
 
-unset CTXMILL_API_TOKEN token_base64
+unset STABLEHAND_API_TOKEN token_base64
 printf 'Restored dev2 global sandbox limit: %d\n' "$previous_limit"
 printf 'Edge-capacity evidence: %s\n' "$OUTPUT_ROOT"
 

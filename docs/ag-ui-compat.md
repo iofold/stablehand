@@ -1,6 +1,6 @@
 # AG-UI Protocol Compatibility Layer
 
-CTXMill exposes an AG-UI compatible endpoint that lets downstream consumers use any AG-UI renderer as a drop-in frontend for ctxmill agents.
+Stablehand exposes an AG-UI compatible endpoint that lets downstream consumers use any AG-UI renderer as a drop-in frontend for stablehand agents.
 
 ## Endpoint
 
@@ -109,7 +109,7 @@ function Chat() {
 
 **Requirements:**
 - `runId` must be a non-empty string
-- `threadId`, when supplied, must be a non-empty string. When omitted, CTXMill creates a conversation and returns it in `MESSAGES_SNAPSHOT.threadId`
+- `threadId`, when supplied, must be a non-empty string. When omitted, Stablehand creates a conversation and returns it in `MESSAGES_SNAPSHOT.threadId`
 - `messages` must contain at least one message with `role: 'user'` and non-empty `content`
 
 ## SSE Events Emitted
@@ -128,8 +128,8 @@ The stream emits strict AG-UI protocol events:
 | `TOOL_CALL_END` | Tool execution complete | `toolCallId`, `result` |
 | `RUN_FINISHED` | Agent turn complete | `runId`, `status` |
 | `RUN_ERROR` | Agent turn failed | `runId`, `error` |
-| `CUSTOM` | A2UI render blocks | `name: 'ctxmill.a2ui.render'`, `block: { id, component, props }` |
-| `CUSTOM` | HITL events | `name: 'ctxmill.interrupt.requested'` or `name: 'ctxmill.interrupt.resolved'` |
+| `CUSTOM` | A2UI render blocks | `name: 'stablehand.a2ui.render'`, `block: { id, component, props }` |
+| `CUSTOM` | HITL events | `name: 'stablehand.interrupt.requested'` or `name: 'stablehand.interrupt.resolved'` |
 
 ### Event Sequence Example
 
@@ -167,7 +167,7 @@ This follows AG-UI's snapshot-based reconnection model (not event replay).
 ```json
 {
   "type": "CUSTOM",
-  "name": "ctxmill.a2ui.render",
+  "name": "stablehand.a2ui.render",
   "subtype": "a2ui_render",
   "block": {
     "id": "tool-call-id",
@@ -182,7 +182,7 @@ Durable HITL pauses use the same AG-UI custom-event mechanism:
 ```json
 {
   "type": "CUSTOM",
-  "name": "ctxmill.interrupt.requested",
+  "name": "stablehand.interrupt.requested",
   "interruptId": "interrupt-id",
   "toolCallId": "tool-call-id",
   "toolName": "request-approval",
@@ -190,15 +190,15 @@ Durable HITL pauses use the same AG-UI custom-event mechanism:
 }
 ```
 
-The companion resolution marker is `name: 'ctxmill.interrupt.resolved'`.
+The companion resolution marker is `name: 'stablehand.interrupt.resolved'`.
 
-## What's Different from ctxmill's Native SSE
+## What's Different from stablehand's Native SSE
 
 | Aspect | Native (`/api/agents/:id/stream`) | AG-UI (`/api/ag-ui/:id/run`) |
 |--------|-----------------------------------|-------------------------------------|
 | Method | GET (persistent EventSource) | POST (per-run) |
 | Scope | All runs for an agent, multiplexed | Single run, closes on completion |
-| Events | Canonical AG-UI frames plus `CUSTOM name: ctxmill.*` signals | Strict AG-UI protocol |
+| Events | Canonical AG-UI frames plus `CUSTOM name: stablehand.*` signals | Strict AG-UI protocol |
 | Reconnect | Durable `Last-Event-ID` seq replay | Re-POST with same runId -> snapshot |
 | Tool results | `TOOL_CALL_END` plus `TOOL_CALL_RESULT` compatibility data | `TOOL_CALL_END` (AG-UI standard) |
 | Text lifecycle | `TEXT_MESSAGE_START` -> content -> `TEXT_MESSAGE_END` | `TEXT_MESSAGE_START` -> content -> `TEXT_MESSAGE_END` |
@@ -223,4 +223,4 @@ SSE response (text/event-stream)
   └─ RUN_FINISHED/RUN_ERROR → close connection
 ```
 
-Source: `packages/ctxmill/src/orchestrator/ag-ui-compat/`
+Source: `packages/stablehand/src/orchestrator/ag-ui-compat/`

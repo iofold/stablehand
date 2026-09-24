@@ -95,11 +95,11 @@ test.describe('Customer Readiness Stage 4 — UI', () => {
 });
 
 /**
- * Minimal in-memory tar.gz builder using ctxmill's tar-stream dependency.
+ * Minimal in-memory tar.gz builder using stablehand's tar-stream dependency.
  * Returns a Buffer containing a gzip-compressed tar archive with a single file.
  */
 async function buildSingleFileTarGz(name: string, content: string): Promise<Buffer> {
-  const tarModulePath = new URL('../../packages/ctxmill/node_modules/tar-stream/index.js', import.meta.url).href;
+  const tarModulePath = new URL('../../packages/stablehand/node_modules/tar-stream/index.js', import.meta.url).href;
   const tar = await import(tarModulePath) as TarStreamModule;
 
   return await new Promise<Buffer>((resolvePromise, reject) => {

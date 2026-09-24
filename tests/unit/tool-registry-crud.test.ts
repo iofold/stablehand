@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { DefaultToolRegistry } from '../../packages/ctxmill/src/tool/registry.js';
-import type { ToolProvider } from '../../packages/ctxmill/src/tool/provider.js';
-import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
+import { DefaultToolRegistry } from '../../packages/stablehand/src/tool/registry.js';
+import type { ToolProvider } from '../../packages/stablehand/src/tool/provider.js';
+import type { ToolDefinition } from '@stablehand/sandbox-daemon';
 
 function createToolDefinition(
   name: string,

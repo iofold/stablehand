@@ -2,7 +2,7 @@
  "name": "gdpval-ctx-slice",
  "builtAt": "2026-08-20",
  "source": "openai/gdpval@main (gold set, 220 tasks)",
- "rationale": "CTXMill relevance slice: Finance and Insurance sector (25), Health Care and Social Assistance sector (25), plus all other-sector tasks with presentation deliverables (10). 60 tasks total.",
+ "rationale": "Stablehand relevance slice: Finance and Insurance sector (25), Health Care and Social Assistance sector (25), plus all other-sector tasks with presentation deliverables (10). 60 tasks total.",
  "tasks": [
   {
    "taskId": "a74ead3b-f67d-4b1c-9116-f6bb81b29d4f",

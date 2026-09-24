@@ -3,24 +3,24 @@ import { execSync } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { parseManifestString, validateManifest } from '@ctxmill/manifest';
+import { parseManifestString, validateManifest } from '@stablehand/manifest';
 
 const CLI_PATH = join(
   __dirname,
   '..',
   '..',
   'packages',
-  'create-ctxmill',
+  'create-stablehand',
   'dist',
   'index.js',
 );
 
-describe('create-ctxmill scaffold', () => {
+describe('create-stablehand scaffold', () => {
   let projectDir: string;
   const projectName = 'test-scaffold-project';
 
   beforeAll(() => {
-    const tmp = mkdtempSync(join(tmpdir(), 'ctxmill-scaffold-'));
+    const tmp = mkdtempSync(join(tmpdir(), 'stablehand-scaffold-'));
     projectDir = join(tmp, projectName);
 
     execSync(`node ${CLI_PATH} ${projectDir}`, {
@@ -61,7 +61,7 @@ describe('create-ctxmill scaffold', () => {
     'agents/assistant',
     'tools',
     'tests',
-    '.ctxmill',
+    '.stablehand',
   ];
 
   for (const dir of expectedDirs) {
@@ -88,10 +88,10 @@ describe('create-ctxmill scaffold', () => {
       expect(pkg.type).toBe('module');
     });
 
-    it('has ctxmill dependency', () => {
+    it('has stablehand dependency', () => {
       const deps = pkg.dependencies as Record<string, string>;
-      expect(deps).toHaveProperty('ctxmill');
-      expect(deps).toHaveProperty('@ctxmill/manifest');
+      expect(deps).toHaveProperty('stablehand');
+      expect(deps).toHaveProperty('@stablehand/manifest');
     });
 
     it('has vitest devDependency', () => {
@@ -127,7 +127,7 @@ describe('create-ctxmill scaffold', () => {
         join(projectDir, 'agents', 'assistant', 'agent.yaml'),
         'utf-8',
       );
-      expect(content).toContain('apiVersion: ctxmill.io/v1');
+      expect(content).toContain('apiVersion: stablehand.io/v1');
       expect(content).toContain('kind: Agent');
       expect(content).toContain('name: assistant');
       expect(content).toContain('harness: langgraph');
@@ -159,7 +159,7 @@ describe('create-ctxmill scaffold', () => {
 
   describe('retired scaffold output', () => {
     it('does not emit stale config, policies, feedback, or TypeScript agent files', () => {
-      expect(existsSync(join(projectDir, 'ctxmill.config.ts'))).toBe(false);
+      expect(existsSync(join(projectDir, 'stablehand.config.ts'))).toBe(false);
       expect(existsSync(join(projectDir, 'agents', 'assistant', 'agent.ts'))).toBe(false);
       expect(existsSync(join(projectDir, 'feedback'))).toBe(false);
       expect(existsSync(join(projectDir, 'policies'))).toBe(false);
@@ -203,12 +203,12 @@ describe('create-ctxmill scaffold', () => {
   // --- tools/read-file.ts ---
 
   describe('tools/read-file.ts', () => {
-    it('imports defineTool from ctxmill', () => {
+    it('imports defineTool from stablehand', () => {
       const content = readFileSync(
         join(projectDir, 'tools', 'read-file.ts'),
         'utf-8',
       );
-      expect(content).toContain("import { defineTool } from 'ctxmill'");
+      expect(content).toContain("import { defineTool } from 'stablehand'");
     });
   });
 });

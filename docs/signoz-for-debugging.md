@@ -1,15 +1,15 @@
 # SigNoz for Debugging
 
-Use this runbook when you need OpenTelemetry traces for ctxmill API,
+Use this runbook when you need OpenTelemetry traces for stablehand API,
 orchestrator behavior, and sandbox run behavior in the centralized dev2 SigNoz
 instance.
 
 ## What Is Instrumented
 
-The Docker Compose orchestrator service preloads ctxmill's OTEL register module
+The Docker Compose orchestrator service preloads stablehand's OTEL register module
 through `NODE_OPTIONS`. Sandbox harness images preload the same module through
 Bun's `--preload` flag. The register module wraps OpenTelemetry's Node auto
-instrumentations with ctxmill defaults: a bounded instrumentation set, OpenAI
+instrumentations with stablehand defaults: a bounded instrumentation set, OpenAI
 message-content capture disabled, OTLP self-call filtering, and sanitized
 HTTP/Undici URL attributes. Base `docker-compose.yml` keeps
 `OTEL_TRACES_EXPORTER=none` so developers who are not exporting traces do not
@@ -29,10 +29,10 @@ The dev2 SigNoz UI is:
 https://signoz.staging.example.com
 ```
 
-The orchestrator service appears as `ctxmill-orchestrator`. Sandbox run
-containers appear as `ctxmill-sandbox-<harness>`, for example
-`ctxmill-sandbox-langgraph`, `ctxmill-sandbox-claude-agents`, and
-`ctxmill-sandbox-pi-agent`.
+The orchestrator service appears as `stablehand-orchestrator`. Sandbox run
+containers appear as `stablehand-sandbox-<harness>`, for example
+`stablehand-sandbox-langgraph`, `stablehand-sandbox-claude-agents`, and
+`stablehand-sandbox-pi-agent`.
 
 Keep source environment attributes accurate. A local Docker stack should keep
 `deployment.environment=local`; the dev2 Kubernetes deployment uses
@@ -64,12 +64,12 @@ through the tailnet-only ingress at:
 https://otlp-signoz.staging.example.com
 ```
 
-Do not run a local SigNoz ClickHouse stack for ctxmill telemetry. All ctxmill
+Do not run a local SigNoz ClickHouse stack for stablehand telemetry. All stablehand
 OpenTelemetry traces should land in dev2 SigNoz.
 
-## Start ctxmill With Dev2 Tracing
+## Start stablehand With Dev2 Tracing
 
-From the ctxmill repo root:
+From the stablehand repo root:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.signoz.yml up --build -d --remove-orphans
@@ -80,11 +80,11 @@ it only when intentionally targeting another central collector:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-signoz.staging.example.com \
-CTXMILL_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-signoz.staging.example.com \
+STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-signoz.staging.example.com \
   docker compose -f docker-compose.yml -f docker-compose.signoz.yml up --build -d --remove-orphans
 ```
 
-To run ctxmill without tracing:
+To run stablehand without tracing:
 
 ```bash
 docker compose up --build -d
@@ -95,15 +95,15 @@ docker compose up --build -d
 Basic API and UI traffic is enough to produce orchestrator spans:
 
 ```bash
-bun /path/to/stablehand/.codex/skills/ctxmill-cli/scripts/ctxmill.ts health
-bun /path/to/stablehand/.codex/skills/ctxmill-cli/scripts/ctxmill.ts agents list
-bun /path/to/stablehand/.codex/skills/ctxmill-cli/scripts/ctxmill.ts sandbox metrics
+bun /path/to/stablehand/.codex/skills/stablehand-cli/scripts/stablehand.ts health
+bun /path/to/stablehand/.codex/skills/stablehand-cli/scripts/stablehand.ts agents list
+bun /path/to/stablehand/.codex/skills/stablehand-cli/scripts/stablehand.ts sandbox metrics
 ```
 
 For run/session traces, execute a short agent turn through the CLI or UI, then
 wait 10-30 seconds for export and ingestion. A completed sandbox turn should
-produce spans under both `ctxmill-orchestrator` and the relevant
-`ctxmill-sandbox-<harness>` service.
+produce spans under both `stablehand-orchestrator` and the relevant
+`stablehand-sandbox-<harness>` service.
 
 ## Verify In SigNoz
 
@@ -111,7 +111,7 @@ In the SigNoz UI:
 
 1. Open `https://signoz.staging.example.com`.
 2. Go to Services or Traces.
-3. Filter for service names `ctxmill-orchestrator` and `ctxmill-sandbox-*`.
+3. Filter for service names `stablehand-orchestrator` and `stablehand-sandbox-*`.
 4. Confirm spans appear while generating `/health`, `/api/health`,
    `/api/agents`, `/api/sandbox/metrics`, and any run/session traffic used
    during the trial.
@@ -130,10 +130,10 @@ SELECT
 FROM signoz_traces.distributed_signoz_index_v3
 WHERE timestamp >= now() - INTERVAL 30 MINUTE
   AND `resource_string_service$$name` IN (
-    '\''ctxmill-orchestrator'\'',
-    '\''ctxmill-sandbox-langgraph'\'',
-    '\''ctxmill-sandbox-claude-agents'\'',
-    '\''ctxmill-sandbox-pi-agent'\''
+    '\''stablehand-orchestrator'\'',
+    '\''stablehand-sandbox-langgraph'\'',
+    '\''stablehand-sandbox-claude-agents'\'',
+    '\''stablehand-sandbox-pi-agent'\''
   )
 GROUP BY service_name
 ORDER BY service_name
@@ -152,7 +152,7 @@ SELECT
   round(quantile(0.95)(duration_nano) / 1000000, 2) AS p95_ms
 FROM signoz_traces.distributed_signoz_index_v3
 WHERE timestamp >= now() - INTERVAL 30 MINUTE
-  AND `resource_string_service$$name` LIKE '\''ctxmill-%'\''
+  AND `resource_string_service$$name` LIKE '\''stablehand-%'\''
 GROUP BY name, kind_string
 ORDER BY spans DESC
 LIMIT 20
@@ -177,28 +177,28 @@ docker compose -f docker-compose.yml -f docker-compose.signoz.yml exec sandbox-l
   env | grep '^OTEL_\|^NODE_OPTIONS' || true
 docker compose -f docker-compose.yml -f docker-compose.signoz.yml logs --since=10m orchestrator | \
   grep -i 'otel\|opentelemetry\|export' || true
-docker logs $(docker ps -q --filter 'label=ctxmill.managed=true' | head -1) 2>/dev/null | \
+docker logs $(docker ps -q --filter 'label=stablehand.managed=true' | head -1) 2>/dev/null | \
   grep -i 'otel\|opentelemetry\|export' || true
 ```
 
 Common issues:
 
-- No orchestrator spans after API traffic: confirm ctxmill was started with
+- No orchestrator spans after API traffic: confirm stablehand was started with
   `-f docker-compose.signoz.yml`, `OTEL_TRACES_EXPORTER=otlp`, and
-  `NODE_OPTIONS` contains the ctxmill OTEL register preload.
+  `NODE_OPTIONS` contains the stablehand OTEL register preload.
 - No sandbox spans after run traffic: confirm harness images were rebuilt after
   the OTEL preload change and sandbox containers have
   `OTEL_TRACES_EXPORTER=otlp` plus
   `OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-signoz.staging.example.com`.
 - Missing expected auto-instrumentation spans: check whether
-  `OTEL_NODE_ENABLED_INSTRUMENTATIONS` was overridden. The ctxmill register
+  `OTEL_NODE_ENABLED_INSTRUMENTATIONS` was overridden. The stablehand register
   defaults to `aws-sdk,dns,grpc,http,net,openai,pg,pino,runtime-node,undici`.
 - `https://otlp-signoz.staging.example.com/v1/traces` is unreachable: check the
   infra-owned `signoz-otlp-tailnet` ingress in `/path/to/workspace/infra`.
 - Export errors: confirm the dev2 OTLP ingress is reachable from the Docker
   container network and that `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`.
 - Spans are present but hard to find: filter by `service.name =
-  ctxmill-orchestrator` or `service.name LIKE ctxmill-sandbox-%`, and include
+  stablehand-orchestrator` or `service.name LIKE stablehand-sandbox-%`, and include
   the correct `deployment.environment` filter.
 
 ## References

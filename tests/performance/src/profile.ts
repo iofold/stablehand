@@ -57,7 +57,7 @@ const PerformanceProfileSchema = z.strictObject({
   expectedOutput: z.string().trim().min(1).optional(),
   target: z.strictObject({
     apiBase: z.url(),
-    kubernetesNamespace: z.string().trim().min(1).default('ctxmill'),
+    kubernetesNamespace: z.string().trim().min(1).default('stablehand'),
   }),
   requirements: RequirementsSchema,
   safety: SafetySchema,

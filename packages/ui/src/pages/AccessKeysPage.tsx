@@ -17,7 +17,7 @@ import {
   type ApiKey,
   type ApiKeyCreateInput,
   type CapabilityVerb,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 
 import {
   createApiKey,
@@ -254,7 +254,7 @@ export function AccessKeysPage() {
               <div>
                 <p className="font-medium">API authentication is disabled</p>
                 <p className="mt-0.5 text-xs text-amber-200/75">
-                  Configure CTXMILL_API_TOKEN before creating keys; scoped credentials have no effect in open mode.
+                  Configure STABLEHAND_API_TOKEN before creating keys; scoped credentials have no effect in open mode.
                 </p>
               </div>
             </div>
@@ -756,9 +756,9 @@ function OneTimeSecretDialog({
           />
           <SecretCopyRow
             label="Environment variable"
-            value={`CTXMILL_API_TOKEN=${secret.token}`}
+            value={`STABLEHAND_API_TOKEN=${secret.token}`}
             copied={copied === 'env'}
-            onCopy={() => void copy('env', `CTXMILL_API_TOKEN=${secret.token}`)}
+            onCopy={() => void copy('env', `STABLEHAND_API_TOKEN=${secret.token}`)}
           />
         </div>
         <div className="flex justify-end border-t border-surface-700 px-5 py-4">

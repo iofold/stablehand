@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { AnalyticsAgentActivity } from '@ctxmill/contracts';
+import type { AnalyticsAgentActivity } from '@stablehand/contracts';
 import { formatCompactNumber } from '@/lib/format';
 import { harnessLabel } from '@/lib/harness';
 import { RelativeTime } from '@/components/ui/RelativeTime';

@@ -110,7 +110,7 @@ describe('fetchAgents', () => {
     await expect(fetchAgents()).rejects.toThrow('Unauthorized');
     expect(useApiAuthStore.getState().authRequired).toBe(true);
     expect(useApiAuthStore.getState().token).toBe('');
-    expect(window.localStorage.getItem('ctxmill.apiToken')).toBeNull();
+    expect(window.localStorage.getItem('stablehand.apiToken')).toBeNull();
   });
 
   it('rejects stale agent response shapes at the UI boundary', async () => {
@@ -190,7 +190,7 @@ describe('access key contracts', () => {
 
   it('requires the authentication mode in config responses', async () => {
     const config = {
-      system: { version: 'test', uptimeMs: 1, dbPath: '.ctxmill' },
+      system: { version: 'test', uptimeMs: 1, dbPath: '.stablehand' },
       agentDefaults: { harness: 'langgraph', temperature: 0.7, maxTokens: 4096 },
       authentication: { mode: 'enforced' },
     };
@@ -833,7 +833,7 @@ describe('artifact uploads', () => {
     expect(init.body).toBeInstanceOf(FormData);
   });
 
-  it('does not add CTXMill auth headers to presigned S3 uploads', async () => {
+  it('does not add Stablehand auth headers to presigned S3 uploads', async () => {
     useApiAuthStore.getState().setToken('secret-token');
     const file = new File(['bytes'], 'report.txt', { type: 'text/plain' });
 

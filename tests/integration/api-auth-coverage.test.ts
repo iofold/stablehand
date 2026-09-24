@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { CAPABILITY_VERBS, type CapabilityVerb } from '@ctxmill/contracts';
+import { CAPABILITY_VERBS, type CapabilityVerb } from '@stablehand/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
@@ -120,13 +120,13 @@ describe('API auth route coverage', () => {
   let oldDisabled: string | undefined;
 
   beforeAll(async () => {
-    oldToken = process.env.CTXMILL_API_TOKEN;
-    oldDisabled = process.env.CTXMILL_AUTH_DISABLED;
-    process.env.CTXMILL_API_TOKEN = TEST_TOKEN;
-    delete process.env.CTXMILL_AUTH_DISABLED;
+    oldToken = process.env.STABLEHAND_API_TOKEN;
+    oldDisabled = process.env.STABLEHAND_AUTH_DISABLED;
+    process.env.STABLEHAND_API_TOKEN = TEST_TOKEN;
+    delete process.env.STABLEHAND_AUTH_DISABLED;
 
     testApp = await createTestApp({
-      dirPrefix: 'ctxmill-api-auth-',
+      dirPrefix: 'stablehand-api-auth-',
       serverOptions: {
         artifactStore: {} as never,
         artifactBucket: 'auth-coverage',
@@ -143,8 +143,8 @@ describe('API auth route coverage', () => {
 
   afterAll(async () => {
     await testApp?.close();
-    restoreEnv('CTXMILL_API_TOKEN', oldToken);
-    restoreEnv('CTXMILL_AUTH_DISABLED', oldDisabled);
+    restoreEnv('STABLEHAND_API_TOKEN', oldToken);
+    restoreEnv('STABLEHAND_AUTH_DISABLED', oldDisabled);
   });
 
   it('marks exactly the health endpoints public', () => {
@@ -162,7 +162,7 @@ describe('API auth route coverage', () => {
       expect(
         route.url.startsWith('/api/')
         || route.url === '/health'
-        || route.url.startsWith('/ctxmill.sandbox.v1.'),
+        || route.url.startsWith('/stablehand.sandbox.v1.'),
       ).toBe(true);
     }
   });

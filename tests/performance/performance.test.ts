@@ -56,7 +56,7 @@ import {
 } from './src/capacity.js';
 import { renderPerformanceReport } from './src/report.js';
 import {
-  CtxmillControlClient,
+  StablehandControlClient,
   type AgentEventStreamItem,
 } from '../../packages/client/src/index.js';
 
@@ -153,7 +153,7 @@ describe('stream event observation', () => {
     })).toBe('turn-run');
     expect(eventTurnId({
       type: 'CUSTOM',
-      name: 'ctxmill.turn.pending',
+      name: 'stablehand.turn.pending',
       turnId: 'turn-custom',
       agentId: 'agent-1',
       conversationId: 'conversation-1',
@@ -277,7 +277,7 @@ describe('performance profile', () => {
       expectedOutput: 'BENCHMARK_OK',
       target: {
         apiBase: 'https://stablehand.staging.example.com/api',
-        kubernetesNamespace: 'ctxmill',
+        kubernetesNamespace: 'stablehand',
       },
       stages: [{
         name: 'langgraph-cold',
@@ -329,7 +329,7 @@ describe('performance profile', () => {
       name: 'dev2-parallel-groups',
       target: {
         apiBase: 'https://stablehand.staging.example.com/api',
-        kubernetesNamespace: 'ctxmill',
+        kubernetesNamespace: 'stablehand',
       },
       stages: [
         stage('solo-first'),
@@ -349,7 +349,7 @@ describe('performance profile', () => {
       name: 'unsafe',
       target: {
         apiBase: 'https://stablehand.staging.example.com/api',
-        kubernetesNamespace: 'ctxmill',
+        kubernetesNamespace: 'stablehand',
       },
       safety: { maxConcurrency: 5 },
       stages: [{
@@ -377,7 +377,7 @@ describe('performance profile', () => {
       name: 'unwarmed',
       target: {
         apiBase: 'https://stablehand.staging.example.com/api',
-        kubernetesNamespace: 'ctxmill',
+        kubernetesNamespace: 'stablehand',
       },
       stages: [{
         name: 'resume',
@@ -404,7 +404,7 @@ describe('performance profile', () => {
       name: 'invalid-claude-config',
       target: {
         apiBase: 'https://stablehand.staging.example.com/api',
-        kubernetesNamespace: 'ctxmill',
+        kubernetesNamespace: 'stablehand',
       },
       stages: [{
         name: 'claude-cold',
@@ -431,7 +431,7 @@ describe('performance profile', () => {
       name: 'model-matrix',
       target: {
         apiBase: 'https://stablehand.staging.example.com/api',
-        kubernetesNamespace: 'ctxmill',
+        kubernetesNamespace: 'stablehand',
       },
       requirements: { modelGateway: 'required' },
       safety: {
@@ -495,7 +495,7 @@ describe('performance profile', () => {
       name: 'too-many-turns',
       target: {
         apiBase: 'https://stablehand.staging.example.com/api',
-        kubernetesNamespace: 'ctxmill',
+        kubernetesNamespace: 'stablehand',
       },
       safety: { maxTurns: 5 },
       stages: [{
@@ -519,7 +519,7 @@ describe('performance profile', () => {
       name: 'gateway-required',
       target: {
         apiBase: 'https://stablehand.staging.example.com/api',
-        kubernetesNamespace: 'ctxmill',
+        kubernetesNamespace: 'stablehand',
       },
       requirements: { modelGateway: 'required' },
       stages: [{
@@ -557,8 +557,8 @@ describe('performance profile', () => {
 
   it('fails a required-gateway run before clock probes or agent mutations', async () => {
     const requestedUrls: string[] = [];
-    const client = new CtxmillControlClient({
-      apiBase: 'https://ctxmill.example/api',
+    const client = new StablehandControlClient({
+      apiBase: 'https://stablehand.example/api',
       fetch: async (input) => {
         requestedUrls.push(String(input));
         return new Response(JSON.stringify({
@@ -587,8 +587,8 @@ describe('performance profile', () => {
       schemaVersion: 1,
       name: 'gateway-preflight',
       target: {
-        apiBase: 'https://ctxmill.example/api',
-        kubernetesNamespace: 'ctxmill',
+        apiBase: 'https://stablehand.example/api',
+        kubernetesNamespace: 'stablehand',
       },
       requirements: { modelGateway: 'required' },
       stages: [{
@@ -609,7 +609,7 @@ describe('performance profile', () => {
       /requires a healthy model gateway.*disabled/,
     );
     expect(requestedUrls).toEqual([
-      'https://ctxmill.example/api/model-gateway/status',
+      'https://stablehand.example/api/model-gateway/status',
     ]);
   });
 
@@ -747,13 +747,13 @@ describe('performance profile', () => {
       'utf8',
     );
     expect(enduranceController).toContain(
-      'WAVES="${CTXMILL_PERF_ENDURANCE_WAVES:-10}"',
+      'WAVES="${STABLEHAND_PERF_ENDURANCE_WAVES:-10}"',
     );
     expect(enduranceController).toContain(
       'theoretical_calls=$((calls_per_wave * WAVES))',
     );
     expect(enduranceController).toContain(
-      'CTXMILL_PERF_RAMP_PATH="$GATES_PATH"',
+      'STABLEHAND_PERF_RAMP_PATH="$GATES_PATH"',
     );
     expect(enduranceController).toContain('run-dev2.sh');
     expect(enduranceController).toContain('capacity-decision.json');
@@ -809,7 +809,7 @@ describe('performance profile', () => {
       new URL('./scripts/collect-dev2-traces.sh', import.meta.url),
       'utf8',
     );
-    expect(traceCollector).toContain("resources_string['ctxmill.session.id']");
+    expect(traceCollector).toContain("resources_string['stablehand.session.id']");
   });
 
   it('ships a mixed-provider exploratory ramp through concurrency 48', () => {
@@ -911,7 +911,7 @@ exit 1
 
       expect(collected.status, collected.stderr).toBe(0);
       expect(readFileSync(outputPath, 'utf8')).toContain(
-        "resources_string['ctxmill.session.id'] IN ('session-from-failed-run')",
+        "resources_string['stablehand.session.id'] IN ('session-from-failed-run')",
       );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
@@ -1110,14 +1110,14 @@ describe('capacity wave gates', () => {
         peakModelGatewayMemoryBytes: 128,
       },
       traces: [
-        { turn_id: 'turn-1', name: 'ctxmill.turn.execute' },
-        { turn_id: 'turn-1', name: 'ctxmill.turn.delivery' },
-        { turn_id: 'turn-2', name: 'ctxmill.turn.execute' },
+        { turn_id: 'turn-1', name: 'stablehand.turn.execute' },
+        { turn_id: 'turn-1', name: 'stablehand.turn.delivery' },
+        { turn_id: 'turn-2', name: 'stablehand.turn.execute' },
         {
           name: 'POST',
           sandbox_session_id: 'session-1',
-          service_name: 'ctxmill-sandbox-langgraph',
-          url_path: '/ctxmill.sandbox.v1.HarnessService/DeliverTurn',
+          service_name: 'stablehand-sandbox-langgraph',
+          url_path: '/stablehand.sandbox.v1.HarnessService/DeliverTurn',
         },
       ],
       requestedConcurrency: 2,
@@ -1127,7 +1127,7 @@ describe('capacity wave gates', () => {
         lastState: { terminated: { reason: 'OOMKilled' } },
       }] } }] },
       afterJobs: { items: [{
-        metadata: { labels: { 'ctxmill.sandbox-session-id': 'session-1' } },
+        metadata: { labels: { 'stablehand.sandbox-session-id': 'session-1' } },
         status: { active: 1 },
       }] },
       sandbox: { containers: { active: 1, queued: 2 } },
@@ -1187,7 +1187,7 @@ describe('benchmark agent inventory', () => {
       name: 'inventory',
       target: {
         apiBase: 'https://stablehand.staging.example.com/api',
-        kubernetesNamespace: 'ctxmill',
+        kubernetesNamespace: 'stablehand',
       },
       stages: [{
         name: 'pi-cold',
@@ -1218,8 +1218,8 @@ describe('benchmark agent inventory', () => {
       },
       tools: [],
       metadata: {
-        'ctxmill.performance.managed': true,
-        'ctxmill.performance.stage': 'pi-cold',
+        'stablehand.performance.managed': true,
+        'stablehand.performance.stage': 'pi-cold',
       },
     });
   });
@@ -1438,7 +1438,7 @@ describe('measured turn execution', () => {
         list: vi.fn().mockResolvedValue([
           {
             id: 'agent-owned',
-            metadata: { 'ctxmill.performance.managed': true },
+            metadata: { 'stablehand.performance.managed': true },
           },
           { id: 'agent-other', metadata: null },
         ]),
@@ -1740,12 +1740,12 @@ describe('Kubernetes resource samples', () => {
         memory: '16Gi',
       }],
       podMetrics: [{
-        name: 'ctxmill-orchestrator-1',
-        labels: { app: 'ctxmill-orchestrator' },
+        name: 'stablehand-orchestrator-1',
+        labels: { app: 'stablehand-orchestrator' },
         containers: [{ name: 'orchestrator', cpu: '500m', memory: '300Mi' }],
       }, {
-        name: 'ctxmill-session-1',
-        labels: { 'ctxmill.sandbox-session-id': 'session-1' },
+        name: 'stablehand-session-1',
+        labels: { 'stablehand.sandbox-session-id': 'session-1' },
         containers: [{ name: 'sandbox', cpu: '750m', memory: '512Mi' }],
       }, {
         name: 'litellm-1',
@@ -1783,7 +1783,7 @@ describe('performance report', () => {
       profile: 'dev2-smoke',
       target: {
         apiBase: 'https://stablehand.staging.example.com/api',
-        kubernetesNamespace: 'ctxmill',
+        kubernetesNamespace: 'stablehand',
       },
       requirements: { modelGateway: 'optional' },
       plan: {
@@ -1818,7 +1818,7 @@ describe('performance report', () => {
           name: 'nested',
           target: {
             apiBase: 'https://stablehand.staging.example.com/api',
-            kubernetesNamespace: 'ctxmill',
+            kubernetesNamespace: 'stablehand',
           },
           stages: [{
             name: 'resume',

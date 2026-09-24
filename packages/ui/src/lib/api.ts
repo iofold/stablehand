@@ -3,7 +3,7 @@ import { getApiToken, markAuthRequired, withApiAuth } from './auth';
 import type {
   ApiFeedbackRequest,
   ApiSandboxRestoreSuccess,
-} from '@ctxmill/shared';
+} from '@stablehand/shared';
 import {
   ActiveConversationListResponseSchema,
   AgentBudgetStatusListResponseSchema,
@@ -79,7 +79,7 @@ import {
   type EventStatsResponse,
   TriggerListResponseSchema,
   type Trigger,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 
 const API_BASE = '/api';
 

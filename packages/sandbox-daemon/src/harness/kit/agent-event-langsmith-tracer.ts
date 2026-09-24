@@ -106,13 +106,13 @@ export async function createAgentEventLangSmithTracer(
           conversationId: options.conversationId,
           harnessName: options.harnessName,
         },
-        project_name: runtime.projectName ?? process.env.LANGSMITH_PROJECT ?? 'ctxmill',
+        project_name: runtime.projectName ?? process.env.LANGSMITH_PROJECT ?? 'stablehand',
         extra: {
           metadata: {
             agentId: options.agentId,
             conversationId: options.conversationId,
             harnessName: options.harnessName,
-            ls_integration: 'ctxmill-agent-events',
+            ls_integration: 'stablehand-agent-events',
           },
         },
         client,

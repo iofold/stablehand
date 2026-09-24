@@ -1,17 +1,17 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { CanonicalStreamEventSchema } from '@ctxmill/contracts';
-import type { SandboxSessionStatus } from '@ctxmill/shared';
+import { CanonicalStreamEventSchema } from '@stablehand/contracts';
+import type { SandboxSessionStatus } from '@stablehand/shared';
 import {
   createTestDb,
   resolveTestDatabaseUrl,
   type TestDb,
 } from '../utils/test-db.js';
-import { createDatabase } from '../../packages/ctxmill/src/database/connection.js';
-import { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
-import { isUniqueConstraintViolation } from '../../packages/ctxmill/src/database/errors.js';
+import { createDatabase } from '../../packages/stablehand/src/database/connection.js';
+import { DatabaseRepository } from '../../packages/stablehand/src/database/repository.js';
+import { isUniqueConstraintViolation } from '../../packages/stablehand/src/database/errors.js';
 import {
   createInitialChatState,
-  reduceCtxmillChatState,
+  reduceStablehandChatState,
 } from '../../packages/react/src/state.js';
 
 async function waitForCondition(
@@ -110,7 +110,6 @@ describe('DatabaseRepository', () => {
         'budget_policies',
         'callback_outbox',
         'conversations',
-        'ctxmill_schema_version',
         'event_store',
         'event_triggers',
         'interrupt_resume_attempts',
@@ -125,6 +124,7 @@ describe('DatabaseRepository', () => {
         'schedules',
         'secrets',
         'spine_cursors',
+        'stablehand_schema_version',
         'suspended_sessions',
         'system_settings',
         'tool_request_dedup',
@@ -138,7 +138,7 @@ describe('DatabaseRepository', () => {
     });
 
     it('CFG-08: should run migrations idempotently (twice without errors)', async () => {
-      const { runMigrations } = await import('../../packages/ctxmill/src/database/migrations.js');
+      const { runMigrations } = await import('../../packages/stablehand/src/database/migrations.js');
       // Migrations already ran in beforeAll; run again
       await expect(runMigrations(testDb.conn.pgClient)).resolves.not.toThrow();
 
@@ -150,7 +150,7 @@ describe('DatabaseRepository', () => {
     });
 
     it('backfills lifecycle-independent heads for orphaned deletion events', async () => {
-      const { runMigrations } = await import('../../packages/ctxmill/src/database/migrations.js');
+      const { runMigrations } = await import('../../packages/stablehand/src/database/migrations.js');
       const orphanAgentId = 'deleted-legacy-agent';
       const orphanPayload = 'orphaned-before-agent-heads';
       const [orphanEvent] = await testDb.conn.pgClient`
@@ -204,7 +204,7 @@ describe('DatabaseRepository', () => {
 
     it('initializes the current schema baseline marker', async () => {
       const [baseline] = await testDb.conn.pgClient`
-        SELECT version, baseline FROM ctxmill_schema_version WHERE id = 'baseline'
+        SELECT version, baseline FROM stablehand_schema_version WHERE id = 'baseline'
       `;
 
       expect(Number(baseline.version)).toBe(1);
@@ -799,7 +799,7 @@ describe('DatabaseRepository', () => {
         'TEXT_MESSAGE_START',
         'TEXT_MESSAGE_CONTENT',
       ]);
-      let chatState = reduceCtxmillChatState(
+      let chatState = reduceStablehandChatState(
         createInitialChatState(conversation.id),
         {
           type: 'load_messages',
@@ -813,7 +813,7 @@ describe('DatabaseRepository', () => {
         },
       );
       for (const frame of replay) {
-        chatState = reduceCtxmillChatState(chatState, {
+        chatState = reduceStablehandChatState(chatState, {
           type: 'stream_event',
           event: CanonicalStreamEventSchema.parse(JSON.parse(frame.payload)),
         });
@@ -904,7 +904,7 @@ describe('DatabaseRepository', () => {
         snapshot.eventCursorSeq,
         { channels: ['run'] },
       );
-      let chatState = reduceCtxmillChatState(
+      let chatState = reduceStablehandChatState(
         createInitialChatState(conversation.id),
         {
           type: 'load_messages',
@@ -918,7 +918,7 @@ describe('DatabaseRepository', () => {
         },
       );
       for (const frame of replay) {
-        chatState = reduceCtxmillChatState(chatState, {
+        chatState = reduceStablehandChatState(chatState, {
           type: 'stream_event',
           event: CanonicalStreamEventSchema.parse(JSON.parse(frame.payload)),
         });
@@ -1197,7 +1197,7 @@ describe('DatabaseRepository', () => {
         snapshot.eventCursorSeq,
         { channels: ['run'] },
       );
-      let chatState = reduceCtxmillChatState(
+      let chatState = reduceStablehandChatState(
         createInitialChatState(conversation.id),
         {
           type: 'load_messages',
@@ -1211,7 +1211,7 @@ describe('DatabaseRepository', () => {
         },
       );
       for (const frame of replay) {
-        chatState = reduceCtxmillChatState(chatState, {
+        chatState = reduceStablehandChatState(chatState, {
           type: 'stream_event',
           event: CanonicalStreamEventSchema.parse(JSON.parse(frame.payload)),
         });
@@ -1411,7 +1411,7 @@ describe('DatabaseRepository', () => {
         snapshot.eventCursorSeq,
         { channels: ['run'] },
       );
-      let chatState = reduceCtxmillChatState(
+      let chatState = reduceStablehandChatState(
         createInitialChatState(conversation.id),
         {
           type: 'load_messages',
@@ -1425,7 +1425,7 @@ describe('DatabaseRepository', () => {
         },
       );
       for (const frame of replay) {
-        chatState = reduceCtxmillChatState(chatState, {
+        chatState = reduceStablehandChatState(chatState, {
           type: 'stream_event',
           event: CanonicalStreamEventSchema.parse(JSON.parse(frame.payload)),
         });
@@ -1629,7 +1629,7 @@ describe('DatabaseRepository', () => {
       const session = await repo.createSandboxSession({
         conversationId,
         agentId,
-        containerName: 'ctxmill-session-1',
+        containerName: 'stablehand-session-1',
         containerId: 'container-1',
         harnessName: 'langgraph',
         runtimeDefinitionHash: 'runtime-definition-1',
@@ -1639,7 +1639,7 @@ describe('DatabaseRepository', () => {
       expect(session.conversationId).toBe(conversationId);
       expect(session.agentId).toBe(agentId);
       expect(session.status).toBe('ACTIVE');
-      expect(session.containerName).toBe('ctxmill-session-1');
+      expect(session.containerName).toBe('stablehand-session-1');
       expect(session.runtimeDefinitionHash).toBe(
         'runtime-definition-1',
       );
@@ -1649,7 +1649,7 @@ describe('DatabaseRepository', () => {
       const session = await repo.createSandboxSession({
         conversationId,
         agentId,
-        containerName: 'ctxmill-session-cpf',
+        containerName: 'stablehand-session-cpf',
         containerId: 'container-cpf',
         harnessName: 'langgraph',
       });
@@ -5423,7 +5423,7 @@ describe('DatabaseRepository', () => {
         agentId,
         payload: JSON.stringify({
           type: 'CUSTOM',
-          name: 'ctxmill.message.committed',
+          name: 'stablehand.message.committed',
           runId: turn.id,
           threadId: conversation.id,
           messageId: message.id,
@@ -5626,7 +5626,7 @@ describe('DatabaseRepository', () => {
           agentId,
           payload: JSON.stringify({
             type: 'CUSTOM',
-            name: 'ctxmill.message.updated',
+            name: 'stablehand.message.updated',
             agentId,
             turnId: turn.id,
             conversationId: conversation.id,
@@ -6208,7 +6208,7 @@ describe('DatabaseRepository', () => {
         agentId: deliveryAgent.id,
         payload: JSON.stringify({
           type: 'CUSTOM',
-          name: 'ctxmill.message.committed',
+          name: 'stablehand.message.committed',
           runId: turn.id,
           threadId: conversation.id,
           messageId: message!.id,

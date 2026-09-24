@@ -1,13 +1,13 @@
 import { z } from 'zod';
 
-export const CTXMILL_HARNESS_NAMES = [
+export const STABLEHAND_HARNESS_NAMES = [
   'claude-agents',
   'langgraph',
   'pi-agent',
 ] as const;
 
-export const CtxmillHarnessNameSchema = z.enum(CTXMILL_HARNESS_NAMES);
-export const CtxmillLlmProviderSchema = z.enum(['openai', 'anthropic', 'google']);
+export const StablehandHarnessNameSchema = z.enum(STABLEHAND_HARNESS_NAMES);
+export const StablehandLlmProviderSchema = z.enum(['openai', 'anthropic', 'google']);
 
 const NativeToolNamesSchema = z.array(z.string().trim().min(1)).min(1).superRefine(
   (names, context) => {
@@ -85,7 +85,7 @@ const LangGraphSubagentSchema = z.strictObject({
   name: z.string().min(1),
   description: z.string(),
   systemPrompt: z.string(),
-  provider: CtxmillLlmProviderSchema.optional(),
+  provider: StablehandLlmProviderSchema.optional(),
   model: z.string().min(1).optional(),
   apiKeyRef: z.string().min(1).optional(),
   tools: z.array(z.string().min(1)).optional(),
@@ -95,7 +95,7 @@ const LangGraphSubagentSchema = z.strictObject({
 });
 
 export const LangGraphConfigSchema = z.strictObject({
-  provider: CtxmillLlmProviderSchema.default('openai'),
+  provider: StablehandLlmProviderSchema.default('openai'),
   model: z.string().min(1),
   apiKeyRef: z.string().min(1).optional(),
   baseUrl: UrlSchema.optional(),
@@ -182,7 +182,7 @@ export const ClaudeAgentsConfigSchema = z.strictObject({
 });
 
 export const PIAgentConfigSchema = z.strictObject({
-  provider: CtxmillLlmProviderSchema.default('openai'),
+  provider: StablehandLlmProviderSchema.default('openai'),
   model: z.string().min(1),
   apiKeyRef: z.string().min(1).optional(),
   baseUrl: UrlSchema.optional(),
@@ -204,7 +204,7 @@ export type HarnessTurnLimits = z.infer<typeof HarnessTurnLimitsSchema>;
 export type LangGraphConfig = z.infer<typeof LangGraphConfigSchema>;
 export type ClaudeAgentsConfig = z.infer<typeof ClaudeAgentsConfigSchema>;
 export type PIAgentConfig = z.infer<typeof PIAgentConfigSchema>;
-export type CtxmillHarnessName = z.infer<typeof CtxmillHarnessNameSchema>;
+export type StablehandHarnessName = z.infer<typeof StablehandHarnessNameSchema>;
 export type NativeToolPolicy = z.infer<typeof NativeToolPolicySchema>;
 export type BuiltinToolPolicy = z.infer<typeof BuiltinToolPolicySchema>;
 
@@ -212,6 +212,6 @@ export const HARNESS_CONFIG_SCHEMAS = {
   'claude-agents': ClaudeAgentsConfigSchema,
   langgraph: LangGraphConfigSchema,
   'pi-agent': PIAgentConfigSchema,
-} as const satisfies Readonly<Record<CtxmillHarnessName, z.ZodType>>;
+} as const satisfies Readonly<Record<StablehandHarnessName, z.ZodType>>;
 
 export type HarnessConfigSchemas = Readonly<Record<string, z.ZodType>>;

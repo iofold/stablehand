@@ -1,11 +1,11 @@
-# CTXMill Architecture
+# Stablehand Architecture
 
 > Status: Current shipped architecture as of 2026-08-14.
 > The sandbox execution migration shipped; its requirements spec is archived at [docs/plans/shipped/2026-03-17-sandbox-execution-requirements.md](plans/shipped/2026-03-17-sandbox-execution-requirements.md).
 
 ## Purpose
 
-CTXMill is a self-hosted framework for running tool-using agents behind a Fastify API and a React UI. The current repo ships a Docker-first stack with:
+Stablehand is a self-hosted framework for running tool-using agents behind a Fastify API and a React UI. The current repo ships a Docker-first stack with:
 
 - A Node.js orchestrator process
 - PostgreSQL persistence
@@ -50,11 +50,11 @@ The orchestrator is a Fastify server that wires together API auth, the database,
 
 Relevant code:
 
-- [server.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/server.ts)
-- [agent-session-service.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/agent-session-service.ts)
-- [sandbox-session-manager.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sandbox-session-manager.ts)
-- [routes/agents.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/routes/agents.ts)
-- [auth.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/auth.ts)
+- [server.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/server.ts)
+- [agent-session-service.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/agent-session-service.ts)
+- [sandbox-session-manager.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/sandbox-session-manager.ts)
+- [routes/agents.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/routes/agents.ts)
+- [auth.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/auth.ts)
 
 ### 2. Multi-Harness Agent Execution
 
@@ -66,9 +66,9 @@ Agents are executed through a harness registry. The shipped harness adapters are
 
 Relevant code:
 
-- [harness/index.ts](/path/to/stablehand/packages/ctxmill/src/harness/index.ts)
-- [agent-session-service.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/agent-session-service.ts)
-- [container.ts](/path/to/stablehand/packages/ctxmill/src/config/container.ts)
+- [harness/index.ts](/path/to/stablehand/packages/stablehand/src/harness/index.ts)
+- [agent-session-service.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/agent-session-service.ts)
+- [container.ts](/path/to/stablehand/packages/stablehand/src/config/container.ts)
 
 ### 3. Tool Execution
 
@@ -76,13 +76,13 @@ Tools are registered centrally and executed through the local tool executor. The
 
 Relevant code:
 
-- [tool/executor.ts](/path/to/stablehand/packages/ctxmill/src/tool/executor.ts)
-- [tool/providers/index.ts](/path/to/stablehand/packages/ctxmill/src/tool/providers/index.ts)
-- [tool/registry.ts](/path/to/stablehand/packages/ctxmill/src/tool/registry.ts)
+- [tool/executor.ts](/path/to/stablehand/packages/stablehand/src/tool/executor.ts)
+- [tool/providers/index.ts](/path/to/stablehand/packages/stablehand/src/tool/providers/index.ts)
+- [tool/registry.ts](/path/to/stablehand/packages/stablehand/src/tool/registry.ts)
 
 ### 4. Event Bus, Canonical Log, and Triggers
 
-CTXMill uses a typed in-process event bus plus a durable canonical event spine. Internal events are projected by `CanonicalProjector`, batch-persisted to `event_store` by `CanonicalLog`, and only then fanned out to live SSE clients. On the agent SSE route, browser reconnects replay from durable global sequence ids rather than volatile in-memory history. The AG-UI compat route does not yet support cursor-based reconnect replay — a reconnect there can miss frames (tracked as ctx-psax).
+Stablehand uses a typed in-process event bus plus a durable canonical event spine. Internal events are projected by `CanonicalProjector`, batch-persisted to `event_store` by `CanonicalLog`, and only then fanned out to live SSE clients. On the agent SSE route, browser reconnects replay from durable global sequence ids rather than volatile in-memory history. The AG-UI compat route does not yet support cursor-based reconnect replay — a reconnect there can miss frames (tracked as ctx-psax).
 
 User-emitted custom events are persisted with their original type and payload and still drive trigger matching. Run-channel events are projected into canonical AG-UI frames for native SSE streams. The pre-canonical `?wire=legacy` escape hatch was removed (W6c, 2026-07-10); the canonical vocabulary is the only wire.
 
@@ -109,12 +109,12 @@ The TypedEventBus emits the following events:
 
 Relevant code:
 
-- [events/bus.ts](/path/to/stablehand/packages/ctxmill/src/events/bus.ts)
-- [events/trigger-manager.ts](/path/to/stablehand/packages/ctxmill/src/events/trigger-manager.ts)
-- [orchestrator/canonical/canonical-log.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/canonical/canonical-log.ts)
-- [orchestrator/canonical/projector.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/canonical/projector.ts)
-- [orchestrator/sse.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sse.ts)
-- [orchestrator/routes/agents/stream.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/routes/agents/stream.ts)
+- [events/bus.ts](/path/to/stablehand/packages/stablehand/src/events/bus.ts)
+- [events/trigger-manager.ts](/path/to/stablehand/packages/stablehand/src/events/trigger-manager.ts)
+- [orchestrator/canonical/canonical-log.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/canonical/canonical-log.ts)
+- [orchestrator/canonical/projector.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/canonical/projector.ts)
+- [orchestrator/sse.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/sse.ts)
+- [orchestrator/routes/agents/stream.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/routes/agents/stream.ts)
 
 ### 5. HITL and Suspend/Resume
 
@@ -122,11 +122,11 @@ HITL is implemented through durable interrupt records and UI responses. Sandbox 
 
 Relevant code:
 
-- [interrupt.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/interrupt.ts)
-- [suspended-session-matcher.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/suspended-session-matcher.ts)
-- [sandbox-session-manager.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sandbox-session-manager.ts)
-- [routes/agents/interrupts.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/routes/agents/interrupts.ts)
-- [orchestrator/session-manager/interrupt-resume-service.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/session-manager/interrupt-resume-service.ts)
+- [interrupt.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/interrupt.ts)
+- [suspended-session-matcher.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/suspended-session-matcher.ts)
+- [sandbox-session-manager.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/sandbox-session-manager.ts)
+- [routes/agents/interrupts.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/routes/agents/interrupts.ts)
+- [orchestrator/session-manager/interrupt-resume-service.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/session-manager/interrupt-resume-service.ts)
 
 ### 6. Workspace Isolation
 
@@ -134,19 +134,19 @@ Each run can execute against a session-scoped workspace abstraction. The shipped
 
 Relevant code:
 
-- [workspace/session-workspace.ts](/path/to/stablehand/packages/ctxmill/src/workspace/session-workspace.ts)
-- [workspace/tar-upload.ts](/path/to/stablehand/packages/ctxmill/src/workspace/tar-upload.ts)
-- [workspace/ensure.ts](/path/to/stablehand/packages/ctxmill/src/workspace/ensure.ts)
+- [workspace/session-workspace.ts](/path/to/stablehand/packages/stablehand/src/workspace/session-workspace.ts)
+- [workspace/tar-upload.ts](/path/to/stablehand/packages/stablehand/src/workspace/tar-upload.ts)
+- [workspace/ensure.ts](/path/to/stablehand/packages/stablehand/src/workspace/ensure.ts)
 
 ### 7. External Learning Hooks
 
-CTXMill emits run, message, tool, feedback, and custom events that external learning or evaluation services can consume. Core CTXMill does not currently own an active internal memory layer; domain-specific retrieval should live in explicit tools, MCP servers, HTTP providers, artifact workflows, or downstream services connected through webhooks/events.
+Stablehand emits run, message, tool, feedback, and custom events that external learning or evaluation services can consume. Core Stablehand does not currently own an active internal memory layer; domain-specific retrieval should live in explicit tools, MCP servers, HTTP providers, artifact workflows, or downstream services connected through webhooks/events.
 
 Relevant code:
 
-- [events/bus.ts](/path/to/stablehand/packages/ctxmill/src/events/bus.ts)
-- [orchestrator/webhook-events.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/webhook-events.ts)
-- [callback-dispatcher.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/callback-dispatcher.ts)
+- [events/bus.ts](/path/to/stablehand/packages/stablehand/src/events/bus.ts)
+- [orchestrator/webhook-events.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/webhook-events.ts)
+- [callback-dispatcher.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/callback-dispatcher.ts)
 
 ### 8. Sandbox Infrastructure
 
@@ -154,10 +154,10 @@ All harness execution routes through the sandbox subsystem. The orchestrator cre
 
 Relevant code:
 
-- [sandbox/container-manager.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/container-manager.ts)
-- [orchestrator/sandbox-session-manager.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sandbox-session-manager.ts)
-- [orchestrator/container-lifecycle-policy.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/container-lifecycle-policy.ts)
-- [artifact-store.ts](/path/to/stablehand/packages/ctxmill/src/artifact/artifact-store.ts)
+- [sandbox/container-manager.ts](/path/to/stablehand/packages/stablehand/src/sandbox/container-manager.ts)
+- [orchestrator/sandbox-session-manager.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/sandbox-session-manager.ts)
+- [orchestrator/container-lifecycle-policy.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/container-lifecycle-policy.ts)
+- [artifact-store.ts](/path/to/stablehand/packages/stablehand/src/artifact/artifact-store.ts)
 - [sandbox/runner.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/runner.ts)
 - [sandbox/daemon.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/daemon.ts)
 - [sandbox/tool-proxy.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/tool-proxy.ts)
@@ -170,17 +170,17 @@ Structured A2UI blocks are produced through the intrinsic `a2ui-render` tool and
 
 Relevant code:
 
-- [tool/builtin/a2ui-render.ts](/path/to/stablehand/packages/ctxmill/src/tool/builtin/a2ui-render.ts)
+- [tool/builtin/a2ui-render.ts](/path/to/stablehand/packages/stablehand/src/tool/builtin/a2ui-render.ts)
 - [ToolCallCard.tsx](/path/to/stablehand/packages/ui/src/components/session/ToolCallCard.tsx)
 
 ### 10. Harness Model Configuration
 
-Models are configured per agent/harness. Core CTXMill does not own a global LLM provider; direct model access belongs inside harnesses, tools, or external modules.
+Models are configured per agent/harness. Core Stablehand does not own a global LLM provider; direct model access belongs inside harnesses, tools, or external modules.
 
 Relevant code:
 
 - [manifest/index.ts](/path/to/stablehand/packages/manifest/src/index.ts)
-- [harness/index.ts](/path/to/stablehand/packages/ctxmill/src/harness/index.ts)
+- [harness/index.ts](/path/to/stablehand/packages/stablehand/src/harness/index.ts)
 
 ### 10a. Per-Turn Fan-out Caps
 
@@ -209,9 +209,9 @@ The `docker` execution preset, config resolver, and dependency injection contain
 
 Relevant code:
 
-- [config/presets.ts](/path/to/stablehand/packages/ctxmill/src/config/presets.ts)
-- [config/resolve.ts](/path/to/stablehand/packages/ctxmill/src/config/resolve.ts)
-- [config/container.ts](/path/to/stablehand/packages/ctxmill/src/config/container.ts)
+- [config/presets.ts](/path/to/stablehand/packages/stablehand/src/config/presets.ts)
+- [config/resolve.ts](/path/to/stablehand/packages/stablehand/src/config/resolve.ts)
+- [config/container.ts](/path/to/stablehand/packages/stablehand/src/config/container.ts)
 
 ### 12. Proto Package
 
@@ -219,7 +219,7 @@ Protocol Buffer definitions for sandbox gRPC communication. Defines the `Harness
 
 Relevant code:
 
-- [sandbox.proto](/path/to/stablehand/packages/proto/ctxmill/sandbox/v1/sandbox.proto)
+- [sandbox.proto](/path/to/stablehand/packages/proto/stablehand/sandbox/v1/sandbox.proto)
 
 ## Request and Run Flow
 
@@ -248,7 +248,7 @@ Relevant code:
 5. Queued turns past `queuedTurnTimeoutMs` finalize honestly as `turn.failed reason=queue_expired`.
 6. Startup reconciliation fails stranded running turns and skips HITL-parked turns; queued rows are dispatcher work, not boot debt — the dispatcher drains any pre-restart backlog in the background after listen. `turn.started` emission stays idempotent for pre-boot recoveries, so replay does not double-count run starts.
 
-Relevant code: `packages/ctxmill/src/orchestrator/turn-queue-admission.ts`, `packages/ctxmill/src/orchestrator/turn-dispatcher.ts`, `packages/ctxmill/src/orchestrator/turn-startup-service.ts`.
+Relevant code: `packages/stablehand/src/orchestrator/turn-queue-admission.ts`, `packages/stablehand/src/orchestrator/turn-dispatcher.ts`, `packages/stablehand/src/orchestrator/turn-startup-service.ts`.
 
 ## Persistence Model
 
@@ -275,9 +275,9 @@ PostgreSQL is the current system of record for:
 
 Relevant code:
 
-- [schema-pg.ts](/path/to/stablehand/packages/ctxmill/src/database/schema-pg.ts)
-- [repository.ts](/path/to/stablehand/packages/ctxmill/src/database/repository.ts)
-- [migrations.ts](/path/to/stablehand/packages/ctxmill/src/database/migrations.ts)
+- [schema-pg.ts](/path/to/stablehand/packages/stablehand/src/database/schema-pg.ts)
+- [repository.ts](/path/to/stablehand/packages/stablehand/src/database/repository.ts)
+- [migrations.ts](/path/to/stablehand/packages/stablehand/src/database/migrations.ts)
 
 ## UI Surface
 
@@ -303,7 +303,7 @@ Relevant code:
 ## Current Limitations
 
 - Harnesses execute inside Docker containers (one container per run).
-- Learning/reflection is external to core CTXMill; use webhooks/events plus explicit tools or services for that layer.
+- Learning/reflection is external to core Stablehand; use webhooks/events plus explicit tools or services for that layer.
 - Suspend/resume is event-driven run resumption, not compute snapshot restoration.
 
 ## Roadmap Boundary

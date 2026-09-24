@@ -1,5 +1,5 @@
 import type { ToolCall } from './tool/types.js';
-import type { BuiltinToolPolicy, NativeToolPolicy } from '@ctxmill/contracts';
+import type { BuiltinToolPolicy, NativeToolPolicy } from '@stablehand/contracts';
 export interface AgentResourceLimits {
   cpus?: number;
   memoryMb?: number;

@@ -1,21 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
+import type { AppContainer } from '../../packages/stablehand/src/config/container.js';
 
 const mocks = vi.hoisted(() => ({
   createContainer: vi.fn(),
   createServer: vi.fn(),
 }));
 
-vi.mock('../../packages/ctxmill/src/config/container.js', () => ({
+vi.mock('../../packages/stablehand/src/config/container.js', () => ({
   createContainer: mocks.createContainer,
 }));
 
-vi.mock('../../packages/ctxmill/src/orchestrator/server.js', () => ({
+vi.mock('../../packages/stablehand/src/orchestrator/server.js', () => ({
   createServer: mocks.createServer,
 }));
 
 vi.mock('../utils/test-db.js', () => ({
-  resolveTestDatabaseUrl: () => 'postgres://test.invalid/ctxmill_test',
+  resolveTestDatabaseUrl: () => 'postgres://test.invalid/stablehand_test',
 }));
 
 import { createTestApp } from '../utils/test-app.js';
@@ -24,7 +24,7 @@ function createFixture() {
   const scopedContainers = [
     {
       containerId: 'container-running',
-      containerName: 'ctxmill-sandbox-running',
+      containerName: 'stablehand-sandbox-running',
       sessionId: 'running',
       agentId: 'agent-1',
       harnessName: 'langgraph',
@@ -32,7 +32,7 @@ function createFixture() {
     },
     {
       containerId: 'container-created',
-      containerName: 'ctxmill-sandbox-created',
+      containerName: 'stablehand-sandbox-created',
       sessionId: 'created',
       agentId: 'agent-1',
       harnessName: 'langgraph',
@@ -118,7 +118,7 @@ describe('test app sandbox lifecycle', () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{
         containerId: 'container-late',
-        containerName: 'ctxmill-sandbox-late',
+        containerName: 'stablehand-sandbox-late',
         sessionId: 'late',
         agentId: 'agent-late',
         harnessName: 'langgraph',

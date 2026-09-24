@@ -16,18 +16,18 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
+import { TypedEventBus } from '../../packages/stablehand/src/events/bus.js';
 import {
   createTriggerSpineConsumer,
   EventTriggerManager,
   MAX_TRIGGER_DEPTH,
-} from '../../packages/ctxmill/src/events/trigger-manager.js';
-import { SpineConsumerRunner } from '../../packages/ctxmill/src/events/spine-consumer-runner.js';
-import { CanonicalLog } from '../../packages/ctxmill/src/orchestrator/canonical/canonical-log.js';
-import type { ContainerManager, ContainerInfo, ContainerMetrics } from '../../packages/ctxmill/src/sandbox/container-manager.js';
-import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
-import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
-import type { AgentSessionEvent } from '../../packages/ctxmill/src/events/types.js';
+} from '../../packages/stablehand/src/events/trigger-manager.js';
+import { SpineConsumerRunner } from '../../packages/stablehand/src/events/spine-consumer-runner.js';
+import { CanonicalLog } from '../../packages/stablehand/src/orchestrator/canonical/canonical-log.js';
+import type { ContainerManager, ContainerInfo, ContainerMetrics } from '../../packages/stablehand/src/sandbox/container-manager.js';
+import type { AgentDefinition, Message } from '@stablehand/sandbox-daemon';
+import type { DatabaseRepository } from '../../packages/stablehand/src/database/repository.js';
+import type { AgentSessionEvent } from '../../packages/stablehand/src/events/types.js';
 import { settle } from '../utils/event-bus-test-helpers.js';
 
 type SandboxTurnService = {
@@ -231,7 +231,7 @@ function makeMockContainerManager(counters: { containerCounter: number }): Conta
       const containerId = `container-${counters.containerCounter}`;
       const info: ContainerInfo = {
         containerId,
-        containerName: `ctxmill-sandbox-${opts.sessionId}`,
+        containerName: `stablehand-sandbox-${opts.sessionId}`,
         sessionId: opts.sessionId,
         agentId: opts.agentId,
         harnessName: opts.harnessName,

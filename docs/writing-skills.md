@@ -1,6 +1,6 @@
 # Working With Skills
 
-> Current status as of 2026-07-06: CTXMill does not have an active first-class
+> Current status as of 2026-07-06: Stablehand does not have an active first-class
 > skill registry, `{{skills}}` prompt injection, or `spec.workspace.content.skills`
 > manifest field. Older plan docs may describe those features, but they are not
 > current runtime behavior.
@@ -12,7 +12,7 @@ Skills are best treated as SDK-native workspace files:
 - Claude Agents can use Claude-style skill directories when those files are
   present in the sandbox workspace and the relevant native tool allowlist allows
   skill access.
-- LangGraph and PI Agent do not receive a CTXMill-generated `{{skills}}`
+- LangGraph and PI Agent do not receive a Stablehand-generated `{{skills}}`
   prompt block.
 - Workspace content is controlled by the manifest workspace fields that are
   actually supported by `manifest/validate.ts` and the workspace preparation
@@ -48,20 +48,20 @@ These are not current runtime features:
 
 - `spec.workspace.content.skills`
 - `{{skills}}` placeholder injection
-- automatic seeding into `.ctxmill/skills`
-- a CTXMill-managed skill catalog exposed through the API/UI
+- automatic seeding into `.stablehand/skills`
+- a Stablehand-managed skill catalog exposed through the API/UI
 
 ## Related Code
 
 - [manifest/validate.ts](/path/to/stablehand/packages/manifest/src/validate.ts)
 - [manifest/types.ts](/path/to/stablehand/packages/manifest/src/types.ts)
-- [workspace-preparation.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/workspace-preparation.ts)
+- [workspace-preparation.ts](/path/to/stablehand/packages/stablehand/src/sandbox/workspace-preparation.ts)
 - [claude-agents.ts](/path/to/stablehand/packages/sandbox-daemon/src/harness/claude-agents.ts)
 
 ## Gotchas
 
 - `docs/plans/` and older proposals may still use "skill" to mean a planned
-  CTXMill abstraction. Treat those as historical unless the code paths above
+  Stablehand abstraction. Treat those as historical unless the code paths above
   implement the feature.
-- The workspace tar upload API rejects `.ctxmill/`; do not rely on
-  `.ctxmill/skills` as an upload target.
+- The workspace tar upload API rejects `.stablehand/`; do not rely on
+  `.stablehand/skills` as an upload target.

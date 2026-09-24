@@ -7,4 +7,4 @@ export {
   type HarnessConfigSchemas,
   type LangGraphConfig,
   type PIAgentConfig,
-} from '@ctxmill/contracts/harness';
+} from '@stablehand/contracts/harness';

@@ -4,15 +4,15 @@ import {
   isCertifiedNativeModelGatewayProvider,
   type CanonicalLLMProvider,
   type CertifiedNativeModelGatewayProvider,
-} from '@ctxmill/shared';
+} from '@stablehand/shared';
 import { resolveModelAuth } from './kit/model-auth.js';
 import type { ResolvedSecrets } from './types.js';
 
 const GATEWAY_ENV = {
-  enabled: 'CTXMILL_MODEL_GATEWAY_ENABLED',
-  url: 'CTXMILL_MODEL_GATEWAY_URL',
-  runtimeKey: 'CTXMILL_MODEL_GATEWAY_RUNTIME_KEY',
-  revision: 'CTXMILL_MODEL_GATEWAY_REVISION',
+  enabled: 'STABLEHAND_MODEL_GATEWAY_ENABLED',
+  url: 'STABLEHAND_MODEL_GATEWAY_URL',
+  runtimeKey: 'STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY',
+  revision: 'STABLEHAND_MODEL_GATEWAY_REVISION',
 } as const;
 
 export type HarnessModelConnection =
@@ -116,7 +116,7 @@ export function createGatewayCorrelationHeaders(
   return Object.freeze({
     'x-litellm-trace-id': correlation,
     'x-litellm-spend-logs-metadata': JSON.stringify({
-      ctxmill_turn_correlation: correlation,
+      stablehand_turn_correlation: correlation,
     }),
   });
 }

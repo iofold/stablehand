@@ -14,9 +14,9 @@ import {
   type EventMap,
   type EventName,
   type PersistEventFn,
-} from '../../packages/ctxmill/src/events/bus.js';
-import { CanonicalLog } from '../../packages/ctxmill/src/orchestrator/canonical/canonical-log.js';
-import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
+} from '../../packages/stablehand/src/events/bus.js';
+import { CanonicalLog } from '../../packages/stablehand/src/orchestrator/canonical/canonical-log.js';
+import type { DatabaseRepository } from '../../packages/stablehand/src/database/repository.js';
 
 // ── Test Bus Factory ────────────────────────────────────────────
 
@@ -406,7 +406,7 @@ export function createMockContainer(overrides: Record<string, unknown> = {}) {
 
 export function createMockNetwork(overrides: Record<string, unknown> = {}) {
   return {
-    inspect: vi.fn().mockResolvedValue({ Name: 'ctxmill-agents' }),
+    inspect: vi.fn().mockResolvedValue({ Name: 'stablehand-agents' }),
     ...overrides,
   };
 }

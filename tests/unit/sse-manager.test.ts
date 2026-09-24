@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { SSEManager } from '../../packages/ctxmill/src/orchestrator/sse.js';
-import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
+import { SSEManager } from '../../packages/stablehand/src/orchestrator/sse.js';
+import { TypedEventBus } from '../../packages/stablehand/src/events/bus.js';
 import { EventEmitter } from 'node:events';
 
 // ── Mock FastifyReply ────────────────────────────────────────────

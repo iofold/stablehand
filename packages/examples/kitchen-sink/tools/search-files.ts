@@ -1,4 +1,4 @@
-import { defineTool } from 'ctxmill';
+import { defineTool } from 'stablehand';
 import { z } from 'zod';
 import { readdir, readFile } from 'node:fs/promises';
 import { resolve, join, relative } from 'node:path';

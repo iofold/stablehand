@@ -3,7 +3,7 @@ import { Code, ConnectError, type Interceptor } from '@connectrpc/connect';
 import {
   RUNTIME_INSTANCE_TOKEN_ENV,
   RUNTIME_INSTANCE_TOKEN_HEADER,
-} from '@ctxmill/shared';
+} from '@stablehand/shared';
 
 export {
   RUNTIME_INSTANCE_TOKEN_ENV,

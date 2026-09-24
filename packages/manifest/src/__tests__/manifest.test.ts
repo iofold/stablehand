@@ -17,7 +17,7 @@ function minimalManifest(
     : { provider: 'openai', model: 'gpt-5.4-mini' };
 
   return {
-    apiVersion: 'ctxmill.io/v1',
+    apiVersion: 'stablehand.io/v1',
     kind: 'Agent',
     metadata: { name: `${harness}-test` },
     spec: {
@@ -179,7 +179,7 @@ describe('strict manifest validation', () => {
 describe('parser and serializers', () => {
   it('parses YAML and JSON without performing implicit validation', () => {
     const yaml = `
-apiVersion: ctxmill.io/v1
+apiVersion: stablehand.io/v1
 kind: Agent
 metadata:
   name: yaml-agent
@@ -202,8 +202,8 @@ spec:
 
   it('rejects duplicate YAML mapping keys', () => {
     expect(() => parseManifestString(`
-apiVersion: ctxmill.io/v1
-apiVersion: ctxmill.io/v1
+apiVersion: stablehand.io/v1
+apiVersion: stablehand.io/v1
 `)).toThrow();
   });
 });

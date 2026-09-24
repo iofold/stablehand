@@ -1,20 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AgentTurnService } from '../../packages/ctxmill/src/orchestrator/agent-turn-service.js';
-import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
-import { SpineConsumerRunner } from '../../packages/ctxmill/src/events/spine-consumer-runner.js';
-import { CallbackDispatcher } from '../../packages/ctxmill/src/orchestrator/callback-dispatcher.js';
-import { CanonicalLog } from '../../packages/ctxmill/src/orchestrator/canonical/canonical-log.js';
-import { reconcilePendingMessagePublishesOnStartup } from '../../packages/ctxmill/src/orchestrator/message-publisher.js';
-import { reconcileStrandedTurnsOnStartup } from '../../packages/ctxmill/src/orchestrator/turn-reconciler.js';
-import { TurnFinalizer } from '../../packages/ctxmill/src/orchestrator/turn-finalizer.js';
-import { TurnStartupService } from '../../packages/ctxmill/src/orchestrator/turn-startup-service.js';
-import { TurnSecretEnvelopeCodec } from '../../packages/ctxmill/src/orchestrator/turn-secret-envelope.js';
+import { AgentTurnService } from '../../packages/stablehand/src/orchestrator/agent-turn-service.js';
+import { TypedEventBus } from '../../packages/stablehand/src/events/bus.js';
+import { SpineConsumerRunner } from '../../packages/stablehand/src/events/spine-consumer-runner.js';
+import { CallbackDispatcher } from '../../packages/stablehand/src/orchestrator/callback-dispatcher.js';
+import { CanonicalLog } from '../../packages/stablehand/src/orchestrator/canonical/canonical-log.js';
+import { reconcilePendingMessagePublishesOnStartup } from '../../packages/stablehand/src/orchestrator/message-publisher.js';
+import { reconcileStrandedTurnsOnStartup } from '../../packages/stablehand/src/orchestrator/turn-reconciler.js';
+import { TurnFinalizer } from '../../packages/stablehand/src/orchestrator/turn-finalizer.js';
+import { TurnStartupService } from '../../packages/stablehand/src/orchestrator/turn-startup-service.js';
+import { TurnSecretEnvelopeCodec } from '../../packages/stablehand/src/orchestrator/turn-secret-envelope.js';
 
 const TEST_TURN_SECRET_CODEC = new TurnSecretEnvelopeCodec(Buffer.alloc(32, 7));
 import { MessageListResponseSchema } from '../../packages/contracts/src/index.js';
-import { toApiMessage } from '../../packages/ctxmill/src/orchestrator/routes/agent-helpers.js';
-import { createWebhookRelaySpineConsumer } from '../../packages/ctxmill/src/orchestrator/webhook-relay.js';
-import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
+import { toApiMessage } from '../../packages/stablehand/src/orchestrator/routes/agent-helpers.js';
+import { createWebhookRelaySpineConsumer } from '../../packages/stablehand/src/orchestrator/webhook-relay.js';
+import type { AgentDefinition, Message } from '@stablehand/sandbox-daemon';
 import type { AgentSessionEvent, MessageCommittedEvent } from '../../packages/shared/src/events.js';
 import { createTestDb, type TestDb } from '../utils/test-db.js';
 import {
@@ -339,13 +339,13 @@ describe('Agent turn message persistence integration', () => {
     const wireRevisions = new Map<string, number>();
     for (const { event } of harness.wire) {
       if (event.type !== 'CUSTOM' || typeof event.messageId !== 'string') continue;
-      if (event.name === 'ctxmill.message.committed') {
+      if (event.name === 'stablehand.message.committed') {
         if (!wireMessages.has(event.messageId)) {
           wireMessages.set(event.messageId, event);
           wireRevisions.set(event.messageId, 0);
         }
       } else if (
-        event.name === 'ctxmill.message.updated'
+        event.name === 'stablehand.message.updated'
         && typeof event.messageRevision === 'number'
         && event.messageRevision > (wireRevisions.get(event.messageId) ?? -1)
       ) {
@@ -475,8 +475,8 @@ describe('Agent turn message persistence integration', () => {
     expect(rebuilt).toBe(2);
     const replay = await canonicalLog.replayTurnTail(turn.id);
     expect(replay.map((frame) => frame.body.name)).toEqual([
-      'ctxmill.message.committed',
-      'ctxmill.message.updated',
+      'stablehand.message.committed',
+      'stablehand.message.updated',
     ]);
     expect(replay[1]?.body).toMatchObject({
       messageId: baseline.id,

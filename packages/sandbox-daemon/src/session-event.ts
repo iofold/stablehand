@@ -1,4 +1,4 @@
-import type { AgentSessionEvent, MessageCommittedEvent } from '@ctxmill/shared';
+import type { AgentSessionEvent, MessageCommittedEvent } from '@stablehand/shared';
 
 export interface AGUISessionEvent {
   type: 'ag_ui_event';

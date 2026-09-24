@@ -1,13 +1,13 @@
 {
-  "name": "@ctxmill/proto",
+  "name": "@stablehand/proto",
   "version": "0.1.0",
   "license": "MIT",
   "private": true,
   "type": "module",
   "exports": {
     "./sandbox/v1": {
-      "types": "./gen/ctxmill/sandbox/v1/sandbox_pb.ts",
-      "default": "./dist/ctxmill/sandbox/v1/sandbox_pb.js"
+      "types": "./gen/stablehand/sandbox/v1/sandbox_pb.ts",
+      "default": "./dist/stablehand/sandbox/v1/sandbox_pb.js"
     }
   },
   "scripts": {

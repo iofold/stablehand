@@ -1,5 +1,5 @@
 {
-  "name": "ctxmill-monorepo",
+  "name": "stablehand-monorepo",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -23,13 +23,13 @@
     "verify:stabilization": "node scripts/verify-stabilization.mjs",
     "test:e2e:required": "playwright test --config=playwright.config.ts --project=chromium --grep @smoke",
     "test:e2e:harness-matrix:extended": "playwright test --config=playwright.harness-matrix.config.ts",
-    "test:performance": "vitest run tests/performance/performance.test.ts packages/ctxmill/src/observability/__tests__/performance.test.ts",
+    "test:performance": "vitest run tests/performance/performance.test.ts packages/stablehand/src/observability/__tests__/performance.test.ts",
     "perf:dev2": "tests/performance/scripts/run-dev2.sh",
     "audit:prod": "pnpm audit --prod --audit-level high"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@ctxmill/manifest": "workspace:*",
+    "@stablehand/manifest": "workspace:*",
     "@playwright/test": "^1.58.2",
     "@sinclair/typebox": "^0.34.48",
     "eslint": "^10.0.3",

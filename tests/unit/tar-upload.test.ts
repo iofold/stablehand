@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { createGzip } from 'node:zlib';
-import { validateAndExtractTarball } from '../../packages/ctxmill/src/workspace/tar-upload.js';
+import { validateAndExtractTarball } from '../../packages/stablehand/src/workspace/tar-upload.js';
 
 interface TarEntryInput {
   name: string;
@@ -33,7 +33,7 @@ interface TarModule {
 }
 
 async function createTarGz(entries: TarEntryInput[]): Promise<Buffer> {
-  const tarModulePath = new URL('../../packages/ctxmill/node_modules/tar-stream/index.js', import.meta.url).href;
+  const tarModulePath = new URL('../../packages/stablehand/node_modules/tar-stream/index.js', import.meta.url).href;
   const tar = await import(tarModulePath) as TarModule;
   const pack = tar.pack();
 
@@ -169,8 +169,8 @@ describe('validateAndExtractTarball', () => {
     await expect(validateAndExtractTarball(bufferToStream(archive), targetDir)).rejects.toThrow(/reserved path/i);
   });
 
-  it('rejects tar under .ctxmill reserved path', async () => {
-    const archive = await createTarGz([{ name: '.ctxmill/secrets.json', content: 'forbidden' }]);
+  it('rejects tar under .stablehand reserved path', async () => {
+    const archive = await createTarGz([{ name: '.stablehand/secrets.json', content: 'forbidden' }]);
 
     await expect(validateAndExtractTarball(bufferToStream(archive), targetDir)).rejects.toThrow(/reserved path/i);
   });

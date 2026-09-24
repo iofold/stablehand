@@ -4,8 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 for h in langgraph claude-agents pi-agent; do
   docker build \
-    --build-arg "BASE=ctxmill/harness-${h}:latest" \
-    -t "ctxmill-bench/harness-${h}:latest" \
+    --build-arg "BASE=stablehand/harness-${h}:latest" \
+    -t "stablehand-bench/harness-${h}:latest" \
     -f images/Dockerfile images/
 done
-docker images | grep ctxmill-bench
+docker images | grep stablehand-bench

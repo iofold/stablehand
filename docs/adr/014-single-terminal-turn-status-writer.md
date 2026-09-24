@@ -24,7 +24,7 @@ break downstream consumers.
 ## Decision
 
 `TurnFinalizer.finalize()` is the single writer of terminal turn state
-(`packages/ctxmill/src/orchestrator/turn-finalizer.ts`). Every path that ends a
+(`packages/stablehand/src/orchestrator/turn-finalizer.ts`). Every path that ends a
 turn calls it; no other code writes a turn's terminal status directly.
 
 - **Idempotence is enforced at the database.** `finalize()` delegates to

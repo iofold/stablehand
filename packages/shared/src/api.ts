@@ -39,7 +39,7 @@ export interface ApiTokenUsage {
 /** Sandbox session counts grouped by container lifecycle state. */
 export type ApiSandboxSessionStatusCounts = Record<SandboxSessionStatus, number>;
 
-// ctx-iqzy S18: @ctxmill/contracts is the sole declaration of these wire
+// ctx-iqzy S18: @stablehand/contracts is the sole declaration of these wire
 // shapes. `z.input` gives the producer-side (unbranded) view, so internal
 // serializers keep assigning plain strings.
 import type { z } from 'zod';
@@ -47,7 +47,7 @@ import type {
   MessagePartSchema,
   MessageSchema,
   ToolCallStateSchema,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 
 /** Message inside a GET /api/agents/:id/conversations/:cid/snapshot response. */
 export type ApiMessage = z.input<typeof MessageSchema>;

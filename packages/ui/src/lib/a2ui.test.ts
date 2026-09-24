@@ -3,8 +3,8 @@ import { normalizeA2UIComponentName } from './a2ui';
 
 describe('a2ui helpers', () => {
   it('normalizes supported component aliases to canonical names', () => {
-    expect(normalizeA2UIComponentName('ctxmill.charts:MetricCard')).toBe('MetricCard');
+    expect(normalizeA2UIComponentName('stablehand.charts:MetricCard')).toBe('MetricCard');
     expect(normalizeA2UIComponentName('charts:MetricCard')).toBe('MetricCard');
-    expect(normalizeA2UIComponentName('ctxmill.hitl:ApprovalCard')).toBe('ctxmill.hitl:ApprovalCard');
+    expect(normalizeA2UIComponentName('stablehand.hitl:ApprovalCard')).toBe('stablehand.hitl:ApprovalCard');
   });
 });

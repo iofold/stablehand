@@ -1,9 +1,9 @@
 {
-  "name": "@ctxmill/react",
+  "name": "@stablehand/react",
   "version": "0.1.0",
   "license": "MIT",
   "type": "module",
-  "description": "React components and hooks for CTXMill AG-UI chat integrations",
+  "description": "React components and hooks for Stablehand AG-UI chat integrations",
   "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -25,7 +25,7 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
-    "@ctxmill/client": "workspace:*"
+    "@stablehand/client": "workspace:*"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",

@@ -1,8 +1,8 @@
 # Dev2 performance certification
 
-This suite drives the real Kubernetes CTXMILL deployment at
-`https://stablehand.staging.example.com`, while sampling the dev2 node and CTXMILL
-namespace. It uses the public `@ctxmill/client` control and durable SSE
+This suite drives the real Kubernetes STABLEHAND deployment at
+`https://stablehand.staging.example.com`, while sampling the dev2 node and STABLEHAND
+namespace. It uses the public `@stablehand/client` control and durable SSE
 contracts; it never calls a harness adapter directly.
 
 ## Evergreen findings
@@ -56,8 +56,8 @@ pnpm exec bun tests/performance/cli.ts plan \
   --profile tests/performance/profiles/dev2-model-matrix.json
 ```
 
-The wrapper reads `CTXMILL_API_TOKEN` from the process environment or, when it
-is absent, decodes it in memory from the dev2 `ctxmill-core-secrets` Secret.
+The wrapper reads `STABLEHAND_API_TOKEN` from the process environment or, when it
+is absent, decodes it in memory from the dev2 `stablehand-core-secrets` Secret.
 The token is not printed or written to the evidence directory. The default
 Kubeconfig is `/path/to/workspace/infra/.k3s-kubeconfig.yaml`.
 
@@ -88,7 +88,7 @@ stops a stage when its measured turn error rate crosses the declared threshold.
   subagents. The plan estimates 31 model calls.
 - `dev2-scale-10.json`: a 1, 3, 5, 8, 10 concurrency ramp for both Deep Agents
   and PI Agent, then warm and checkpoint/restore lanes at concurrency 5. Its
-  exact ceiling is 262 CTXMILL turns/model calls and 20 simultaneous SSE
+  exact ceiling is 262 STABLEHAND turns/model calls and 20 simultaneous SSE
   connections. Run it only after dev2 is configured for at least ten global
   sandboxes and a quiet test window is reserved.
 - `dev2-endurance-wave-c8.json`: one reproducible 263-call endurance wave at
@@ -109,7 +109,7 @@ Profiles are strict JSON. Every non-cold stage must declare at least one
 actually measuring a cold session. `safety.maxTurns` and
 `safety.maxEstimatedModelCalls` reject accidental load expansion before the
 first API call. `requirements.modelGateway: "required"` fails before agent
-reconciliation unless CTXMILL reports a healthy LiteLLM reconciliation path;
+reconciliation unless STABLEHAND reports a healthy LiteLLM reconciliation path;
 this prevents aliases from silently falling back to direct provider traffic.
 The dev2 wrapper also checks `requirements.minGlobalContainers` against the
 effective `/api/sandbox/metrics` value, so the scale-10 ramp cannot be mistaken
@@ -121,7 +121,7 @@ allowance in hidden reasoning and never produce a user-visible answer.
 
 ## Harness and model coverage
 
-The `langgraph` harness is CTXMILL's Deep Agents implementation. It constructs
+The `langgraph` harness is STABLEHAND's Deep Agents implementation. It constructs
 `deepagents.createDeepAgent()` with provider-native LangChain clients, supports
 cross-provider subagents, and aggregates usage by LangChain model-run ID. The
 matrix runs `deepagents` 1.11.1, the current npm release on 2026-07-26.
@@ -187,7 +187,7 @@ The current Claude models allow a larger output ceiling because adaptive
 thinking shares the output budget; the test still requires exactly one visible
 token string. The mixed Deep Agents lane is budgeted as five calls. The
 lifecycle call estimate is a minimum because Claude SDK protocol retries or
-auxiliary requests can make more than one model call per CTXMILL turn. Provider
+auxiliary requests can make more than one model call per STABLEHAND turn. Provider
 retries, model-side reasoning, tool loops, and pricing changes can move actual
 spend, which is why the deployment gateway policy—not this estimate—must hold
 the hard ceiling. Repeat capacity runs require multiplying the reserve by the
@@ -237,7 +237,7 @@ not dump request bodies, model content, secrets, or arbitrary span attributes.
 The Kubernetes sampler records every two seconds:
 
 - node allocatable CPU/memory and metrics-server usage;
-- CTXMILL pod CPU/memory, labels, and container breakdown from the immediate
+- STABLEHAND pod CPU/memory, labels, and container breakdown from the immediate
   kubelet summary API, falling back to metrics-server when necessary;
 - running sandbox jobs and pending sandbox pods.
 
@@ -282,7 +282,7 @@ capacity-decision.json      advance or stop plus exact violations
 ```
 
 Benchmark agents use stable names and carry
-`metadata["ctxmill.performance.managed"] = true`. The seeder updates only those
+`metadata["stablehand.performance.managed"] = true`. The seeder updates only those
 owned agents and refuses to overwrite a same-named ordinary agent.
 
 ## Capacity protocol
@@ -296,8 +296,8 @@ Capacity is the highest completed ramp stage before any of these gates fails:
 - node CPU or memory crosses the safety ceiling;
 - TTFT or completion p95 crosses the product SLO;
 - any SSE consumer misses or duplicates a terminal turn sequence.
-- fewer than 95% of measured turns have both `ctxmill.turn.execute` and
-  `ctxmill.turn.delivery` traces;
+- fewer than 95% of measured turns have both `stablehand.turn.execute` and
+  `stablehand.turn.delivery` traces;
 - fewer than 95% of measured sessions have a sandbox `DeliverTurn` span, or
   fewer than 80% of running sandbox-pod observations have resource metrics;
 - Kubernetes never observes the requested number of active sandbox Jobs;
@@ -333,4 +333,4 @@ profile, dev2 image tag, node allocatable resources, and background node load.
 A smoke run proves wiring only; it is not a scalability claim. Provider API
 latency and rate limits remain part of a real-harness result, so compare
 orchestrator lifecycle spans with client timing before attributing a regression
-to CTXMILL.
+to STABLEHAND.

@@ -17,7 +17,7 @@ describe('Failure injection — rollback and cleanup', () => {
 
   beforeAll(async () => {
     testApp = await createTestApp({
-      dirPrefix: 'ctxmill-failure-inj-',
+      dirPrefix: 'stablehand-failure-inj-',
       containerRetriesOnAlreadyExists: 3,
     });
     app = testApp.app;

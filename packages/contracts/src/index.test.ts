@@ -4,10 +4,10 @@ import { describe, expect, it } from 'vitest';
 
 import * as contracts from './index.js';
 
-describe('@ctxmill/contracts', () => {
+describe('@stablehand/contracts', () => {
   it('requires the server authentication mode in the config boundary', () => {
     const config = {
-      system: { version: '1.0.0', uptimeMs: 10, dbPath: '.ctxmill' },
+      system: { version: '1.0.0', uptimeMs: 10, dbPath: '.stablehand' },
       agentDefaults: { harness: 'langgraph', temperature: 0.7, maxTokens: 4096 },
       authentication: { mode: 'enforced' },
     };
@@ -152,7 +152,7 @@ describe('@ctxmill/contracts', () => {
       },
       mode: 'background',
       manifest: {
-        apiVersion: 'ctxmill.io/v1',
+        apiVersion: 'stablehand.io/v1',
         kind: 'Agent',
       },
     };
@@ -418,7 +418,7 @@ describe('@ctxmill/contracts', () => {
     expect(() => contracts.BackgroundTurnStartInputSchema.parse({
       task: 'Run close workflow',
       sandboxSecrets: {
-        CTXMILL_CALLBACK_TOKEN: 'forged-token',
+        STABLEHAND_CALLBACK_TOKEN: 'forged-token',
       },
     })).toThrow();
     expect(() => contracts.ConversationTurnStartInputSchema.parse({
@@ -444,7 +444,7 @@ describe('@ctxmill/contracts', () => {
       id: 'sandbox-1',
       conversationId: 'conversation-1',
       agentId: 'agent-1',
-      containerName: 'ctxmill-sandbox-1',
+      containerName: 'stablehand-sandbox-1',
       containerId: 'container-1',
       status: 'ACTIVE',
       harnessName: 'claude-agents',
@@ -503,7 +503,7 @@ describe('@ctxmill/contracts', () => {
 
     expect(contracts.CanonicalStreamEventSchema.parse({
       type: 'CUSTOM',
-      name: 'ctxmill.interrupt.requested',
+      name: 'stablehand.interrupt.requested',
       agentId: 'agent-1',
       turnId: 'turn-1',
       conversationId: 'conversation-1',
@@ -512,11 +512,11 @@ describe('@ctxmill/contracts', () => {
       toolName: 'request-approval',
       args: { reason: 'publish' },
       timestamp: 1,
-    })).toMatchObject({ name: 'ctxmill.interrupt.requested' });
+    })).toMatchObject({ name: 'stablehand.interrupt.requested' });
 
     expect(contracts.CanonicalStreamEventSchema.parse({
       type: 'CUSTOM',
-      name: 'ctxmill.turn.pending',
+      name: 'stablehand.turn.pending',
       agentId: 'agent-1',
       turnId: 'turn-1',
       conversationId: 'conversation-1',
@@ -527,7 +527,7 @@ describe('@ctxmill/contracts', () => {
 
     expect(contracts.CanonicalStreamEventSchema.parse({
       type: 'CUSTOM',
-      name: 'ctxmill.message.committed',
+      name: 'stablehand.message.committed',
       agentId: 'agent-1',
       turnId: 'turn-1',
       conversationId: 'conversation-1',
@@ -551,7 +551,7 @@ describe('@ctxmill/contracts', () => {
 
     expect(() => contracts.CanonicalStreamEventSchema.parse({
       type: 'CUSTOM',
-      name: 'ctxmill.interrupt.requested',
+      name: 'stablehand.interrupt.requested',
       subtype: 'hitl_pause',
       runId: 'turn-1',
       interruptId: 'interrupt-1',
@@ -565,14 +565,14 @@ describe('@ctxmill/contracts', () => {
   it('requires the canonical named sandbox-session snapshot', () => {
     expect(contracts.AgentStreamEventSchema.parse({
       type: 'CUSTOM',
-      name: 'ctxmill.sandbox_session.snapshot',
+      name: 'stablehand.sandbox_session.snapshot',
       agentId: 'agent-1',
       conversationId: 'conversation-1',
       sandboxSessionId: 'sandbox-1',
       activeTurnId: null,
       status: 'ACTIVE',
       harnessName: 'claude-agents',
-      containerName: 'ctxmill-sandbox-1',
+      containerName: 'stablehand-sandbox-1',
       timestamp: 1,
     })).toMatchObject({ sandboxSessionId: 'sandbox-1' });
 
@@ -646,7 +646,7 @@ describe('@ctxmill/contracts', () => {
     });
 
     expect(contracts.WebhookCreateInputSchema.parse({
-      url: 'https://pack.test/hooks/ctxmill',
+      url: 'https://pack.test/hooks/stablehand',
       events: ['custom.eval.verdict'],
       secret: 'pack-secret',
     })).toMatchObject({ events: ['custom.eval.verdict'] });
@@ -793,15 +793,15 @@ describe('@ctxmill/contracts', () => {
 
   it('never exposes a stored webhook signing secret on readback', () => {
     expect(() => contracts.WebhookCreateInputSchema.parse({
-      url: 'https://pilot.test/hooks/ctxmill',
+      url: 'https://pilot.test/hooks/stablehand',
       events: ['turn.completed'],
     })).toThrow();
     expect(contracts.WebhookCreateInputSchema.parse({
-      url: 'https://pilot.test/hooks/ctxmill',
+      url: 'https://pilot.test/hooks/stablehand',
       events: ['turn.completed'],
       secret: 'rotation-key',
     })).toEqual({
-      url: 'https://pilot.test/hooks/ctxmill',
+      url: 'https://pilot.test/hooks/stablehand',
       events: ['turn.completed'],
       secret: 'rotation-key',
     });
@@ -820,7 +820,7 @@ describe('@ctxmill/contracts', () => {
     const webhook = {
       id: 'webhook-1',
       agentId: 'agent-1',
-      url: 'https://pilot.test/hooks/ctxmill',
+      url: 'https://pilot.test/hooks/stablehand',
       events: ['turn.completed'],
       active: true,
       hasSecret: true,
@@ -849,15 +849,15 @@ describe('@ctxmill/contracts', () => {
       headers: Record<string, string>;
     };
 
-    expect(contracts.CtxmillWebhookHeadersSchema.parse(fixture.headers))
+    expect(contracts.StablehandWebhookHeadersSchema.parse(fixture.headers))
       .toEqual(fixture.headers);
-    await expect(contracts.createCtxmillWebhookSignature({
+    await expect(contracts.createStablehandWebhookSignature({
       secret: fixture.currentSecret,
       timestamp: fixture.timestamp,
       rawBody: fixture.rawBody,
     })).resolves.toBe(fixture.currentSignature);
 
-    await expect(contracts.verifyCtxmillWebhook({
+    await expect(contracts.verifyStablehandWebhook({
       headers: fixture.headers,
       rawBody: fixture.rawBody,
       secrets: [fixture.previousSecret, fixture.currentSecret],
@@ -870,7 +870,7 @@ describe('@ctxmill/contracts', () => {
       },
     });
 
-    await expect(contracts.verifyCtxmillWebhook({
+    await expect(contracts.verifyStablehandWebhook({
       headers: {
         ...fixture.headers,
         'X-Webhook-Signature': fixture.previousSignature,
@@ -894,7 +894,7 @@ describe('@ctxmill/contracts', () => {
       },
       timestamp: 1_700_000_000_000,
     });
-    const signature = await contracts.createCtxmillWebhookSignature({
+    const signature = await contracts.createStablehandWebhookSignature({
       secret,
       timestamp,
       rawBody,
@@ -907,7 +907,7 @@ describe('@ctxmill/contracts', () => {
       'X-Webhook-Signature': signature,
     };
 
-    await expect(contracts.verifyCtxmillWebhook({
+    await expect(contracts.verifyStablehandWebhook({
       headers,
       rawBody,
       secrets: secret,
@@ -920,7 +920,7 @@ describe('@ctxmill/contracts', () => {
       },
     });
 
-    await expect(contracts.verifyCtxmillWebhook({
+    await expect(contracts.verifyStablehandWebhook({
       headers: { ...headers, 'X-Event-Type': 'custom.eval.other' },
       rawBody,
       secrets: secret,
@@ -942,7 +942,7 @@ describe('@ctxmill/contracts', () => {
       headers: Record<string, string>;
     };
 
-    await expect(contracts.verifyCtxmillWebhook({
+    await expect(contracts.verifyStablehandWebhook({
       headers: fixture.headers,
       rawBody: fixture.rawBody,
       secrets: fixture.currentSecret,
@@ -953,7 +953,7 @@ describe('@ctxmill/contracts', () => {
       reason: 'timestamp_outside_tolerance',
     });
 
-    await expect(contracts.verifyCtxmillWebhook({
+    await expect(contracts.verifyStablehandWebhook({
       headers: fixture.headers,
       rawBody: `${fixture.rawBody} `,
       secrets: fixture.currentSecret,
@@ -967,7 +967,7 @@ describe('@ctxmill/contracts', () => {
       ...fixture.headers,
       'X-Agent-Id': 'agent-other',
     };
-    await expect(contracts.verifyCtxmillWebhook({
+    await expect(contracts.verifyStablehandWebhook({
       headers: mismatchedHeaders,
       rawBody: fixture.rawBody,
       secrets: fixture.currentSecret,

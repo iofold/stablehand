@@ -7,8 +7,8 @@ const readDockerfile = (name: string): string =>
 
 describe('Docker workspace packaging', () => {
   it.each([
-    ['@ctxmill/contracts', 'contracts'],
-    ['@ctxmill/manifest', 'manifest'],
+    ['@stablehand/contracts', 'contracts'],
+    ['@stablehand/manifest', 'manifest'],
   ])(
     'packages %s before building its consumers',
     (packageName, packageDirectory) => {
@@ -24,9 +24,9 @@ describe('Docker workspace packaging', () => {
           `RUN pnpm --filter ${packageName} build`,
       );
         const consumerBuild = dockerfile.indexOf(
-          packageName === '@ctxmill/contracts'
-            ? 'RUN pnpm --filter @ctxmill/sandbox-daemon build'
-            : 'RUN pnpm --filter ctxmill build',
+          packageName === '@stablehand/contracts'
+            ? 'RUN pnpm --filter @stablehand/sandbox-daemon build'
+            : 'RUN pnpm --filter stablehand build',
       );
 
       expect(manifestCopy).toBeGreaterThan(-1);
@@ -38,8 +38,8 @@ describe('Docker workspace packaging', () => {
   );
 
   it.each([
-    ['@ctxmill/contracts', 'contracts'],
-    ['@ctxmill/manifest', 'manifest'],
+    ['@stablehand/contracts', 'contracts'],
+    ['@stablehand/manifest', 'manifest'],
   ])('packages %s in the orchestrator runtime image', (_packageName, packageDirectory) => {
     const dockerfile = readDockerfile('Dockerfile');
     const runtimeStage = dockerfile.slice(

@@ -217,7 +217,7 @@ describe('model gateway deployment', () => {
 
     expect(litellm?.networks).toEqual([
       'default',
-      'ctxmill-agents',
+      'stablehand-agents',
       'web',
     ]);
     expect(litellm?.ports).toContain(
@@ -247,11 +247,11 @@ describe('model gateway deployment', () => {
         spec: {
           containers: [{
             name: 'litellm',
-            image: 'ctxmill/litellm:dev2',
+            image: 'stablehand/litellm:dev2',
             imagePullPolicy: 'Never',
             envFrom: [
-              { secretRef: { name: 'ctxmill-provider-secrets' } },
-              { secretRef: { name: 'ctxmill-model-gateway-secrets' } },
+              { secretRef: { name: 'stablehand-provider-secrets' } },
+              { secretRef: { name: 'stablehand-model-gateway-secrets' } },
             ],
             readinessProbe: {
               httpGet: { path: '/health/readiness', port: 'http' },
@@ -310,8 +310,8 @@ describe('model gateway deployment', () => {
     expect(deploy).toContain('deploy/compose/model-gateway/Dockerfile');
     expect(deploy).toContain('model-gateway.yaml');
     expect(deploy).toContain('bootstrap-model-gateway.sh');
-    expect(deploy).toContain('ctxmill-model-gateway-config');
-    expect(secrets).toContain('ctxmill-model-gateway-secrets');
+    expect(deploy).toContain('stablehand-model-gateway-config');
+    expect(secrets).toContain('stablehand-model-gateway-secrets');
     expect(secrets).toContain('CLOUDFLARE_ACCOUNT_ID');
     expect(secrets).toContain('CLOUDFLARE_API_KEY');
     expect(secrets).toContain('LITELLM_RUNTIME_MAX_BUDGET_USD');
@@ -323,15 +323,15 @@ describe('model gateway deployment', () => {
     expect(bootstrap).toContain('time.sleep(0.5)');
     expect(bootstrap).toContain('LiteLLM runtime key inventory reconciled');
     expect(bootstrap).not.toContain('\\${');
-    expect(manifests).toContain('CTXMILL_MODEL_GATEWAY_ENABLED');
-    expect(manifests).toContain('http://litellm.ctxmill.svc.cluster.local:4000');
-    expect(manifests).toContain('CTXMILL_MODEL_GATEWAY_RUNTIME_KEY');
-    expect(manifests).toContain('CTXMILL_MODEL_GATEWAY_METERING_KEY');
+    expect(manifests).toContain('STABLEHAND_MODEL_GATEWAY_ENABLED');
+    expect(manifests).toContain('http://litellm.stablehand.svc.cluster.local:4000');
+    expect(manifests).toContain('STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY');
+    expect(manifests).toContain('STABLEHAND_MODEL_GATEWAY_METERING_KEY');
   });
 
   it('allows per-sandbox Secrets and forbids registry pulls for imported harness images', () => {
     const resources = readYamlDocuments('deploy/k3s/dev2/manifests.yaml');
-    const role = findResource(resources, 'Role', 'ctxmill-sandbox-runner');
+    const role = findResource(resources, 'Role', 'stablehand-sandbox-runner');
     const orchestrator = findResource(resources, 'Deployment', 'orchestrator');
 
     expect(role.rules).toEqual(
@@ -347,7 +347,7 @@ describe('model gateway deployment', () => {
           containers: [expect.objectContaining({
             name: 'orchestrator',
             env: expect.arrayContaining([{
-              name: 'CTXMILL_K8S_IMAGE_PULL_POLICY',
+              name: 'STABLEHAND_K8S_IMAGE_PULL_POLICY',
               value: 'Never',
             }]),
           })],

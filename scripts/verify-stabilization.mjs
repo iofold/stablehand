@@ -5,7 +5,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 
 const apiUrl = process.env.PLAYWRIGHT_API_BASE_URL ?? 'http://localhost:3002';
 const uiUrl = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3200';
-const outDir = process.env.CTXMILL_VERIFY_STABILIZATION_OUT ?? `.tmp/verify-stabilization-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+const outDir = process.env.STABLEHAND_VERIFY_STABILIZATION_OUT ?? `.tmp/verify-stabilization-${new Date().toISOString().replace(/[:.]/g, '-')}`;
 const statusSet = new Set(['QUEUED', 'ACTIVE', 'CHECKPOINTED', 'RESTORING', 'TERMINATED', 'COMPLETED', 'ERROR', 'CANCELLED', 'IDLE']);
 const evidence = [];
 const createdAgents = [];
@@ -52,8 +52,8 @@ try {
   assert(health.res.ok && health.body.status === 'ok', 'API health responds', health.body);
 
   const schemaVersion = execFileSync('docker', [
-    'compose', 'exec', '-T', 'postgres', 'psql', '-U', 'ctxmill', '-d', 'ctxmill', '-Atc',
-    "select version || ':' || baseline from ctxmill_schema_version where id = 'baseline';",
+    'compose', 'exec', '-T', 'postgres', 'psql', '-U', 'stablehand', '-d', 'stablehand', '-Atc',
+    "select version || ':' || baseline from stablehand_schema_version where id = 'baseline';",
   ], { cwd: process.cwd(), encoding: 'utf8' }).trim();
   assert(schemaVersion.length > 0, 'strict schema baseline is initialized', { schemaVersion });
 

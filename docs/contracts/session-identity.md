@@ -1,6 +1,6 @@
 # Identity contract
 
-This document defines the canonical identities used by CTXMILL. Each name has
+This document defines the canonical identities used by STABLEHAND. Each name has
 one meaning; APIs must not overload one identifier with another concept.
 
 ## Canonical IDs
@@ -44,12 +44,12 @@ one meaning; APIs must not overload one identifier with another concept.
 
 `runId` and `threadId` are AG-UI wire fields, not internal aliases:
 
-| AG-UI field | CTXMILL identity |
+| AG-UI field | STABLEHAND identity |
 |---|---|
 | `runId` | `turnId` |
 | `threadId` | `conversationId` |
 
-Internal services and persisted records use the canonical CTXMILL names.
+Internal services and persisted records use the canonical STABLEHAND names.
 
 ## Route contract summary
 

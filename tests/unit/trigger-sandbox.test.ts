@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { EventTriggerManager, MAX_TRIGGER_DEPTH } from '../../packages/ctxmill/src/events/trigger-manager.js';
-import { AgentTurnService } from '../../packages/ctxmill/src/orchestrator/agent-turn-service.js';
-import type { AgentTurnServiceDeps } from '../../packages/ctxmill/src/orchestrator/agent-turn-service.js';
+import { EventTriggerManager, MAX_TRIGGER_DEPTH } from '../../packages/stablehand/src/events/trigger-manager.js';
+import { AgentTurnService } from '../../packages/stablehand/src/orchestrator/agent-turn-service.js';
+import type { AgentTurnServiceDeps } from '../../packages/stablehand/src/orchestrator/agent-turn-service.js';
 import {
   createMockDatabase,
   createMockTriggerDb,
   createTestBus,
 } from '../utils/event-bus-test-helpers.js';
-import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
+import type { DatabaseRepository } from '../../packages/stablehand/src/database/repository.js';
 import type { AgentDefinition } from '../../packages/sandbox-daemon/src/types.js';
-import type { SessionTurnExecutor } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
+import type { SessionTurnExecutor } from '../../packages/stablehand/src/orchestrator/session-turn-service.js';
 
 async function* mockEventStream(events: Array<Record<string, unknown>>) {
   for (const e of events) {

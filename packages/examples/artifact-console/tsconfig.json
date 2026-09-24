@@ -14,9 +14,9 @@
     "sourceMap": false,
     "baseUrl": ".",
     "paths": {
-      "@ctxmill/client": ["../../client/src/index.ts"],
-      "@ctxmill/contracts": ["../../contracts/src/index.ts"],
-      "@ctxmill/react": ["../../react/src/index.ts"],
+      "@stablehand/client": ["../../client/src/index.ts"],
+      "@stablehand/contracts": ["../../contracts/src/index.ts"],
+      "@stablehand/react": ["../../react/src/index.ts"],
       "@/*": ["../../ui/src/*"]
     }
   },

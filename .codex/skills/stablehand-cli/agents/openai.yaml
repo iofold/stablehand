@@ -1,0 +1,3 @@
+display_name: stablehand Debug
+short_description: Inspect and debug running stablehand apps through agent-friendly Bun CLIs.
+default_prompt: Debug this stablehand app by checking health, agents, turns, conversations, sandbox sessions, messages, tool calls, interrupts, events, and artifacts. Use the bundled Bun TypeScript scripts and produce evidence-backed findings.

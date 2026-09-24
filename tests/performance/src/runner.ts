@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
-  CtxmillControlClient,
+  StablehandControlClient,
 } from '../../../packages/client/src/index.js';
 import type {
   ModelGatewayStatus,
@@ -34,9 +34,9 @@ import {
   type TurnSampleSummary,
 } from './stats.js';
 
-type TurnClient = Pick<CtxmillControlClient, 'turns'>;
+type TurnClient = Pick<StablehandControlClient, 'turns'>;
 type SandboxSessionClient = Pick<
-  CtxmillControlClient['sandboxSessions'],
+  StablehandControlClient['sandboxSessions'],
   'list' | 'kill'
 >;
 
@@ -77,7 +77,7 @@ export async function cleanupManagedSessions(
 }
 
 type ManagedBenchmarkClient = Pick<
-  CtxmillControlClient,
+  StablehandControlClient,
   'agents' | 'sandboxSessions'
 >;
 
@@ -138,8 +138,8 @@ export async function executeMeasuredTurn(
           : {}),
         requestedTurnId: turnId,
         tags: {
-          'ctxmill.performance.run_id': options.runId,
-          'ctxmill.performance.stage': options.stageName,
+          'stablehand.performance.run_id': options.runId,
+          'stablehand.performance.stage': options.stageName,
         },
       },
       {
@@ -255,7 +255,7 @@ export interface PerformanceRunClock {
 }
 
 type PerformanceControlClient = Pick<
-  CtxmillControlClient,
+  StablehandControlClient,
   | 'agents'
   | 'turns'
   | 'sandboxSessions'
@@ -334,7 +334,7 @@ interface RunPerformanceProfileOptions {
 }
 
 async function calibrateClock(
-  client: Pick<CtxmillControlClient, 'health'>,
+  client: Pick<StablehandControlClient, 'health'>,
   now: () => number,
   signal?: AbortSignal,
 ): Promise<PerformanceRunClock> {

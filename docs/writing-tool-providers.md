@@ -1,6 +1,6 @@
 # Writing a Custom Tool Provider
 
-Tool providers are the primary way to extend `ctxmill` with new capabilities. Whether you want to wrap an external API, connect to a database, or expose local functions to your agents, you do it by implementing a `ToolProvider`.
+Tool providers are the primary way to extend `stablehand` with new capabilities. Whether you want to wrap an external API, connect to a database, or expose local functions to your agents, you do it by implementing a `ToolProvider`.
 
 ## Architecture Overview
 
@@ -14,7 +14,7 @@ When an agent requests a tool, the orchestrator looks up the tool in the `ToolRe
 
 ## The ToolProvider Interface
 
-Every provider must implement the `ToolProvider` interface defined in `packages/ctxmill/src/tool/provider.ts`:
+Every provider must implement the `ToolProvider` interface defined in `packages/stablehand/src/tool/provider.ts`:
 
 ```typescript
 export interface ToolProvider {
@@ -37,7 +37,7 @@ export interface ToolProvider {
 The `defineTool()` helper provides type safety when creating tool definitions. It ensures your tool matches the `ToolDefinition` interface.
 
 ```typescript
-import { defineTool } from 'ctxmill';
+import { defineTool } from 'stablehand';
 import { z } from 'zod';
 
 export const myTool = defineTool({
@@ -85,10 +85,10 @@ The `ToolContext` provides essential metadata and services to your tool handler:
 
 ### Tool Locations
 
-The `location` property tells `ctxmill` where the tool should run:
+The `location` property tells `stablehand` where the tool should run:
 
 *   `sandbox` (Default): Executes inside the agent's Docker container. Use this for tools that interact with the filesystem or run untrusted code.
-*   `orchestrator`: Executes in the main `ctxmill` process. Use this for tools that need access to the database, event bus, or external APIs that require secrets not shared with the sandbox.
+*   `orchestrator`: Executes in the main `stablehand` process. Use this for tools that need access to the database, event bus, or external APIs that require secrets not shared with the sandbox.
 *   `daemon`: Executes in the sandbox daemon process. Reserved for system-level tools like `artifact_upload`.
 
 ### Programmatic Tool Calling
@@ -101,7 +101,7 @@ tool-calling.
 
 ## Built-in Providers
 
-`ctxmill` ships with five standard providers:
+`stablehand` ships with five standard providers:
 
 1.  **Local**: Wraps tools defined directly in TypeScript with a `handler` function.
 2.  **HTTP**: Dynamically creates tools from a list of HTTP endpoints (REST APIs).
@@ -116,7 +116,7 @@ Let's implement a simple `DatabaseToolProvider` that exposes a query tool.
 ### 1. Implement the Interface
 
 ```typescript
-import { ToolProvider, ToolDefinition, ToolContext, defineTool } from 'ctxmill';
+import { ToolProvider, ToolDefinition, ToolContext, defineTool } from 'stablehand';
 import { z } from 'zod';
 
 export class DatabaseToolProvider implements ToolProvider {
@@ -144,7 +144,7 @@ export class DatabaseToolProvider implements ToolProvider {
 
 ### 2. Register the Provider
 
-To make your tools available to agents, add the provider to the `ToolRegistry` during application startup (usually in `packages/ctxmill/src/config/container.ts` or your main entry point).
+To make your tools available to agents, add the provider to the `ToolRegistry` during application startup (usually in `packages/stablehand/src/config/container.ts` or your main entry point).
 
 ```typescript
 const registry = container.resolve('toolRegistry');
@@ -156,7 +156,7 @@ registry.addProvider(new DatabaseToolProvider());
 You can test your tool definitions by manually invoking the `LocalFunctionExecutor`.
 
 ```typescript
-import { LocalFunctionExecutor } from 'ctxmill';
+import { LocalFunctionExecutor } from 'stablehand';
 import { myTool } from './my-tool.js';
 
 const executor = new LocalFunctionExecutor();

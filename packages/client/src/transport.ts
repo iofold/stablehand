@@ -1,34 +1,34 @@
 import { z } from 'zod';
-import { CAPABILITY_VERBS, type CapabilityVerb } from '@ctxmill/contracts';
+import { CAPABILITY_VERBS, type CapabilityVerb } from '@stablehand/contracts';
 
-import { CtxmillApiError, CtxmillContractError, CtxmillTimeoutError } from './errors.js';
+import { StablehandApiError, StablehandContractError, StablehandTimeoutError } from './errors.js';
 
-export type CtxmillHeadersProvider = HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
-export type CtxmillTokenProvider = string | (() => string | Promise<string>);
+export type StablehandHeadersProvider = HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
+export type StablehandTokenProvider = string | (() => string | Promise<string>);
 
-export interface CtxmillRetryOptions {
+export interface StablehandRetryOptions {
   /** Total attempts, including the initial safe-read request. */
   maxAttempts?: number;
   baseDelayMs?: number;
 }
 
-export interface CtxmillClientOptions {
+export interface StablehandClientOptions {
   apiBase?: string;
-  token?: CtxmillTokenProvider;
-  headers?: CtxmillHeadersProvider;
+  token?: StablehandTokenProvider;
+  headers?: StablehandHeadersProvider;
   credentials?: RequestCredentials;
   fetch?: typeof fetch;
   timeoutMs?: number;
-  retry?: CtxmillRetryOptions;
+  retry?: StablehandRetryOptions;
 }
 
-export interface CtxmillRequestOptions {
+export interface StablehandRequestOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   idempotencyKey?: string;
 }
 
-interface TransportRequest<T> extends CtxmillRequestOptions {
+interface TransportRequest<T> extends StablehandRequestOptions {
   method: string;
   path: string;
   responseSchema: z.ZodType<T>;
@@ -121,7 +121,7 @@ function abortContext(signal: AbortSignal | undefined, timeoutMs: number): {
   }
 
   const timeout = setTimeout(() => {
-    controller.abort(new CtxmillTimeoutError(timeoutMs));
+    controller.abort(new StablehandTimeoutError(timeoutMs));
   }, timeoutMs);
 
   return {
@@ -146,22 +146,22 @@ async function delay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-export interface CtxmillOpenedStream {
+export interface StablehandOpenedStream {
   body: ReadableStream<Uint8Array>;
   close: () => Promise<void>;
 }
 
-export class CtxmillTransport {
+export class StablehandTransport {
   private readonly apiBase: string;
-  private readonly tokenProvider?: CtxmillTokenProvider;
-  private readonly headerProvider?: CtxmillHeadersProvider;
+  private readonly tokenProvider?: StablehandTokenProvider;
+  private readonly headerProvider?: StablehandHeadersProvider;
   private readonly credentials?: RequestCredentials;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private readonly maxReadAttempts: number;
   private readonly retryBaseDelayMs: number;
 
-  constructor(options: CtxmillClientOptions = {}) {
+  constructor(options: StablehandClientOptions = {}) {
     this.apiBase = normalizeBaseUrl(options.apiBase ?? '/api');
     this.tokenProvider = options.token;
     this.headerProvider = options.headers;
@@ -194,7 +194,7 @@ export class CtxmillTransport {
   ): T {
     const result = schema.safeParse(value);
     if (!result.success) {
-      throw new CtxmillContractError({
+      throw new StablehandContractError({
         ...input,
         issues: result.error.issues,
       });
@@ -258,7 +258,7 @@ export class CtxmillTransport {
       const responseBody = response.status === 204 ? undefined : await parseBody(response);
       if (!response.ok) {
         const fields = errorFields(responseBody);
-        throw new CtxmillApiError({
+        throw new StablehandApiError({
           status: response.status,
           ...fields,
           body: redact(responseBody),
@@ -274,7 +274,7 @@ export class CtxmillTransport {
       });
     }
 
-    throw new Error('CTXMill request exhausted without a response');
+    throw new Error('Stablehand request exhausted without a response');
   }
 
   async openStream(input: {
@@ -285,7 +285,7 @@ export class CtxmillTransport {
     headers?: HeadersInit;
     signal?: AbortSignal;
     timeoutMs?: number;
-  }): Promise<CtxmillOpenedStream> {
+  }): Promise<StablehandOpenedStream> {
     const method = input.method;
     const json = input.requestSchema
       ? this.validate(input.requestSchema, input.json, {
@@ -346,7 +346,7 @@ export class CtxmillTransport {
           abort.cleanup();
         }
         const fields = errorFields(responseBody);
-        throw new CtxmillApiError({
+        throw new StablehandApiError({
           status: response.status,
           ...fields,
           body: redact(responseBody),
@@ -356,7 +356,7 @@ export class CtxmillTransport {
       }
       if (!response.body) {
         abort.cleanup();
-        throw new CtxmillContractError({
+        throw new StablehandContractError({
           direction: 'response',
           method,
           path: input.path,
@@ -382,6 +382,6 @@ export class CtxmillTransport {
       };
     }
 
-    throw new Error('CTXMill stream request exhausted without a response');
+    throw new Error('Stablehand stream request exhausted without a response');
   }
 }

@@ -1,5 +1,5 @@
 import { resolve } from './CatalogRegistry';
-import type { ApiA2UIBlock } from '@ctxmill/shared';
+import type { ApiA2UIBlock } from '@stablehand/shared';
 import { A2UIErrorBoundary } from './A2UIErrorBoundary';
 import { normalizeA2UIComponentName } from '@/lib/a2ui';
 

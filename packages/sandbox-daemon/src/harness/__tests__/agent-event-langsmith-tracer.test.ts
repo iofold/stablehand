@@ -52,14 +52,14 @@ describe('createAgentEventLangSmithTracer', () => {
             return client;
           }
         },
-        projectName: 'ctxmill-test',
+        projectName: 'stablehand-test',
       },
     });
 
     expect(tracer).not.toBeNull();
     const events: AgentEvent[] = [
       { type: 'text_delta', content: 'Using search.' },
-      { type: 'tool_call_start', id: 'tool-1', name: 'search', args: { query: 'ctxmill' } },
+      { type: 'tool_call_start', id: 'tool-1', name: 'search', args: { query: 'stablehand' } },
       { type: 'tool_call_end', id: 'tool-1', result: 'search result', durationMs: 12 },
       {
         type: 'message_committed',
@@ -70,7 +70,7 @@ describe('createAgentEventLangSmithTracer', () => {
         toolCalls: [{
           id: 'tool-1',
           name: 'search',
-          arguments: { query: 'ctxmill' },
+          arguments: { query: 'stablehand' },
         }],
       },
       { type: 'done', usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5, costUsd: 0.01 } },
@@ -85,7 +85,7 @@ describe('createAgentEventLangSmithTracer', () => {
     expect(root.config).toEqual(expect.objectContaining({
       name: 'langgraph-agent-agent-1',
       run_type: 'chain',
-      project_name: 'ctxmill-test',
+      project_name: 'stablehand-test',
       inputs: { agentId: 'agent-1', conversationId: 'conversation-1', harnessName: 'langgraph' },
     }));
     expect(root.postRun).toHaveBeenCalledTimes(1);
@@ -111,7 +111,7 @@ describe('createAgentEventLangSmithTracer', () => {
     expect(tool?.config).toEqual(expect.objectContaining({
       name: 'search',
       run_type: 'tool',
-      inputs: { args: { query: 'ctxmill' }, toolCallId: 'tool-1' },
+      inputs: { args: { query: 'stablehand' }, toolCallId: 'tool-1' },
     }));
     expect(tool?.end).toHaveBeenCalledWith({
       result: 'search result',

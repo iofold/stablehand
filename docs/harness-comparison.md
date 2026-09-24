@@ -1,6 +1,6 @@
 # Harness Comparison Matrix
 
-This document provides a comprehensive comparison of the three agent harnesses supported by CTXMill: **LangGraph**, **Claude Agents**, and **PI Agent**. Use this guide to choose the best harness for your agent's specific requirements.
+This document provides a comprehensive comparison of the three agent harnesses supported by Stablehand: **LangGraph**, **Claude Agents**, and **PI Agent**. Use this guide to choose the best harness for your agent's specific requirements.
 
 ## Quick Decision Matrix
 
@@ -52,9 +52,9 @@ This document provides a comprehensive comparison of the three agent harnesses s
 The LangGraph harness uses the `deepagents` SDK, a pure TypeScript implementation of LangGraph. It is designed for flexibility and multi-agent orchestration.
 
 - **SDK and Model Support**: Supports OpenAI, Anthropic, and Google Generative AI via LangChain adapters.
-- **Tool Handling**: CTXMill tools are converted to LangChain tools. Supports `requiresApproval` for HITL.
+- **Tool Handling**: Stablehand tools are converted to LangChain tools. Supports `requiresApproval` for HITL.
 - **Streaming Behavior**: Emits `text_delta` from model streams and `tool_call_*` events from LangChain's `on_tool_*` events.
-- **Session Lifecycle**: Stateless at the SDK level; CTXMill manages the conversation transcript and passes the full history to the SDK on each turn.
+- **Session Lifecycle**: Stateless at the SDK level; Stablehand manages the conversation transcript and passes the full history to the SDK on each turn.
 - **Resource Requirements**: Smallest image footprint as it avoids Python and heavy CLI dependencies.
 - **Known Limitations**: No native MCP support; knowledge lookup is currently a stub.
 

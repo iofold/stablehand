@@ -1,4 +1,4 @@
-# CTXMILL — PROJECT KNOWLEDGE BASE
+# STABLEHAND — PROJECT KNOWLEDGE BASE
 
 **Generated:** 2026-07-10 · **Branch:** master
 
@@ -10,14 +10,14 @@ Multi-harness agent runtime. Agents defined in YAML, execute inside Docker sandb
 
 ```
 packages/
-  ctxmill/              Core runtime — orchestrator, harness registry, sandbox orchestration, tools, events, DB
+  stablehand/              Core runtime — orchestrator, harness registry, sandbox orchestration, tools, events, DB
   sandbox-daemon/       Daemon process inside sandbox containers — gRPC server, harness adapters, tool proxy
   ui/                   React dashboard — Vite, React 18, Zustand, Tailwind, SSE streaming
   shared/               Types only — AG-UI events, API contracts (no build step, src/index.ts direct)
   proto/                Protobuf (buf) — HarnessService + OrchestratorService gRPC definitions
-  client/               Typed browser client for AG-UI streaming integrations (@ctxmill/client)
-  react/                React components and hooks for AG-UI chat integrations (@ctxmill/react)
-  create-ctxmill/       Scaffold CLI — generates new project from template
+  client/               Typed browser client for AG-UI streaming integrations (@stablehand/client)
+  react/                React components and hooks for AG-UI chat integrations (@stablehand/react)
+  create-stablehand/       Scaffold CLI — generates new project from template
   examples/
     kitchen-sink/       3 agents (LangGraph, Claude, PI), 11 shared tools, event-chained
 tests/
@@ -39,22 +39,22 @@ docs/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Add a new harness | Registry: `packages/ctxmill/src/harness/`; adapter: `packages/sandbox-daemon/src/harness/` | Implement the `AgentHarness` adapter in `sandbox-daemon`, register it in `DefaultHarnessRegistry` |
-| Add a tool provider | `packages/ctxmill/src/tool/providers/` | Implement `ToolProvider`, register in `DefaultToolRegistry` |
-| Add an API route | `packages/ctxmill/src/orchestrator/routes/` | Fastify plugin pattern, register in `server.ts` |
+| Add a new harness | Registry: `packages/stablehand/src/harness/`; adapter: `packages/sandbox-daemon/src/harness/` | Implement the `AgentHarness` adapter in `sandbox-daemon`, register it in `DefaultHarnessRegistry` |
+| Add a tool provider | `packages/stablehand/src/tool/providers/` | Implement `ToolProvider`, register in `DefaultToolRegistry` |
+| Add an API route | `packages/stablehand/src/orchestrator/routes/` | Fastify plugin pattern, register in `server.ts` |
 | Add a UI page | `packages/ui/src/pages/` + `App.tsx` | Add route in App.tsx, nav item in Sidebar.tsx |
-| Add a DB table | `packages/ctxmill/src/database/schema-pg.ts` | Drizzle ORM, add to `repository.ts` |
-| Add an event | `packages/ctxmill/src/events/bus.ts` | Add to `EventMap` type, emit via `TypedEventBus` |
-| Modify proto | `packages/proto/ctxmill/sandbox/v1/sandbox.proto` | Run `pnpm -C packages/proto build` to regenerate |
-| Add agent to example | `packages/examples/kitchen-sink/agents/` | YAML manifest (`apiVersion: ctxmill.io/v1`) |
+| Add a DB table | `packages/stablehand/src/database/schema-pg.ts` | Drizzle ORM, add to `repository.ts` |
+| Add an event | `packages/stablehand/src/events/bus.ts` | Add to `EventMap` type, emit via `TypedEventBus` |
+| Modify proto | `packages/proto/stablehand/sandbox/v1/sandbox.proto` | Run `pnpm -C packages/proto build` to regenerate |
+| Add agent to example | `packages/examples/kitchen-sink/agents/` | YAML manifest (`apiVersion: stablehand.io/v1`) |
 | Define a tool | Use `defineTool({ name, description, input: z.object(...), handler })` | Zod schema for input validation |
 | Define an agent | Use `defineAgent({ tools, systemPrompt })` or YAML manifest | `{{knowledge}}` placeholder for dynamic injection |
-| Understand DI wiring | `packages/ctxmill/src/config/container.ts` | `createContainer()` builds all services |
+| Understand DI wiring | `packages/stablehand/src/config/container.ts` | `createContainer()` builds all services |
 | Trace a run execution | `orchestrator/agent-session-service.ts` → `orchestrator/sandbox-session-manager.ts` → `packages/sandbox-daemon/src/sandbox/runner.ts` | All runs go through sandbox containers |
 | Modify sandbox daemon | `packages/sandbox-daemon/src/` | gRPC server, harness adapters, tool proxy. Runs inside containers, NOT orchestrator |
 | Understand session lifecycle | `orchestrator/sandbox-session-manager.ts` | Active → checkpointed → restoring lifecycle plus reconciliation |
-| Configure runtime settings | `packages/ctxmill/src/settings/service.ts` | DB-persisted system settings, Settings UI |
-| Manage artifacts | `packages/ctxmill/src/artifact/artifact-store.ts` | S3/MinIO, signed URLs, daemon tools |
+| Configure runtime settings | `packages/stablehand/src/settings/service.ts` | DB-persisted system settings, Settings UI |
+| Manage artifacts | `packages/stablehand/src/artifact/artifact-store.ts` | S3/MinIO, signed URLs, daemon tools |
 
 ## CONVENTIONS
 
@@ -104,7 +104,7 @@ docker compose up --build -d               # Builds all services including sandb
 pnpm dev                                    # Same as docker compose up --build
 
 # Build & Check
-pnpm -r build                              # Build all packages (shared → proto → ctxmill → ui)
+pnpm -r build                              # Build all packages (shared → proto → stablehand → ui)
 pnpm lint                                  # ESLint across packages/ and tests/
 pnpm typecheck                             # TypeScript check all packages
 
@@ -124,16 +124,16 @@ pnpm -C packages/proto build               # buf generate (proto → TS)
 pnpm -C packages/proto build:js            # tsc (compile generated TS → JS)
 
 # Sandbox Images (built separately from main stack)
-docker build --target harness-langgraph -t ctxmill/harness-langgraph -f Dockerfile.sandbox .
-docker build --target harness-claude-agents -t ctxmill/harness-claude-agents -f Dockerfile.sandbox .
-docker build --target harness-pi-agent -t ctxmill/harness-pi-agent -f Dockerfile.sandbox .
+docker build --target harness-langgraph -t stablehand/harness-langgraph -f Dockerfile.sandbox .
+docker build --target harness-claude-agents -t stablehand/harness-claude-agents -f Dockerfile.sandbox .
+docker build --target harness-pi-agent -t stablehand/harness-pi-agent -f Dockerfile.sandbox .
 ```
 
 ## NOTES
 
 - **Docker-first** — Everything runs in containers. No local dev mode. Node 22+ required.
 - **pnpm 10.12.4** — Locked via `packageManager` field. `--shamefully-hoist` in production for SDK lazy imports.
-- **Strict test mode** — `CTXMILL_STRICT_TESTS=1` in CI. Tests fail on console errors matching: CRITICAL, FOREIGN KEY, mount failure, etc. Opt out per-test with `allowConsoleErrors()`. See `tests/AGENTS.md`.
+- **Strict test mode** — `STABLEHAND_STRICT_TESTS=1` in CI. Tests fail on console errors matching: CRITICAL, FOREIGN KEY, mount failure, etc. Opt out per-test with `allowConsoleErrors()`. See `tests/AGENTS.md`.
 - **Sandbox images** — 3 Docker images per harness (langgraph, claude-agents, pi-agent), all FROM `harness-base` in `Dockerfile.sandbox`. Built separately with `--target harness-{name}`.
 - **gRPC IPC** — Orchestrator ↔ sandbox via ConnectRPC on port 50051. Two services: HarnessService (OpenSession, DeliverTurn, SuspendSession, KillSession), OrchestratorService (RequestTool, EmitEvent, RefreshSecrets).
 - **SSE streaming** — UI connects to `/api/agents/:id/stream` via EventSource. Events flow: harness → proto → gRPC → SSE → React.
@@ -141,13 +141,13 @@ docker build --target harness-pi-agent -t ctxmill/harness-pi-agent -f Dockerfile
 - **Checkpoint/Resume** — Sessions suspend cooperatively at safe execution phases. Checkpoint v2 format; workspace captured as tar.gz (100 MB max). Secrets NEVER in checkpoints.
 - **HITL flow** — Tool requests approval → interrupt is persisted → the user resolves it via the dashboard/API → the matching sandbox session resumes or restores from checkpoint.
 - **`--experimental-strip-types`** — Node 22 flag in Dockerfile CMD for TypeScript enum handling in proto-generated code.
-- **Drizzle ORM schema** — see `packages/ctxmill/src/database/schema-pg.ts`. Test DB uses advisory lock (ID: 424242) for concurrent resets.
+- **Drizzle ORM schema** — see `packages/stablehand/src/database/schema-pg.ts`. Test DB uses advisory lock (ID: 424242) for concurrent resets.
 - **Default model** — Agent model selection belongs in each agent's harness config or YAML manifest. Harnesses may still read provider-specific env vars inside sandbox containers.
-- **Sandbox-daemon package** — Separate package (`@ctxmill/sandbox-daemon`) deployed inside sandbox containers. Contains gRPC server, harness adapters (LangGraph, Claude Agents, PI Agent), tool proxy, proto-convert, and checkpoint logic. Changes here require rebuilding harness Docker images (not just orchestrator).
+- **Sandbox-daemon package** — Separate package (`@stablehand/sandbox-daemon`) deployed inside sandbox containers. Contains gRPC server, harness adapters (LangGraph, Claude Agents, PI Agent), tool proxy, proto-convert, and checkpoint logic. Changes here require rebuilding harness Docker images (not just orchestrator).
 - **Workspace isolation** — Workspace diff capture/restore during suspend/resume.
 - **Container concurrency** — Semaphore limits concurrent sandbox containers (default 20). FIFO queue with 60s timeout.
 - **Tool providers** — 5 types: Local (in-process), MCP (stdio/HTTP), HTTP (REST endpoints), Composio (500+ SaaS), Artifact (daemon-handled S3/MinIO upload/download).
-- **Agent manifests** — YAML format (`apiVersion: ctxmill.io/v1`). Supports `{{knowledge}}` placeholder in instructions, `$secret:KEY_NAME` for secrets.
+- **Agent manifests** — YAML format (`apiVersion: stablehand.io/v1`). Supports `{{knowledge}}` placeholder in instructions, `$secret:KEY_NAME` for secrets.
 - **Artifact storage** — S3/MinIO-backed file persistence. Tools (artifact_upload, artifact_download) run at daemon location, bypassing gRPC byte-proxying. Requires S3_ENDPOINT + S3_ACCESS_KEY + S3_SECRET_KEY env vars. MinIO container in docker-compose.
 - **System settings** — Runtime-configurable knobs (timeouts, limits, resource defaults) persisted in `system_settings`. Settings UI at `/settings`. 5-minute cache TTL. No restart required.
 - **Container lifecycle policy** — Unified module handling idle checkpoint scheduling, compatibility pause/resume, and reconciliation.

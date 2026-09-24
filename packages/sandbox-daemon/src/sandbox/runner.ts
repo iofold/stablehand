@@ -15,7 +15,7 @@
 import { mkdir } from 'node:fs/promises';
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
-import { SandboxSecretsSchema } from '@ctxmill/contracts';
+import { SandboxSecretsSchema } from '@stablehand/contracts';
 import { createClient } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-node';
 import type {
@@ -27,7 +27,7 @@ import type {
   SuspendSessionResponse,
   KillSessionResponse,
   SessionEvent,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 import {
   OrchestratorService,
   OpenSessionResponseSchema,
@@ -37,7 +37,7 @@ import {
   RenewTurnDeliveryCapabilityResponseSchema,
   SuspendSessionResponseSchema,
   KillSessionResponseSchema,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 
 import { ArtifactStore } from '../artifact/artifact-store.js';
 import { createBrowserHandlers } from './browser-handler.js';
@@ -112,7 +112,7 @@ function createDaemonHandlersForSession(
   const s3Endpoint = secrets.S3_ENDPOINT;
   const s3AccessKey = secrets.S3_ACCESS_KEY;
   const s3SecretKey = secrets.S3_SECRET_KEY;
-  const s3Bucket = secrets.S3_BUCKET || 'ctxmill-artifacts';
+  const s3Bucket = secrets.S3_BUCKET || 'stablehand-artifacts';
   const s3Region = secrets.S3_REGION || 'us-east-1';
 
   if (s3Endpoint && s3AccessKey && s3SecretKey && orcClient) {
@@ -336,7 +336,7 @@ function appendPtcDegradedNotice(systemPrompt: string, err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
   return `${systemPrompt}
 
-[CTXMill degraded mode] Programmatic tool-calling (PTC) setup failed, so /workspace/.tools scripts may be missing or stale. Use MCP/orchestrator tools directly and surface that PTC support is degraded if the task depends on generated scripts. Error: ${message}`;
+[Stablehand degraded mode] Programmatic tool-calling (PTC) setup failed, so /workspace/.tools scripts may be missing or stale. Use MCP/orchestrator tools directly and surface that PTC support is degraded if the task depends on generated scripts. Error: ${message}`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -482,7 +482,7 @@ export async function openSession(
 
         if (ptcScripts.length > 0) {
           console.error(`[sandbox] PTC: generated ${ptcScripts.length} scripts in ${config.workspaceDir}/.tools`);
-          config.systemPrompt += '\n\nSome tools use programmatic tool calling (PTC) — large results stay in code scope instead of your context. Call ctxmill-guide({ topic: "ptc" }) for usage details, or run `ls /workspace/.tools/` to see available scripts.';
+          config.systemPrompt += '\n\nSome tools use programmatic tool calling (PTC) — large results stay in code scope instead of your context. Call stablehand-guide({ topic: "ptc" }) for usage details, or run `ls /workspace/.tools/` to see available scripts.';
         }
       } catch (err) {
         console.error('[sandbox] PTC script generation failed, continuing in degraded PTC mode:', err);

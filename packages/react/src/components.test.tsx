@@ -1,29 +1,29 @@
 // @vitest-environment jsdom
 
 import {
-  CtxmillAgUiClient,
-  type CtxmillAgUiRunInput,
-  type CtxmillStreamEvent,
-} from '@ctxmill/client';
+  StablehandAgUiClient,
+  type StablehandAgUiRunInput,
+  type StablehandStreamEvent,
+} from '@stablehand/client';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { useCtxmillChat } from './components.js';
+import { useStablehandChat } from './components.js';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 interface ControlledRun {
-  input: CtxmillAgUiRunInput;
+  input: StablehandAgUiRunInput;
   release: () => void;
 }
 
-class ControlledAgUiClient extends CtxmillAgUiClient {
+class ControlledAgUiClient extends StablehandAgUiClient {
   readonly runs: ControlledRun[] = [];
 
   override async *streamAgentRun(
-    input: CtxmillAgUiRunInput,
-  ): AsyncGenerator<CtxmillStreamEvent> {
+    input: StablehandAgUiRunInput,
+  ): AsyncGenerator<StablehandStreamEvent> {
     let release = () => undefined;
     const released = new Promise<void>((resolve) => {
       release = resolve;
@@ -55,7 +55,7 @@ class ControlledAgUiClient extends CtxmillAgUiClient {
   }
 }
 
-describe('useCtxmillChat identity lifecycle', () => {
+describe('useStablehandChat identity lifecycle', () => {
   let root: Root | undefined;
 
   afterEach(async () => {
@@ -67,10 +67,10 @@ describe('useCtxmillChat identity lifecycle', () => {
 
   it('aborts and resets on identity change without letting the old run settle the new chat', async () => {
     const client = new ControlledAgUiClient();
-    let latest: ReturnType<typeof useCtxmillChat> | undefined;
+    let latest: ReturnType<typeof useStablehandChat> | undefined;
 
     function Probe({ agentId, threadId }: { agentId: string; threadId: string }) {
-      latest = useCtxmillChat({ agentId, threadId, client });
+      latest = useStablehandChat({ agentId, threadId, client });
       return null;
     }
 

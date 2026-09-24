@@ -1,6 +1,6 @@
 ---
 name: stress-test
-description: Full stress-test suite for ctxmill — exercises tools, chaining, HITL, multi-model, code execution
+description: Full stress-test suite for stablehand — exercises tools, chaining, HITL, multi-model, code execution
 ---
 
 # Full stress test plan
@@ -17,8 +17,8 @@ Verify readiness:
 
 ```bash
 AUTH_HEADER=()
-if [[ -n "${CTXMILL_API_TOKEN:-}" ]]; then
-  AUTH_HEADER=(-H "Authorization: Bearer $CTXMILL_API_TOKEN")
+if [[ -n "${STABLEHAND_API_TOKEN:-}" ]]; then
+  AUTH_HEADER=(-H "Authorization: Bearer $STABLEHAND_API_TOKEN")
 fi
 
 # API responds
@@ -26,11 +26,11 @@ curl -sf "${AUTH_HEADER[@]}" http://localhost:3002/api/agents > /dev/null && ech
 
 # Sandbox harness images exist
 for img in langgraph claude-agents pi-agent; do
-  docker image inspect "ctxmill/harness-${img}:latest" > /dev/null 2>&1 && echo "Image ${img}: OK" || echo "Image ${img}: MISSING — run: docker compose up --build"
+  docker image inspect "stablehand/harness-${img}:latest" > /dev/null 2>&1 && echo "Image ${img}: OK" || echo "Image ${img}: MISSING — run: docker compose up --build"
 done
 ```
 
-All checks must pass before proceeding. Sandbox egress is controlled by the host or cluster network; CTXMill does not currently run a built-in outbound proxy.
+All checks must pass before proceeding. Sandbox egress is controlled by the host or cluster network; Stablehand does not currently run a built-in outbound proxy.
 
 ## Shared setup
 
@@ -38,8 +38,8 @@ All checks must pass before proceeding. Sandbox egress is controlled by the host
 set -euo pipefail
 API_BASE="http://localhost:3002"
 AUTH_HEADER=()
-if [[ -n "${CTXMILL_API_TOKEN:-}" ]]; then
-  AUTH_HEADER=(-H "Authorization: Bearer $CTXMILL_API_TOKEN")
+if [[ -n "${STABLEHAND_API_TOKEN:-}" ]]; then
+  AUTH_HEADER=(-H "Authorization: Bearer $STABLEHAND_API_TOKEN")
 fi
 
 agent_id() {

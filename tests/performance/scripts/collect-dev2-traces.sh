@@ -5,7 +5,7 @@ RUN_JSON="${1:?usage: collect-dev2-traces.sh <run.json> <turn-ids.txt> <output.j
 TURN_IDS_PATH="${2:?usage: collect-dev2-traces.sh <run.json> <turn-ids.txt> <output.jsonl>}"
 OUTPUT_PATH="${3:?usage: collect-dev2-traces.sh <run.json> <turn-ids.txt> <output.jsonl>}"
 KUBECTL="${KUBECTL:-kubectl}"
-OBSERVABILITY_NAMESPACE="${CTXMILL_PERF_OBSERVABILITY_NAMESPACE:-observability}"
+OBSERVABILITY_NAMESPACE="${STABLEHAND_PERF_OBSERVABILITY_NAMESPACE:-observability}"
 
 mapfile -t turn_ids < <(sed '/^[[:space:]]*$/d' "$TURN_IDS_PATH")
 if (( ${#turn_ids[@]} == 0 )); then
@@ -32,13 +32,13 @@ turn_id_literals="$(
   printf '%s\n' "${turn_ids[@]}" \
     | jq -Rrsc 'split("\n") | map(select(length > 0) | "'"'"'" + . + "'"'"'") | join(",")'
 )"
-correlation_predicate="attributes_string['ctxmill.turn.id'] IN ($turn_id_literals)"
+correlation_predicate="attributes_string['stablehand.turn.id'] IN ($turn_id_literals)"
 if (( ${#session_ids[@]} > 0 )); then
   session_id_literals="$(
     printf '%s\n' "${session_ids[@]}" \
       | jq -Rrsc 'split("\n") | map(select(length > 0) | "'"'"'" + . + "'"'"'") | join(",")'
   )"
-  correlation_predicate="$correlation_predicate OR attributes_string['ctxmill.session.id'] IN ($session_id_literals) OR resources_string['ctxmill.session.id'] IN ($session_id_literals)"
+  correlation_predicate="$correlation_predicate OR attributes_string['stablehand.session.id'] IN ($session_id_literals) OR resources_string['stablehand.session.id'] IN ($session_id_literals)"
 fi
 started_at="$(jq -r '.startedAt' "$RUN_JSON")"
 completed_at="$(jq -r '.completedAt' "$RUN_JSON")"
@@ -62,24 +62,24 @@ SELECT
   kind_string,
   duration_nano,
   status_code_string,
-  attributes_string['ctxmill.turn.id'] AS turn_id,
-  attributes_string['ctxmill.agent.id'] AS agent_id,
-  attributes_string['ctxmill.conversation.id'] AS conversation_id,
+  attributes_string['stablehand.turn.id'] AS turn_id,
+  attributes_string['stablehand.agent.id'] AS agent_id,
+  attributes_string['stablehand.conversation.id'] AS conversation_id,
   if(
-    empty(attributes_string['ctxmill.session.id']),
-    resources_string['ctxmill.session.id'],
-    attributes_string['ctxmill.session.id']
+    empty(attributes_string['stablehand.session.id']),
+    resources_string['stablehand.session.id'],
+    attributes_string['stablehand.session.id']
   ) AS sandbox_session_id,
-  attributes_string['ctxmill.phase'] AS phase,
+  attributes_string['stablehand.phase'] AS phase,
   if(
-    empty(attributes_string['ctxmill.harness']),
-    resources_string['ctxmill.harness'],
-    attributes_string['ctxmill.harness']
+    empty(attributes_string['stablehand.harness']),
+    resources_string['stablehand.harness'],
+    attributes_string['stablehand.harness']
   ) AS harness,
-  attributes_string['ctxmill.mode'] AS mode,
-  attributes_string['ctxmill.outcome'] AS outcome,
-  attributes_string['ctxmill.runtime'] AS runtime,
-  attributes_string['ctxmill.session.state'] AS session_state,
+  attributes_string['stablehand.mode'] AS mode,
+  attributes_string['stablehand.outcome'] AS outcome,
+  attributes_string['stablehand.runtime'] AS runtime,
+  attributes_string['stablehand.session.state'] AS session_state,
   attributes_string['http.route'] AS http_route,
   attributes_string['url.path'] AS url_path,
   attributes_string['http.request.method'] AS http_method,

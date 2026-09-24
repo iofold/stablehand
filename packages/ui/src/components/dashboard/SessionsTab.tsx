@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ConversationSummary } from '@ctxmill/contracts';
+import type { ConversationSummary } from '@stablehand/contracts';
 import { fetchRecentConversations } from '@/lib/api';
 import { useAgentsStore } from '@/stores/agents';
 import { RecentSessionsTable } from './RecentSessionsTable';

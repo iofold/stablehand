@@ -1,6 +1,6 @@
 ---
 name: smoke-test
-description: Quick stress-test smoke validation for ctxmill — verifies each harness and model works
+description: Quick stress-test smoke validation for stablehand — verifies each harness and model works
 ---
 
 # Stress smoke test
@@ -13,8 +13,8 @@ Run from the repo root with Docker/API already up.
 set -euo pipefail
 API_BASE="http://localhost:3002"
 AUTH_HEADER=()
-if [[ -n "${CTXMILL_API_TOKEN:-}" ]]; then
-  AUTH_HEADER=(-H "Authorization: Bearer $CTXMILL_API_TOKEN")
+if [[ -n "${STABLEHAND_API_TOKEN:-}" ]]; then
+  AUTH_HEADER=(-H "Authorization: Bearer $STABLEHAND_API_TOKEN")
 fi
 
 curl -s "$API_BASE/health" | jq .

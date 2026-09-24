@@ -1,12 +1,12 @@
 import type { Interceptor } from '@connectrpc/connect';
 
-export const CALLBACK_SESSION_HEADER = 'x-ctxmill-callback-session-id';
-export const CALLBACK_AGENT_HEADER = 'x-ctxmill-callback-agent-id';
-export const CALLBACK_TOKEN_HEADER = 'x-ctxmill-callback-token';
+export const CALLBACK_SESSION_HEADER = 'x-stablehand-callback-session-id';
+export const CALLBACK_AGENT_HEADER = 'x-stablehand-callback-agent-id';
+export const CALLBACK_TOKEN_HEADER = 'x-stablehand-callback-token';
 
-export const CALLBACK_SESSION_ENV = 'CTXMILL_CALLBACK_SESSION_ID';
-export const CALLBACK_AGENT_ENV = 'CTXMILL_CALLBACK_AGENT_ID';
-export const CALLBACK_TOKEN_ENV = 'CTXMILL_CALLBACK_TOKEN';
+export const CALLBACK_SESSION_ENV = 'STABLEHAND_CALLBACK_SESSION_ID';
+export const CALLBACK_AGENT_ENV = 'STABLEHAND_CALLBACK_AGENT_ID';
+export const CALLBACK_TOKEN_ENV = 'STABLEHAND_CALLBACK_TOKEN';
 
 type CallbackAuthEnv = Readonly<Record<string, string | undefined>>;
 

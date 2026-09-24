@@ -1,4 +1,4 @@
-import { AgentSchema, type Agent } from '@ctxmill/contracts';
+import { AgentSchema, type Agent } from '@stablehand/contracts';
 
 type AgentFixtureOverrides = Partial<Omit<Agent, 'id'>> & { id?: string };
 

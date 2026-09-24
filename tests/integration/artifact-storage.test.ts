@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { ArtifactStore } from '../../packages/ctxmill/src/artifact/artifact-store.js';
+import { ArtifactStore } from '../../packages/stablehand/src/artifact/artifact-store.js';
 
 const MINIO_ENDPOINT = process.env.S3_ENDPOINT || 'http://localhost:9000';
-const MINIO_ACCESS_KEY = process.env.S3_ACCESS_KEY || 'ctxmill';
-const MINIO_SECRET_KEY = process.env.S3_SECRET_KEY || 'ctxmill-dev';
+const MINIO_ACCESS_KEY = process.env.S3_ACCESS_KEY || 'stablehand';
+const MINIO_SECRET_KEY = process.env.S3_SECRET_KEY || 'stablehand-dev';
 const MINIO_REGION = process.env.S3_REGION || 'us-east-1';
 const TEST_BUCKET = `test-artifacts-${Date.now()}-${process.pid}`;
 

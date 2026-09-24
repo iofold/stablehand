@@ -36,7 +36,7 @@ This ADR records the load-bearing decisions.
 - The capability model covers `/api/*` only. The ConnectRPC sandbox callback
   surface uses session-scoped HMAC credentials (see codebase-map, "Sandbox
   callback auth") and is out of scope here.
-- Open mode (`CTXMILL_AUTH_DISABLED`, or tokenless outside production)
+- Open mode (`STABLEHAND_AUTH_DISABLED`, or tokenless outside production)
   bypasses the model entirely by design; production without a token is a
   fatal startup error.
 - `last_used_at` records presentation, not authorization — a key rejected

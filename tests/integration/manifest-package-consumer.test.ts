@@ -5,7 +5,7 @@ import {
   parseManifestString,
   validateManifest,
   type AgentManifest,
-} from '@ctxmill/manifest';
+} from '@stablehand/manifest';
 
 async function findAgentManifests(root: string): Promise<string[]> {
   const manifests: string[] = [];
@@ -20,10 +20,10 @@ async function findAgentManifests(root: string): Promise<string[]> {
   return manifests;
 }
 
-describe('@ctxmill/manifest consumer contract', () => {
-  it('parses and strictly validates an agent manifest without importing ctxmill core', () => {
+describe('@stablehand/manifest consumer contract', () => {
+  it('parses and strictly validates an agent manifest without importing stablehand core', () => {
     const parsed = parseManifestString(`
-apiVersion: ctxmill.io/v1
+apiVersion: stablehand.io/v1
 kind: Agent
 metadata:
   name: close-reviewer

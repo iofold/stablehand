@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const API_URL = process.env.CTXMILL_VERIFY_API_URL ?? 'http://localhost:3002/api/health';
-const UI_URL = process.env.CTXMILL_VERIFY_UI_URL ?? 'http://localhost:3200';
-const WAIT_TIMEOUT_MS = Number(process.env.CTXMILL_VERIFY_TIMEOUT_MS ?? 5 * 60 * 1000);
+const API_URL = process.env.STABLEHAND_VERIFY_API_URL ?? 'http://localhost:3002/api/health';
+const UI_URL = process.env.STABLEHAND_VERIFY_UI_URL ?? 'http://localhost:3200';
+const WAIT_TIMEOUT_MS = Number(process.env.STABLEHAND_VERIFY_TIMEOUT_MS ?? 5 * 60 * 1000);
 const POLL_INTERVAL_MS = 2_000;
 
 function run(command, args, options = {}) {

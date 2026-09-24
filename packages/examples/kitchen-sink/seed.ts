@@ -7,7 +7,7 @@ import {
   createWorkspaceArchive,
   loadManifestProject,
   type LoadedManifestProject,
-} from '@ctxmill/manifest/node';
+} from '@stablehand/manifest/node';
 
 type AgentPayload = LoadedManifestProject['agentCreateInput'];
 
@@ -27,7 +27,7 @@ type TriggerResult = {
 };
 
 const API_BASE = process.env.API_URL ?? 'http://localhost:3002';
-const API_TOKEN = process.env.CTXMILL_API_TOKEN;
+const API_TOKEN = process.env.STABLEHAND_API_TOKEN;
 const AGENTS_DIR = new URL('./agents/', import.meta.url);
 
 function authHeaders(): Record<string, string> {

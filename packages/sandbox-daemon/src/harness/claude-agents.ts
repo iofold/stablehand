@@ -134,7 +134,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * The Claude Agent SDK (>=0.3.195) requires `sessionId`/`resume` to be a bare
- * UUID and crashes the child process otherwise. ctxmill conversation ids are
+ * UUID and crashes the child process otherwise. stablehand conversation ids are
  * not always UUIDs — AG-UI/embed clients allocate ids like `thread-<uuid>` —
  * so coerce to a stable UUID. Same conversation id → same UUID, so the SDK's
  * session persistence and cross-turn `resume` stay aligned.
@@ -177,7 +177,7 @@ class ClaudeSession implements HarnessSession {
       approvalDelegate,
       this.queuedEvents,
     );
-    this.mcpServer = sdk.createSdkMcpServer({ name: 'ctxmill', tools: mcpTools });
+    this.mcpServer = sdk.createSdkMcpServer({ name: 'stablehand', tools: mcpTools });
     this.sdkSessionId = toSdkSessionId(config.conversationId);
   }
 
@@ -200,7 +200,7 @@ class ClaudeSession implements HarnessSession {
 
   private resolveSessionJSONLPaths(): string[] {
     const configDir = process.env.CLAUDE_CONFIG_DIR
-      ?? path.join(process.env.HOME ?? '/home/ctxmill', '.claude');
+      ?? path.join(process.env.HOME ?? '/home/stablehand', '.claude');
     const workspaceDir = this.config.workspaceDir || '/workspace';
     const sessionId = this.sdkSessionId;
     const sanitizedWorkspaceDir = workspaceDir.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 200);
@@ -247,7 +247,7 @@ class ClaudeSession implements HarnessSession {
           settingSources: ['project'],
           allowedTools: this.buildAllowedTools() ?? [],
           disallowedTools: this.buildDisallowedTools() ?? [],
-          mcpServers: { ctxmill: this.mcpServer },
+          mcpServers: { stablehand: this.mcpServer },
           permissionMode: 'bypassPermissions',
           allowDangerouslySkipPermissions: true,
           includeHookEvents: true,
@@ -490,9 +490,9 @@ class ClaudeSession implements HarnessSession {
       return undefined;
     }
     if (nativeToolPolicy.policy === 'none') {
-      return ['mcp__ctxmill__*'];
+      return ['mcp__stablehand__*'];
     }
-    return [...new Set([...nativeToolPolicy.names, 'mcp__ctxmill__*'])];
+    return [...new Set([...nativeToolPolicy.names, 'mcp__stablehand__*'])];
   }
 
   private buildDisallowedTools(): string[] | undefined {
@@ -505,7 +505,7 @@ class ClaudeSession implements HarnessSession {
     turnId?: string,
   ): Record<string, string> {
     const claudeEnv: Record<string, string> = {
-      HOME: process.env.HOME ?? '/home/ctxmill',
+      HOME: process.env.HOME ?? '/home/stablehand',
       PATH:
         process.env.PATH ??
         '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
@@ -587,10 +587,10 @@ class ClaudeSession implements HarnessSession {
       // Deployment-owned gateway access is translated into the one native
       // Anthropic credential and endpoint above. Do not forward the control
       // namespace itself into the child process.
-      'CTXMILL_MODEL_GATEWAY_ENABLED',
-      'CTXMILL_MODEL_GATEWAY_URL',
-      'CTXMILL_MODEL_GATEWAY_RUNTIME_KEY',
-      'CTXMILL_MODEL_GATEWAY_REVISION',
+      'STABLEHAND_MODEL_GATEWAY_ENABLED',
+      'STABLEHAND_MODEL_GATEWAY_URL',
+      'STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY',
+      'STABLEHAND_MODEL_GATEWAY_REVISION',
     ]);
     for (const [k, v] of Object.entries(process.env)) {
       if (v !== undefined && !(k in claudeEnv) && !ENV_BLOCKLIST.has(k)) claudeEnv[k] = v;
@@ -602,7 +602,7 @@ class ClaudeSession implements HarnessSession {
           k === 'ANTHROPIC_API_KEY'
           || k === 'ANTHROPIC_BASE_URL'
           || k === 'ANTHROPIC_CUSTOM_HEADERS'
-          || k.startsWith('CTXMILL_MODEL_GATEWAY_')
+          || k.startsWith('STABLEHAND_MODEL_GATEWAY_')
         )
       ) {
         continue;
@@ -1071,9 +1071,9 @@ export class ClaudeAgentsHarness implements AgentHarness {
       const preview = raw.slice(0, 200);
       console.error(`[claude-agents] Failed to parse tool args for call ${callId}; surfacing degraded args. Raw: ${preview}`, err);
       return {
-        __ctxmillDegraded: true,
-        __ctxmillError: `Failed to parse streamed Claude tool arguments: ${message}`,
-        __ctxmillRawArgsPreview: preview,
+        __stablehandDegraded: true,
+        __stablehandError: `Failed to parse streamed Claude tool arguments: ${message}`,
+        __stablehandRawArgsPreview: preview,
       };
     }
   }
@@ -1163,7 +1163,7 @@ export class ClaudeAgentsHarness implements AgentHarness {
         type: 'CUSTOM',
         timestamp: Date.now(),
         runId: '',
-        name: 'ctxmill.claude.runtime_capabilities',
+        name: 'stablehand.claude.runtime_capabilities',
         subtype: 'claude_runtime_capabilities',
         source: 'claude-agents',
         claudeSessionId: this.hookTelemetryString(value.session_id),

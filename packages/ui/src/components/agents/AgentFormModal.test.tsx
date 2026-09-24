@@ -193,7 +193,7 @@ describe('AgentFormModal', () => {
 
   it('edits manifest-backed agents through canonical YAML', async () => {
     const manifest = {
-      apiVersion: 'ctxmill.io/v1',
+      apiVersion: 'stablehand.io/v1',
       kind: 'Agent',
       metadata: { name: 'manifest-agent', description: 'From YAML' },
       spec: {
@@ -224,7 +224,7 @@ describe('AgentFormModal', () => {
       'textarea[aria-label="Agent manifest YAML"]',
     );
     expect(yamlEditor).not.toBeNull();
-    expect(yamlEditor?.value).toContain('apiVersion: ctxmill.io/v1');
+    expect(yamlEditor?.value).toContain('apiVersion: stablehand.io/v1');
     expect(yamlEditor?.className).toContain('min-h-[32rem]');
 
     const save = [...document.querySelectorAll('button')]

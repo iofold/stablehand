@@ -1,5 +1,5 @@
 {
-  "name": "@ctxmill/example-overnight-analyst",
+  "name": "@stablehand/example-overnight-analyst",
   "version": "0.1.0",
   "license": "MIT",
   "private": true,
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ctxmill/manifest": "workspace:*"
+    "@stablehand/manifest": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.8.3",

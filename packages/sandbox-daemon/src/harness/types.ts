@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import type { AgentSessionEvent } from '@ctxmill/shared';
-import type { NativeToolPolicy } from '@ctxmill/contracts';
+import type { AgentSessionEvent } from '@stablehand/shared';
+import type { NativeToolPolicy } from '@stablehand/contracts';
 import type { ToolDefinition } from '../tool/types.js';
 import type { Message } from '../types.js';
 import type {

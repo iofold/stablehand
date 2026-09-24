@@ -21,7 +21,7 @@ import {
   type RequestToolRequest,
   RequestToolRequestSchema,
   type RequestToolResponse,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 
 import { retryWithBackoff } from '../util/retry.js';
 import { stringifyJsonWithBigInts } from './json-serialization.js';

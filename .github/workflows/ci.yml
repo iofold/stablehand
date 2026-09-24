@@ -32,7 +32,7 @@ jobs:
       - name: Backend tests (strict mode)
         run: pnpm test:backend
         env:
-          CTXMILL_STRICT_TESTS: '1'
+          STABLEHAND_STRICT_TESTS: '1'
       - name: UI tests
         run: pnpm test:ui
       - name: React package tests
@@ -77,9 +77,9 @@ jobs:
           docker compose down -v || true
           cp .env.example .env
           echo "SECRET_MASTER_KEY=$(openssl rand -hex 32)" >> .env
-          CTXMILL_API_TOKEN="$(openssl rand -hex 32)"
-          echo "CTXMILL_API_TOKEN=$CTXMILL_API_TOKEN" >> .env
-          echo "CTXMILL_API_TOKEN=$CTXMILL_API_TOKEN" >> "$GITHUB_ENV"
+          STABLEHAND_API_TOKEN="$(openssl rand -hex 32)"
+          echo "STABLEHAND_API_TOKEN=$STABLEHAND_API_TOKEN" >> .env
+          echo "STABLEHAND_API_TOKEN=$STABLEHAND_API_TOKEN" >> "$GITHUB_ENV"
           docker compose up --build -d
       - name: Wait for Docker services
         run: |
@@ -116,14 +116,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build orchestrator image
-        run: docker build --target orchestrator -t ctxmill/orchestrator:ci -f Dockerfile .
+        run: docker build --target orchestrator -t stablehand/orchestrator:ci -f Dockerfile .
       - name: Build UI image
-        run: docker build --target ui -t ctxmill/ui:ci -f Dockerfile .
+        run: docker build --target ui -t stablehand/ui:ci -f Dockerfile .
       - name: Build harness images
         run: |
-          docker build --target harness-langgraph -t ctxmill/harness-langgraph:ci -f Dockerfile.sandbox .
-          docker build --target harness-claude-agents -t ctxmill/harness-claude-agents:ci -f Dockerfile.sandbox .
-          docker build --target harness-pi-agent -t ctxmill/harness-pi-agent:ci -f Dockerfile.sandbox .
+          docker build --target harness-langgraph -t stablehand/harness-langgraph:ci -f Dockerfile.sandbox .
+          docker build --target harness-claude-agents -t stablehand/harness-claude-agents:ci -f Dockerfile.sandbox .
+          docker build --target harness-pi-agent -t stablehand/harness-pi-agent:ci -f Dockerfile.sandbox .
 
   dev2-deploy:
     name: Deploy to dev2 + smoke (ADR 009)
@@ -173,7 +173,7 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Run required smoke against dev2
         run: |
-          export CTXMILL_API_TOKEN="$(kubectl -n ctxmill get secret ctxmill-core-secrets -o jsonpath='{.data.CTXMILL_API_TOKEN}' | base64 -d)"
+          export STABLEHAND_API_TOKEN="$(kubectl -n stablehand get secret stablehand-core-secrets -o jsonpath='{.data.STABLEHAND_API_TOKEN}' | base64 -d)"
           pnpm test:e2e:required
         env:
           KUBECONFIG: ${{ runner.temp }}/dev2-kubeconfig.yaml

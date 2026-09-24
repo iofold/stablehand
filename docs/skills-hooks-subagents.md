@@ -2,14 +2,14 @@
 
 You can extend your agents in two ways:
 
-1.  **Subagents**: A ctxmill-level abstraction for delegating tasks to specialized models.
+1.  **Subagents**: A stablehand-level abstraction for delegating tasks to specialized models.
 2.  **Workspace setup**: Generic symlink mappings for SDK-specific file discovery.
 
-Skills, hooks, and settings files aren't managed by ctxmill. These are user content in the workspace tarball. Use `setup.symlinks` to bridge your directory layout to SDK expectations.
+Skills, hooks, and settings files aren't managed by stablehand. These are user content in the workspace tarball. Use `setup.symlinks` to bridge your directory layout to SDK expectations.
 
 ## Workspace Setup (setup.symlinks)
 
-SDKs expect files in specific locations like `.claude/skills/` or `.claude/settings.json`. You define symlink mappings instead of having ctxmill copy files around.
+SDKs expect files in specific locations like `.claude/skills/` or `.claude/settings.json`. You define symlink mappings instead of having stablehand copy files around.
 
 ```yaml
 spec:
@@ -26,21 +26,21 @@ Paths are relative to the workspace root. Symlinks are created after workspace p
 
 For example, you upload a tarball with `skills/code-review/SKILL.md` and configure a symlink to `.claude/skills`. The Claude SDK then auto-discovers it.
 
-For LangGraph, keep skill-like instructions explicit in workspace files or harness configuration. CTXMill does not currently auto-seed `.ctxmill/skills`.
+For LangGraph, keep skill-like instructions explicit in workspace files or harness configuration. Stablehand does not currently auto-seed `.stablehand/skills`.
 
 ## Skills (User-Managed)
 
-Skills are user content. ctxmill doesn't manage them. You include skills in your workspace tarball under any directory you choose.
+Skills are user content. stablehand doesn't manage them. You include skills in your workspace tarball under any directory you choose.
 
-The `SKILL.md` format with YAML frontmatter is an SDK convention, not a ctxmill convention.
+The `SKILL.md` format with YAML frontmatter is an SDK convention, not a stablehand convention.
 *   **Claude Agents**: Place in a directory and symlink to `.claude/skills/`.
-*   **LangGraph**: Keep instructions in workspace files or harness-specific configuration; CTXMill does not manage a skill catalog for it.
+*   **LangGraph**: Keep instructions in workspace files or harness-specific configuration; Stablehand does not manage a skill catalog for it.
 
 See [Writing a Skill](writing-skills.md) for `SKILL.md` format reference.
 
 ## Subagents
 
-Subagents allow a parent agent to delegate complex or specialized tasks to other agents. This is the one ctxmill-level abstraction. It handles model instantiation and API key resolution.
+Subagents allow a parent agent to delegate complex or specialized tasks to other agents. This is the one stablehand-level abstraction. It handles model instantiation and API key resolution.
 
 ### Claude Agents Harness
 
@@ -57,7 +57,7 @@ In the Claude Agents harness, subagents are defined as a map (Record) in `harnes
 **Example Manifest:**
 
 ```yaml
-apiVersion: ctxmill.io/v1
+apiVersion: stablehand.io/v1
 kind: Agent
 metadata:
   name: manager-claude
@@ -91,7 +91,7 @@ In the LangGraph harness, subagents are defined as an array of objects in `harne
 **Example Manifest:**
 
 ```yaml
-apiVersion: ctxmill.io/v1
+apiVersion: stablehand.io/v1
 kind: Agent
 metadata:
   name: manager-langgraph
@@ -111,7 +111,7 @@ spec:
 
 ## Hooks (SDK-Managed)
 
-- ctxmill does NOT manage hooks at the config level
+- stablehand does NOT manage hooks at the config level
 - For Claude Agents: hooks are configured via `.claude/settings.json` in the workspace. Include the file in your tarball, use `setup.symlinks` if it lives elsewhere:
   ```yaml
   harnessConfig:
@@ -132,7 +132,7 @@ spec:
   }
   ```
 
-- For LangGraph: hooks middleware is NOT supported by ctxmill. If you need custom hooks, build a custom harness image extending the ctxmill LangGraph base image (`ctxmill/harness-langgraph`) with your own middleware.
+- For LangGraph: hooks middleware is NOT supported by stablehand. If you need custom hooks, build a custom harness image extending the stablehand LangGraph base image (`stablehand/harness-langgraph`) with your own middleware.
 
 - For PI Agent: hooks are managed by the PI SDK's extension system. Include extensions in your workspace tarball.
 

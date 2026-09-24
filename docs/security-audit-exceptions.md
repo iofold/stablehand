@@ -19,8 +19,8 @@ in the root `package.json` and must be documented here with a rationale and a re
 | GHSA | Severity | Package | Rationale | Re-evaluate when |
 | --- | --- | --- | --- | --- |
 | GHSA-jfgx-wxx8-mp94 | high | `@mariozechner/pi-coding-agent` | Predictable temp extension-install paths enable local privilege escalation on *shared multi-user hosts*. Pi runs only inside single-tenant sandbox containers (one agent per container); no shared-host exposure. No patched release exists (advisory covers ≤0.73.1, latest). | Pi releases > 0.73.1, or Pi extensions are enabled on shared infrastructure. |
-| GHSA-7v5m-pr3q-6453 | low | `@mariozechner/pi-coding-agent` | XSS via Pi's HTML session-export feature. CTXMill never invokes Pi session exports; transcripts flow through the AgentEvent pipeline. No patched release exists. | Pi releases > 0.73.1, or session-export is adopted. |
-| GHSA-r95r-rj6r-c39x | low | `@mariozechner/pi-coding-agent` | Race in Pi's own `auth.json` credential store. CTXMill injects provider keys via the secrets pipeline (env), not Pi's auth store. No patched release exists. | Pi releases > 0.73.1, or Pi auth store is adopted. |
+| GHSA-7v5m-pr3q-6453 | low | `@mariozechner/pi-coding-agent` | XSS via Pi's HTML session-export feature. Stablehand never invokes Pi session exports; transcripts flow through the AgentEvent pipeline. No patched release exists. | Pi releases > 0.73.1, or session-export is adopted. |
+| GHSA-r95r-rj6r-c39x | low | `@mariozechner/pi-coding-agent` | Race in Pi's own `auth.json` credential store. Stablehand injects provider keys via the secrets pipeline (env), not Pi's auth store. No patched release exists. | Pi releases > 0.73.1, or Pi auth store is adopted. |
 
 ## Override pins
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapMessagesToInternal } from '../../packages/ctxmill/src/orchestrator/routes/agent-helpers.js';
+import { mapMessagesToInternal } from '../../packages/stablehand/src/orchestrator/routes/agent-helpers.js';
 
 describe('canonical transcript assembly', () => {
   it('orders by createdAt then id and de-duplicates replayed rows by message id', () => {

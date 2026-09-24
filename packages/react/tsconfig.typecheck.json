@@ -5,7 +5,7 @@
     "noEmit": true,
     "rootDir": "..",
     "paths": {
-      "@ctxmill/client": ["../client/src/index.ts"]
+      "@stablehand/client": ["../client/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "../client/src/**/*.ts"],

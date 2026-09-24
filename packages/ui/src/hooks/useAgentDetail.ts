@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import type { ConversationSummary } from '@ctxmill/contracts';
+import type { ConversationSummary } from '@stablehand/contracts';
 import { useAgentsStore } from '@/stores/agents';
 import type { AgentTurn } from '@/stores/agents';
 import type { Agent } from '@/stores/agents';

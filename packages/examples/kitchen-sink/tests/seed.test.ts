@@ -152,7 +152,7 @@ async function runSeeder(options: MockApiOptions = {}): Promise<{
         env: {
           ...process.env,
           API_URL: `http://127.0.0.1:${address.port}`,
-          CTXMILL_API_TOKEN: 'seed-test-token',
+          STABLEHAND_API_TOKEN: 'seed-test-token',
         },
         timeout: 30_000,
       },

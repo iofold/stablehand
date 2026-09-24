@@ -22,7 +22,7 @@ describe('artifact-gallery webhook signatures', () => {
   const body = '{"artifactId":"a-1"}';
   const ts = String(NOW_SEC);
 
-  it('accepts a valid CTXMill delivery signature', () => {
+  it('accepts a valid Stablehand delivery signature', () => {
     expect(verifyWebhookSignature({
       secret,
       rawBody: body,

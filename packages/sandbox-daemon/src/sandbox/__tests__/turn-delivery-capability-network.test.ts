@@ -13,7 +13,7 @@ import {
   OpenSessionRequestSchema,
   RenewTurnDeliveryCapabilityRequestSchema,
   TurnDeliveryCapabilitySchema,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -75,7 +75,7 @@ function capability(
     restoreFenceToken: 0n,
     containerId: 'container-1',
     agentId: 'agent-1',
-    signature: 'ctxmill-open-turn-delivery-capability-v1',
+    signature: 'stablehand-open-turn-delivery-capability-v1',
   });
 }
 
@@ -120,7 +120,7 @@ describe('turn delivery capability network boundary', () => {
           harnessName: 'langgraph',
           harnessConfigJson: '{}',
           systemPrompt: 'network test',
-          workspaceDir: '/tmp/ctxmill-capability-network',
+          workspaceDir: '/tmp/stablehand-capability-network',
           sessionId: 'session-1',
         }),
       },

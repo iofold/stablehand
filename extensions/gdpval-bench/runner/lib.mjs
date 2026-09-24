@@ -7,10 +7,10 @@ export const REPO_ROOT = join(EXT_DIR, '..', '..');
 export const CONFIG = JSON.parse(readFileSync(join(EXT_DIR, 'runner', 'config.json'), 'utf8'));
 
 function readEnvToken() {
-  if (process.env.CTXMILL_API_TOKEN) return process.env.CTXMILL_API_TOKEN;
+  if (process.env.STABLEHAND_API_TOKEN) return process.env.STABLEHAND_API_TOKEN;
   const env = readFileSync(join(REPO_ROOT, '.env'), 'utf8');
-  const m = env.match(/^CTXMILL_API_TOKEN=(.+)$/m);
-  if (!m) throw new Error('CTXMILL_API_TOKEN not found');
+  const m = env.match(/^STABLEHAND_API_TOKEN=(.+)$/m);
+  if (!m) throw new Error('STABLEHAND_API_TOKEN not found');
   return m[1].trim();
 }
 

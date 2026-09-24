@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { AgentBudgetStatus, BudgetPolicy, BudgetWindow } from '@ctxmill/contracts';
+import type { AgentBudgetStatus, BudgetPolicy, BudgetWindow } from '@stablehand/contracts';
 import { fetchAgentBudgetStatuses, fetchBudgetPolicies } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { formatCompactNumber } from '@/lib/format';

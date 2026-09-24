@@ -1,12 +1,12 @@
 # =============================================================================
-# Dockerfile.sandbox — Multi-stage build for CTXMill sandbox containers.
+# Dockerfile.sandbox — Multi-stage build for Stablehand sandbox containers.
 #
 # Each harness type gets its own final image sharing a common base layer.
 #
 # Build a specific harness image:
-#   docker build --target harness-langgraph      -t ctxmill/harness-langgraph      -f Dockerfile.sandbox .
-#   docker build --target harness-claude-agents -t ctxmill/harness-claude-agents -f Dockerfile.sandbox .
-#   docker build --target harness-pi-agent       -t ctxmill/harness-pi-agent       -f Dockerfile.sandbox .
+#   docker build --target harness-langgraph      -t stablehand/harness-langgraph      -f Dockerfile.sandbox .
+#   docker build --target harness-claude-agents -t stablehand/harness-claude-agents -f Dockerfile.sandbox .
+#   docker build --target harness-pi-agent       -t stablehand/harness-pi-agent       -f Dockerfile.sandbox .
 # =============================================================================
 
 # ── Stage 1: Build (compile TypeScript) ──────────────────────────────────────
@@ -23,12 +23,12 @@ COPY packages/contracts/package.json packages/contracts/tsconfig.json packages/c
 COPY packages/manifest/package.json packages/manifest/tsconfig.json packages/manifest/
 COPY packages/client/package.json packages/client/tsconfig.json packages/client/
 COPY packages/react/package.json packages/react/tsconfig.json packages/react/tsconfig.typecheck.json packages/react/
-COPY packages/ctxmill/package.json packages/ctxmill/tsconfig.json packages/ctxmill/
+COPY packages/stablehand/package.json packages/stablehand/tsconfig.json packages/stablehand/
 COPY packages/proto/package.json packages/proto/tsconfig.build.json packages/proto/
 COPY packages/sandbox-daemon/package.json packages/sandbox-daemon/tsconfig.json packages/sandbox-daemon/
 
 COPY packages/examples/ packages/examples/
-COPY packages/create-ctxmill/package.json packages/create-ctxmill/
+COPY packages/create-stablehand/package.json packages/create-stablehand/
 COPY packages/ui/package.json packages/ui/
 
 RUN pnpm install --frozen-lockfile
@@ -38,18 +38,18 @@ COPY packages/contracts/src/ packages/contracts/src/
 COPY packages/manifest/src/ packages/manifest/src/
 COPY packages/client/src/ packages/client/src/
 COPY packages/react/src/ packages/react/src/
-COPY packages/ctxmill/src/ packages/ctxmill/src/
+COPY packages/stablehand/src/ packages/stablehand/src/
 COPY packages/sandbox-daemon/src/ packages/sandbox-daemon/src/
 COPY packages/proto/ packages/proto/
 
-RUN pnpm --filter @ctxmill/contracts build
+RUN pnpm --filter @stablehand/contracts build
 RUN cd packages/shared && npx tsc --build
 RUN cd packages/proto && npx tsc -p tsconfig.build.json
-RUN pnpm --filter @ctxmill/manifest build
-RUN pnpm --filter @ctxmill/sandbox-daemon build
-RUN pnpm --filter ctxmill build
+RUN pnpm --filter @stablehand/manifest build
+RUN pnpm --filter @stablehand/sandbox-daemon build
+RUN pnpm --filter stablehand build
 
-RUN pnpm --filter @ctxmill/sandbox-daemon deploy --prod --legacy /app/deploy/sandbox-daemon
+RUN pnpm --filter @stablehand/sandbox-daemon deploy --prod --legacy /app/deploy/sandbox-daemon
 
 
 # ── Stage 2: harness-base (shared runtime for all harness images) ────────────
@@ -65,27 +65,27 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
 
 RUN deluser --remove-home node 2>/dev/null; \
-    addgroup -g 1000 ctxmill && adduser -u 1000 -G ctxmill -D -s /bin/sh -h /home/ctxmill ctxmill
+    addgroup -g 1000 stablehand && adduser -u 1000 -G stablehand -D -s /bin/sh -h /home/stablehand stablehand
 
-ENV HOME=/home/ctxmill
+ENV HOME=/home/stablehand
 
 WORKDIR /app
-RUN chown ctxmill:ctxmill /app
+RUN chown stablehand:stablehand /app
 
-USER ctxmill
+USER stablehand
 
-COPY --chown=ctxmill:ctxmill --from=build /app/deploy/sandbox-daemon/node_modules/ node_modules/
-COPY --chown=ctxmill:ctxmill --from=build /app/deploy/sandbox-daemon/package.json ./
+COPY --chown=stablehand:stablehand --from=build /app/deploy/sandbox-daemon/node_modules/ node_modules/
+COPY --chown=stablehand:stablehand --from=build /app/deploy/sandbox-daemon/package.json ./
 
-COPY --chown=ctxmill:ctxmill --from=build /app/packages/shared/dist/ packages/shared/dist/
-COPY --chown=ctxmill:ctxmill --from=build /app/packages/shared/package.json packages/shared/
-COPY --chown=ctxmill:ctxmill --from=build /app/packages/sandbox-daemon/dist/ packages/sandbox-daemon/dist/
-COPY --chown=ctxmill:ctxmill --from=build /app/packages/sandbox-daemon/src/ packages/sandbox-daemon/src/
-COPY --chown=ctxmill:ctxmill --from=build /app/packages/proto/ packages/proto/
+COPY --chown=stablehand:stablehand --from=build /app/packages/shared/dist/ packages/shared/dist/
+COPY --chown=stablehand:stablehand --from=build /app/packages/shared/package.json packages/shared/
+COPY --chown=stablehand:stablehand --from=build /app/packages/sandbox-daemon/dist/ packages/sandbox-daemon/dist/
+COPY --chown=stablehand:stablehand --from=build /app/packages/sandbox-daemon/src/ packages/sandbox-daemon/src/
+COPY --chown=stablehand:stablehand --from=build /app/packages/proto/ packages/proto/
 
 USER root
 ENV HOME=/root
-RUN mkdir -p /workspace && chown ctxmill:ctxmill /workspace
+RUN mkdir -p /workspace && chown stablehand:stablehand /workspace
 RUN cd /app && node -e "require.resolve('playwright')"
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     install -m 0755 /root/.local/bin/uv /usr/local/bin/uv && \
@@ -93,8 +93,8 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     /usr/local/bin/uv venv /opt/venv && \
     /usr/local/bin/uv pip install --python /opt/venv/bin/python python-docx python-pptx openpyxl pdfplumber pillow trafilatura
 ENV PATH="/opt/venv/bin:$PATH"
-ENV HOME=/home/ctxmill
-USER ctxmill
+ENV HOME=/home/stablehand
+USER stablehand
 
 EXPOSE 50051
 
@@ -114,7 +114,7 @@ USER root
 RUN npm install -g @anthropic-ai/claude-code@2.1.195 \
     && printf '#!/bin/sh\nexec /usr/local/bin/node "$@"\n' > /usr/local/bin/claude-wrapper && chmod +x /usr/local/bin/claude-wrapper
 ENV CLAUDE_CODE_PATH=/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js
-USER ctxmill
+USER stablehand
 WORKDIR /app
 
 ENTRYPOINT ["tini", "--", "bun", "run", "--preload", "./packages/sandbox-daemon/src/observability/otel-auto-register.ts", "./packages/sandbox-daemon/src/sandbox/daemon.ts"]

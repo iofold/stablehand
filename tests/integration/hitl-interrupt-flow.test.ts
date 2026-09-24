@@ -6,8 +6,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
-import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
+import { TypedEventBus } from '../../packages/stablehand/src/events/bus.js';
+import { InterruptManager } from '../../packages/stablehand/src/orchestrator/interrupt.js';
 
 import {
   collectEvents,
@@ -59,12 +59,12 @@ describe('HITL Interrupt Lifecycle', () => {
        const interruptId = interruptedEvents.events[0].interruptId;
        expect(interruptId).not.toBe('run-1');
 
-      // Verify the canonical wire carried it as CUSTOM{name:'ctxmill.interrupt.requested'}
+      // Verify the canonical wire carried it as CUSTOM{name:'stablehand.interrupt.requested'}
       await flushWire();
       expect(harness.wire).toHaveLength(1);
       expect(harness.wire[0]).toEqual({
         agentId: 'agent-1',
-        event: expect.objectContaining({ type: 'CUSTOM', name: 'ctxmill.interrupt.requested', toolCallId: 'tc-1' }),
+        event: expect.objectContaining({ type: 'CUSTOM', name: 'stablehand.interrupt.requested', toolCallId: 'tc-1' }),
       });
 
       // Resolve with approve
@@ -90,7 +90,7 @@ describe('HITL Interrupt Lifecycle', () => {
       await flushWire();
       expect(harness.wire.some((entry) =>
         entry.event.type === 'CUSTOM'
-        && entry.event.name === 'ctxmill.interrupt.resolved'
+        && entry.event.name === 'stablehand.interrupt.resolved'
         && entry.event.action === 'approve')).toBe(true);
 
       interruptedEvents.unsubscribe();

@@ -1,7 +1,7 @@
 /**
  * The single source of truth for lifecycle status presentation.
  *
- * CTXMill has separate sandbox/container lifecycle (ACTIVE,
+ * Stablehand has separate sandbox/container lifecycle (ACTIVE,
  * CHECKPOINTED, RESTORING, TERMINATED) and turn lifecycle (QUEUED,
  * RUNNING, COMPLETED, ERROR, CANCELLED) domains. Every
  * surface (dashboard dots, status badges, filter chips) must render them

@@ -1,13 +1,13 @@
-# Embedding ctxmill in Foreign Docker Compose Stacks
+# Embedding stablehand in Foreign Docker Compose Stacks
 
-This guide provides operational instructions for embedding the ctxmill agent runtime into an existing Docker Compose environment. It addresses common networking, configuration, and deployment issues encountered when moving beyond the default standalone stack.
+This guide provides operational instructions for embedding the stablehand agent runtime into an existing Docker Compose environment. It addresses common networking, configuration, and deployment issues encountered when moving beyond the default standalone stack.
 
 ## Quick Start
 
-For those already familiar with Docker Compose, follow these steps to integrate ctxmill:
+For those already familiar with Docker Compose, follow these steps to integrate stablehand:
 
 1.  **Add Services**: Include `orchestrator`, `postgres`, and `minio` in your `docker-compose.yml`.
-2.  **Network**: Connect the `orchestrator` to your application network and a new `ctxmill-agents` bridge network.
+2.  **Network**: Connect the `orchestrator` to your application network and a new `stablehand-agents` bridge network.
 3.  **Callback URL**: Set `ORCHESTRATOR_CALLBACK_URL=http://<your-orchestrator-service-name>:3001`.
 4.  **Docker Socket**: Mount `/var/run/docker.sock` into the `orchestrator` container.
 5.  **Build Harnesses**: Sandbox images now build by default with `docker compose up --build`.
@@ -22,7 +22,7 @@ For those already familiar with Docker Compose, follow these steps to integrate 
 
 ## Docker Compose Integration
 
-To add ctxmill to an existing stack, you typically need the orchestrator and its dependencies. Below is a realistic snippet showing how to merge these services.
+To add stablehand to an existing stack, you typically need the orchestrator and its dependencies. Below is a realistic snippet showing how to merge these services.
 
 ```yaml
 services:
@@ -32,34 +32,34 @@ services:
     networks:
       - app-network
 
-  # ctxmill Orchestrator
+  # stablehand Orchestrator
   orchestrator:
-    image: ctxmill/orchestrator:latest
+    image: stablehand/orchestrator:latest
     build:
       context: .
       dockerfile: Dockerfile
       target: orchestrator
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgres://ctxmill:ctxmill@postgres:5432/ctxmill
+      - DATABASE_URL=postgres://stablehand:stablehand@postgres:5432/stablehand
       - SECRET_MASTER_KEY=${SECRET_MASTER_KEY}
-      - CTXMILL_API_TOKEN=${CTXMILL_API_TOKEN}
-      # Optional: set when callback auth should not reuse CTXMILL_API_TOKEN.
-      - CTXMILL_CALLBACK_TOKEN_SECRET=${CTXMILL_CALLBACK_TOKEN_SECRET}
+      - STABLEHAND_API_TOKEN=${STABLEHAND_API_TOKEN}
+      # Optional: set when callback auth should not reuse STABLEHAND_API_TOKEN.
+      - STABLEHAND_CALLBACK_TOKEN_SECRET=${STABLEHAND_CALLBACK_TOKEN_SECRET}
       - ORCHESTRATOR_CALLBACK_URL=http://orchestrator:3001
-      - CTXMILL_DATA_VOLUME=myapp_ctxmill-data
+      - STABLEHAND_DATA_VOLUME=myapp_stablehand-data
       - S3_ENDPOINT=http://minio:9000
       - S3_PUBLIC_ENDPOINT=https://myapp.com/minio
-      - S3_ACCESS_KEY=ctxmill
-      - S3_SECRET_KEY=ctxmill-dev
+      - S3_ACCESS_KEY=stablehand
+      - S3_SECRET_KEY=stablehand-dev
       - CORS_ORIGINS=https://myapp.com,http://localhost:3200
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ctxmill-data:/app/project/.ctxmill
+      - stablehand-data:/app/project/.stablehand
     networks:
       - app-network
-      - ctxmill-agents
+      - stablehand-agents
     depends_on:
       postgres:
         condition: service_healthy
@@ -69,28 +69,28 @@ services:
   postgres:
     image: pgvector/pgvector:pg17
     environment:
-      - POSTGRES_USER=ctxmill
-      - POSTGRES_PASSWORD=ctxmill
-      - POSTGRES_DB=ctxmill
+      - POSTGRES_USER=stablehand
+      - POSTGRES_PASSWORD=stablehand
+      - POSTGRES_DB=stablehand
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
       - app-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ctxmill"]
+      test: ["CMD-SHELL", "pg_isready -U stablehand"]
       interval: 5s
 
   minio:
     image: minio/minio:latest
     command: server /data
     environment:
-      - MINIO_ROOT_USER=ctxmill
-      - MINIO_ROOT_PASSWORD=ctxmill-dev
+      - MINIO_ROOT_USER=stablehand
+      - MINIO_ROOT_PASSWORD=stablehand-dev
     volumes:
       - minio-data:/data
     networks:
       - app-network
-      - ctxmill-agents
+      - stablehand-agents
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
@@ -98,35 +98,35 @@ services:
 networks:
   app-network:
     driver: bridge
-  ctxmill-agents:
-    name: ctxmill-agents
+  stablehand-agents:
+    name: stablehand-agents
     driver: bridge
 
 volumes:
   pgdata:
-  ctxmill-data:
+  stablehand-data:
   minio-data:
 ```
 
 ## Network Configuration
 
-### The `ctxmill-agents` Network
-The orchestrator spawns sandbox containers dynamically. These containers must be on a network that the orchestrator can also reach. By default, ctxmill uses a bridge network named `ctxmill-agents`. 
+### The `stablehand-agents` Network
+The orchestrator spawns sandbox containers dynamically. These containers must be on a network that the orchestrator can also reach. By default, stablehand uses a bridge network named `stablehand-agents`. 
 
-If you rename this network, you must update the `networkName` in the orchestrator configuration (though it defaults to `ctxmill-agents` in the code).
+If you rename this network, you must update the `networkName` in the orchestrator configuration (though it defaults to `stablehand-agents` in the code).
 
 ### ORCHESTRATOR_CALLBACK_URL
 This is the most critical setting for foreign stacks. When a sandbox container starts, it needs to call back to the orchestrator via gRPC to request tools or emit events. 
 
 *   **Default**: `http://orchestrator:3001`
-*   **Requirement**: If your orchestrator service is named `ctxmill-api` in your compose file, you **must** set `ORCHESTRATOR_CALLBACK_URL=http://ctxmill-api:3001`. Failure to do this results in agents hanging or timing out immediately.
+*   **Requirement**: If your orchestrator service is named `stablehand-api` in your compose file, you **must** set `ORCHESTRATOR_CALLBACK_URL=http://stablehand-api:3001`. Failure to do this results in agents hanging or timing out immediately.
 
 ### Sandbox DNS Isolation
-Sandbox containers are isolated from your main application network by default. They can only see the orchestrator and other services explicitly added to the `ctxmill-agents` network (like MinIO). If your agents need to reach your internal API, you must add your API service to the `ctxmill-agents` network.
+Sandbox containers are isolated from your main application network by default. They can only see the orchestrator and other services explicitly added to the `stablehand-agents` network (like MinIO). If your agents need to reach your internal API, you must add your API service to the `stablehand-agents` network.
 
 ## Configuration & Timeouts
 
-### CTXMILL_TURN_TIMEOUT_MS
+### STABLEHAND_TURN_TIMEOUT_MS
 By default, a single agent turn (one LLM call + tool executions) times out after 30 minutes (1,800,000ms). For long-running agents or complex tasks, this may be too short.
 
 *   **How to configure**: This is a system setting stored in the database. You can update it via the UI (Settings page) or by sending a `PUT` request to `/api/settings`:
@@ -150,9 +150,9 @@ In this repository's default compose file, harness images are wired through buil
 
 Run these commands from the project root:
 ```bash
-docker build --target harness-langgraph -t ctxmill/harness-langgraph -f Dockerfile.sandbox .
-docker build --target harness-claude-agents -t ctxmill/harness-claude-agents -f Dockerfile.sandbox .
-docker build --target harness-pi-agent -t ctxmill/harness-pi-agent -f Dockerfile.sandbox .
+docker build --target harness-langgraph -t stablehand/harness-langgraph -f Dockerfile.sandbox .
+docker build --target harness-claude-agents -t stablehand/harness-claude-agents -f Dockerfile.sandbox .
+docker build --target harness-pi-agent -t stablehand/harness-pi-agent -f Dockerfile.sandbox .
 ```
 
 In this repo, build all services including sandbox images via compose:
@@ -165,7 +165,7 @@ docker compose build
 Sandbox sessions have two deliberately separate secret lifetimes:
 
 1. At container start or checkpoint restore, the orchestrator reads its host
-   allowlist and the agent's Secret Store, adds CTXMill's session-control
+   allowlist and the agent's Secret Store, adds Stablehand's session-control
    credentials, and injects that stable map into the container environment.
 2. For each accepted `POST /api/agents/:id/message` or
    `POST /api/agents/:id/turns`, optional `sandboxSecrets` travel only on the
@@ -182,7 +182,7 @@ HITL continuation recover that same map; terminal finalization deletes it.
 
 Where a harness consumes both maps for the same integration, precedence is:
 allowlisted host env < per-agent Secret Store < per-turn `sandboxSecrets`.
-CTXMill's own session-control credentials are not overrideable.
+Stablehand's own session-control credentials are not overrideable.
 
 ### SANDBOX_SECRET_ALLOWLIST
 The orchestrator only passes specific environment variables to the sandbox. The current allowlist includes:
@@ -202,20 +202,20 @@ This means the current model is:
 - per-agent secret store → sandbox: **any key name**
 - per-turn `sandboxSecrets` → harness/model/child process: **explicit immutable map for only the admitted interactive/background turn**
 
-If you need custom secrets for tools or harnesses, the supported path today is to store them in the CTXMILL Secret Store (via the API/UI) rather than expecting arbitrary host env passthrough.
+If you need custom secrets for tools or harnesses, the supported path today is to store them in the STABLEHAND Secret Store (via the API/UI) rather than expecting arbitrary host env passthrough.
 
 For short-lived integration tokens that should not be stored on the agent, pass `sandboxSecrets` when starting a background run:
 
 ```bash
 curl -X POST http://orchestrator:3001/api/agents/$AGENT_ID/turns \
-  -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+  -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"task":"Run the monthly close workflow","sandboxSecrets":{"MYAPP_SERVICE_TOKEN":"jwt-or-token"}}'
 ```
 
 Per-turn sandbox secrets are never persisted in plaintext. They do not appear
 in task messages, agent records, container definitions, events, or checkpoints.
-CTXMill retains only an authenticated encrypted envelope while the turn is open
+Stablehand retains only an authenticated encrypted envelope while the turn is open
 so the same turn can survive queueing, process restart, or checkpointed HITL.
 The envelope is deleted atomically when that turn reaches a terminal state.
 
@@ -228,7 +228,7 @@ Detached work that outlives its admitted turn cannot use the expired turn
 context. Use an authenticated service call or a stored agent secret for
 background activity with a longer lifetime.
 
-The API rejects sandbox runtime-control keys: every `CTXMILL_*` key plus
+The API rejects sandbox runtime-control keys: every `STABLEHAND_*` key plus
 `ORCHESTRATOR_URL`, `SANDBOX_PORT`, `PTC_PORT`, and `NODE_OPTIONS`.
 
 ### Registering a custom secret end-to-end
@@ -240,17 +240,17 @@ The Secret Store API is per-agent. Once stored, the key is injected as an env va
 # the sandbox process will see in its environment — pick whatever your tool
 # code expects to read.
 curl -X POST http://orchestrator:3001/api/agents/$AGENT_ID/secrets \
-  -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+  -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"key":"MYAPP_SERVICE_TOKEN","value":"sk-..."}'
 
 # List stored keys (values are never returned).
-curl -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+curl -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
   http://orchestrator:3001/api/agents/$AGENT_ID/secrets
 
 # Delete when rotating.
 curl -X DELETE \
-  -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+  -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
   http://orchestrator:3001/api/agents/$AGENT_ID/secrets/MYAPP_SERVICE_TOKEN
 ```
 
@@ -269,7 +269,7 @@ Values are encrypted at rest with AES-256-GCM using `SECRET_MASTER_KEY`; plainte
 
 ## Sandbox Egress
 
-CTXMill does not currently enforce an outbound proxy or domain allowlist for sandbox containers. If your environment requires egress control, apply it outside CTXMill with your Docker network, firewall, Kubernetes NetworkPolicy, service mesh, or gateway.
+Stablehand does not currently enforce an outbound proxy or domain allowlist for sandbox containers. If your environment requires egress control, apply it outside Stablehand with your Docker network, firewall, Kubernetes NetworkPolicy, service mesh, or gateway.
 
 ## Volume Mounting
 
@@ -277,11 +277,11 @@ CTXMill does not currently enforce an outbound proxy or domain allowlist for san
 The orchestrator **must** have access to `/var/run/docker.sock`. This allows it to use the Docker API to create, start, and monitor sandbox containers.
 
 ### Data Volume
-The `CTXMILL_DATA_VOLUME` environment variable tells the orchestrator which volume to use for persistent agent data (workspaces, checkpoints). In a foreign stack, ensure this matches the volume name defined in your `volumes` section.
+The `STABLEHAND_DATA_VOLUME` environment variable tells the orchestrator which volume to use for persistent agent data (workspaces, checkpoints). In a foreign stack, ensure this matches the volume name defined in your `volumes` section.
 
 ## CORS Configuration
 
-If you are hosting the ctxmill UI on a different domain than the API, you must configure `CORS_ORIGINS`.
+If you are hosting the stablehand UI on a different domain than the API, you must configure `CORS_ORIGINS`.
 
 *   **Example**: `CORS_ORIGINS=https://agents.mycompany.com,https://app.mycompany.com`
 *   **Default**: `http://localhost:3200`
@@ -296,13 +296,13 @@ If you are hosting the ctxmill UI on a different domain than the API, you must c
 
 ## Using AG-UI Renderers
 
-If you want to use a third-party AG-UI renderer (CopilotKit, agui-hooks, @assistant-ui/react, etc.) or the embeddable `@ctxmill/react` package instead of ctxmill's built-in dashboard, the orchestrator exposes an AG-UI compatible endpoint:
+If you want to use a third-party AG-UI renderer (CopilotKit, agui-hooks, @assistant-ui/react, etc.) or the embeddable `@stablehand/react` package instead of stablehand's built-in dashboard, the orchestrator exposes an AG-UI compatible endpoint:
 
 ```
 POST http://<orchestrator>:3002/api/ag-ui/:agentId/run
 ```
 
-Point any AG-UI renderer at that URL, or use the CTXMill React wrapper documented in [React Chat Integration](integrate-chat-ui.md). See [AG-UI Compatibility](ag-ui-compat.md) for protocol details.
+Point any AG-UI renderer at that URL, or use the Stablehand React wrapper documented in [React Chat Integration](integrate-chat-ui.md). See [AG-UI Compatibility](ag-ui-compat.md) for protocol details.
 
 ## Troubleshooting Checklist
 

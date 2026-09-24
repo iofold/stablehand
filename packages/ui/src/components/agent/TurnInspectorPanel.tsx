@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { X, Copy, Check, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
-import type { AgentBudgetStatus, Turn } from '@ctxmill/contracts';
+import type { AgentBudgetStatus, Turn } from '@stablehand/contracts';
 import { fetchTurnDetail, fetchAgentBudgetStatuses } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { formatDurationBetween, formatCompactNumber } from '@/lib/format';

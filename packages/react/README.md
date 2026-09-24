@@ -1,19 +1,19 @@
-# @ctxmill/react
+# @stablehand/react
 
-React chat state and components for CTXMill's strict canonical AG-UI stream.
+React chat state and components for Stablehand's strict canonical AG-UI stream.
 
 ```tsx
-import { CtxmillChat, CtxmillProvider } from '@ctxmill/react';
+import { StablehandChat, StablehandProvider } from '@stablehand/react';
 
 export function AgentChat() {
   return (
-    <CtxmillProvider apiBase="/api">
-      <CtxmillChat agentId="reconciler" />
-    </CtxmillProvider>
+    <StablehandProvider apiBase="/api">
+      <StablehandChat agentId="reconciler" />
+    </StablehandProvider>
   );
 }
 ```
 
-The reducer consumes the same event union as `@ctxmill/contracts`. Interrupts
+The reducer consumes the same event union as `@stablehand/contracts`. Interrupts
 use durable `interruptId`/`turnId`/`conversationId` identities, text uses
 `delta`, and tool completion uses `TOOL_CALL_RESULT`.

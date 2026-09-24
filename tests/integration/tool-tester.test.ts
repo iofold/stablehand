@@ -2,10 +2,10 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
 import { z } from 'zod';
 
-import { DefaultToolRegistry } from '../../packages/ctxmill/src/tool/registry.js';
-import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
-import { LocalToolProvider } from '../../packages/ctxmill/src/tool/providers/local.js';
-import { emitEventTool } from '../../packages/ctxmill/src/tool/builtin/emit-event.js';
+import { DefaultToolRegistry } from '../../packages/stablehand/src/tool/registry.js';
+import { LocalFunctionExecutor } from '../../packages/stablehand/src/tool/executor.js';
+import { LocalToolProvider } from '../../packages/stablehand/src/tool/providers/local.js';
+import { emitEventTool } from '../../packages/stablehand/src/tool/builtin/emit-event.js';
 import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
 interface ToolTestSuccessResponse {
@@ -41,7 +41,7 @@ describe('POST /api/catalogs/tools/test', () => {
     await toolRegistry.refresh();
 
     testApp = await createTestApp({
-      dirPrefix: 'ctxmill-tool-tester-',
+      dirPrefix: 'stablehand-tool-tester-',
       serverOptions: { toolDefinitionRegistry: toolRegistry },
     });
     app = testApp.app;

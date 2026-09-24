@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ConversationSnapshotResponseSchema,
   type ConversationSnapshot,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 
 import { SessionPage } from '../SessionPage';
 import { useAgentsStore } from '@/stores/agents';

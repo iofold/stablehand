@@ -2,17 +2,18 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CanonicalStreamEventSchema,
   WEBHOOK_PAYLOAD_SCHEMAS,
-} from '@ctxmill/contracts';
-import { createDatabase, type DatabaseConnection } from '../../packages/ctxmill/src/database/connection.js';
+} from '@stablehand/contracts';
+import { createDatabase, type DatabaseConnection } from '../../packages/stablehand/src/database/connection.js';
 import {
   CANONICAL_EVENT_CONTRACTS_MIGRATION_ID,
   INTERRUPT_TOOL_NAME_MIGRATION_ID,
   CANONICAL_EVENT_CONTRACTS_MIGRATION_VERSION,
+  CURRENT_SCHEMA_VERSION,
   MIGRATION_ADVISORY_LOCK_ID,
   runMigrations,
   TEXT_MESSAGE_END_CONTRACT_MIGRATION_ID,
   TEXT_MESSAGE_END_CONTRACT_MIGRATION_VERSION,
-} from '../../packages/ctxmill/src/database/migrations.js';
+} from '../../packages/stablehand/src/database/migrations.js';
 import { resolveTestDatabaseUrl } from '../utils/test-db.js';
 
 async function dropAllPublicTables(conn: DatabaseConnection): Promise<void> {
@@ -46,12 +47,57 @@ describe('database migration baseline guard', () => {
     }
   });
 
-  it('fails clearly for existing non-empty databases without a ctxmill baseline marker', async () => {
+  it('fails clearly for existing non-empty databases without a stablehand baseline marker', async () => {
     await dropAllPublicTables(conn);
     await conn.pgClient`CREATE TABLE legacy_unversioned_table (id TEXT PRIMARY KEY)`;
 
     await expect(runMigrations(conn.pgClient)).rejects.toThrow(
       /existing unversioned public tables \(legacy_unversioned_table\)/,
+    );
+  });
+
+  it('adopts a pre-rename ctxmill_schema_version marker in place', async () => {
+    await dropAllPublicTables(conn);
+    await conn.pgClient`
+      CREATE TABLE ctxmill_schema_version (
+        id TEXT PRIMARY KEY NOT NULL,
+        version INTEGER NOT NULL,
+        baseline TEXT NOT NULL,
+        initialized_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `;
+    await conn.pgClient`
+      INSERT INTO ctxmill_schema_version (id, version, baseline, initialized_at)
+      VALUES ('baseline', ${CURRENT_SCHEMA_VERSION}, 'pre-release', '2026-03-17T00:00:00Z')
+    `;
+
+    await runMigrations(conn.pgClient);
+
+    const [tables] = await conn.pgClient`
+      SELECT
+        to_regclass('public.ctxmill_schema_version') AS legacy,
+        to_regclass('public.stablehand_schema_version') AS current
+    `;
+    expect(tables?.legacy).toBeNull();
+    expect(tables?.current).toBe('stablehand_schema_version');
+
+    const [baseline] = await conn.pgClient`
+      SELECT version, baseline, initialized_at
+      FROM stablehand_schema_version
+      WHERE id = 'baseline'
+    `;
+    expect(baseline?.version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(baseline?.baseline).toBe('pre-release');
+    expect(new Date(baseline?.initialized_at as string).toISOString()).toBe('2026-03-17T00:00:00.000Z');
+  });
+
+  it('refuses to guess when both the legacy and current schema markers exist', async () => {
+    await dropAllPublicTables(conn);
+    await conn.pgClient`CREATE TABLE ctxmill_schema_version (id TEXT PRIMARY KEY NOT NULL)`;
+    await conn.pgClient`CREATE TABLE stablehand_schema_version (id TEXT PRIMARY KEY NOT NULL)`;
+
+    await expect(runMigrations(conn.pgClient)).rejects.toThrow(
+      /both ctxmill_schema_version and stablehand_schema_version exist/,
     );
   });
 
@@ -281,7 +327,7 @@ describe('database migration baseline guard', () => {
     await dropAllPublicTables(conn);
     await runMigrations(conn.pgClient);
     await conn.pgClient`
-      DELETE FROM ctxmill_schema_version
+      DELETE FROM stablehand_schema_version
       WHERE id IN (${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID}, ${INTERRUPT_TOOL_NAME_MIGRATION_ID})
     `;
 
@@ -315,7 +361,7 @@ describe('database migration baseline guard', () => {
       (
         'CUSTOM',
         'agent-1',
-        '{"type":"CUSTOM","name":"ctxmill.hitl.requested","subtype":"hitl_pause","runId":"turn-1","threadId":"conversation-1","value":{},"agentId":"agent-1","turnId":"turn-1","conversationId":"conversation-1","interruptId":"interrupt-1","toolCallId":"tool-call-1","toolName":"Bash","args":{},"timestamp":11}',
+        '{"type":"CUSTOM","name":"stablehand.hitl.requested","subtype":"hitl_pause","runId":"turn-1","threadId":"conversation-1","value":{},"agentId":"agent-1","turnId":"turn-1","conversationId":"conversation-1","interruptId":"interrupt-1","toolCallId":"tool-call-1","toolName":"Bash","args":{},"timestamp":11}',
         11,
         'turn-1',
         'conversation-1',
@@ -326,12 +372,12 @@ describe('database migration baseline guard', () => {
       (
         'CUSTOM',
         'agent-1',
-        '{"type":"CUSTOM","name":"ctxmill.claude.runtime_capabilities","value":{},"timestamp":12}',
+        '{"type":"CUSTOM","name":"stablehand.claude.runtime_capabilities","value":{},"timestamp":12}',
         12,
         NULL,
         NULL,
         'run',
-        'ctxmill.claude.runtime_capabilities',
+        'stablehand.claude.runtime_capabilities',
         '{"agentId":"agent-1","timestamp":12}'
       ),
       (
@@ -429,7 +475,7 @@ describe('database migration baseline guard', () => {
     expect(frames[1]?.source_type).toBe('interrupt.requested');
     expect(JSON.parse(frames[1]?.payload as string)).toEqual({
       type: 'CUSTOM',
-      name: 'ctxmill.interrupt.requested',
+      name: 'stablehand.interrupt.requested',
       agentId: 'agent-1',
       turnId: 'turn-1',
       conversationId: 'conversation-1',
@@ -515,7 +561,7 @@ describe('database migration baseline guard', () => {
     await dropAllPublicTables(conn);
     await runMigrations(conn.pgClient);
     await conn.pgClient`
-      DELETE FROM ctxmill_schema_version
+      DELETE FROM stablehand_schema_version
       WHERE id IN (
         ${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID},
         ${TEXT_MESSAGE_END_CONTRACT_MIGRATION_ID}
@@ -563,7 +609,7 @@ describe('database migration baseline guard', () => {
 
     const [applied] = await conn.pgClient`
       SELECT version
-      FROM ctxmill_schema_version
+      FROM stablehand_schema_version
       WHERE id = ${TEXT_MESSAGE_END_CONTRACT_MIGRATION_ID}
     `;
     expect(Number(applied?.version)).toBe(TEXT_MESSAGE_END_CONTRACT_MIGRATION_VERSION);
@@ -579,7 +625,7 @@ describe('database migration baseline guard', () => {
     await dropAllPublicTables(conn);
     await runMigrations(conn.pgClient);
     await conn.pgClient`
-      DELETE FROM ctxmill_schema_version
+      DELETE FROM stablehand_schema_version
       WHERE id = ${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID}
     `;
     await conn.pgClient`
@@ -597,7 +643,7 @@ describe('database migration baseline guard', () => {
       VALUES (
         'CUSTOM',
         'agent-1',
-        '{"type":"CUSTOM","name":"ctxmill.turn.pending","agentId":"agent-1","turnId":"turn-1","conversationId":"conversation-1","mode":"interactive","timestamp":10}',
+        '{"type":"CUSTOM","name":"stablehand.turn.pending","agentId":"agent-1","turnId":"turn-1","conversationId":"conversation-1","mode":"interactive","timestamp":10}',
         10,
         'turn-1',
         'conversation-1',
@@ -615,7 +661,7 @@ describe('database migration baseline guard', () => {
     `;
     const [applied] = await conn.pgClient`
       SELECT version
-      FROM ctxmill_schema_version
+      FROM stablehand_schema_version
       WHERE id = ${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID}
     `;
 
@@ -636,7 +682,7 @@ describe('database migration baseline guard', () => {
     await dropAllPublicTables(conn);
     await runMigrations(conn.pgClient);
     await conn.pgClient`
-      DELETE FROM ctxmill_schema_version
+      DELETE FROM stablehand_schema_version
       WHERE id = ${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID}
     `;
     await conn.pgClient`
@@ -657,7 +703,7 @@ describe('database migration baseline guard', () => {
       VALUES (
         'CUSTOM',
         'agent-1',
-        '{"type":"CUSTOM","name":"ctxmill.message.updated","agentId":"agent-1","turnId":"turn-1","conversationId":"conversation-1","messageId":"message-1","messageSeq":0,"messageRevision":1,"role":"assistant","content":"Checking.","parts":[{"type":"text","content":"Checking."},{"type":"tool_call","id":"tool-1","name":"search","args":"{}","result":"found","status":"complete"}],"toolCalls":[{"id":"tool-1","name":"search","args":"{}","status":"complete"}],"legacy":"remove-me","timestamp":10}',
+        '{"type":"CUSTOM","name":"stablehand.message.updated","agentId":"agent-1","turnId":"turn-1","conversationId":"conversation-1","messageId":"message-1","messageSeq":0,"messageRevision":1,"role":"assistant","content":"Checking.","parts":[{"type":"text","content":"Checking."},{"type":"tool_call","id":"tool-1","name":"search","args":"{}","result":"found","status":"complete"}],"toolCalls":[{"id":"tool-1","name":"search","args":"{}","status":"complete"}],"legacy":"remove-me","timestamp":10}',
         10,
         'turn-1',
         'conversation-1',
@@ -693,7 +739,7 @@ describe('database migration baseline guard', () => {
       const payload = JSON.parse(frame?.payload as string);
       expect(payload).toEqual({
         type: 'CUSTOM',
-        name: 'ctxmill.message.updated',
+        name: 'stablehand.message.updated',
         agentId: 'agent-1',
         turnId: 'turn-1',
         conversationId: 'conversation-1',
@@ -811,13 +857,13 @@ describe('database migration baseline guard', () => {
       VALUES
         (
           'CUSTOM', 'agent-1',
-          ${JSON.stringify({ type: 'CUSTOM', name: 'ctxmill.message.committed', value: committedSource })},
+          ${JSON.stringify({ type: 'CUSTOM', name: 'stablehand.message.committed', value: committedSource })},
           10, 'turn-1', 'conversation-1', 'run', 'message.committed',
           ${JSON.stringify(committedSource)}
         ),
         (
           'CUSTOM', 'agent-1',
-          '{"type":"CUSTOM","name":"ctxmill.message.committed","value":{"messageId":"message-malformed"}}',
+          '{"type":"CUSTOM","name":"stablehand.message.committed","value":{"messageId":"message-malformed"}}',
           11, 'turn-1', 'conversation-1', 'run', 'message.committed',
           '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conversation-1","messageId":"message-malformed","messageSeq":"not-a-number","role":"assistant","content":"Legacy.","timestamp":11}'
         ),
@@ -829,7 +875,7 @@ describe('database migration baseline guard', () => {
         ),
         (
           'CUSTOM', 'agent-1',
-          ${JSON.stringify({ type: 'CUSTOM', name: 'ctxmill.message.committed', ...openSource })},
+          ${JSON.stringify({ type: 'CUSTOM', name: 'stablehand.message.committed', ...openSource })},
           12, 'turn-open', 'conversation-1', 'run', 'message.committed',
           ${JSON.stringify(openSource)}
         )
@@ -918,7 +964,7 @@ describe('database migration baseline guard', () => {
       const repairedSource = JSON.parse(repairedEvent?.source_payload as string);
       expect(repairedPayload).toMatchObject({
         type: 'CUSTOM',
-        name: 'ctxmill.message.committed',
+        name: 'stablehand.message.committed',
         messageId: 'message-stale',
         content: 'Checking.',
         toolCalls: [

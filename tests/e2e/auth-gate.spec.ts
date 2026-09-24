@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
 
-const API_TOKEN = process.env.CTXMILL_API_TOKEN ?? '';
+const API_TOKEN = process.env.STABLEHAND_API_TOKEN ?? '';
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3200';
 
 test.describe('API token gate @extended', () => {
-  test.skip(!API_TOKEN, 'CTXMILL_API_TOKEN is required for auth-gate coverage');
+  test.skip(!API_TOKEN, 'STABLEHAND_API_TOKEN is required for auth-gate coverage');
 
   test('prompts unauthenticated browser sessions and stores accepted token', async ({ browser }) => {
     const context = await browser.newContext({ baseURL: BASE_URL });
@@ -31,7 +31,7 @@ test.describe('API token gate @extended', () => {
       await dialog.getByRole('button', { name: 'Unlock' }).click();
 
       await expect(dialog).toBeHidden({ timeout: 10_000 });
-      await expect(page.evaluate(() => window.localStorage.getItem('ctxmill.apiToken'))).resolves.toBe(API_TOKEN);
+      await expect(page.evaluate(() => window.localStorage.getItem('stablehand.apiToken'))).resolves.toBe(API_TOKEN);
     } finally {
       await context.close();
     }

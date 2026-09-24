@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
+import { InterruptManager } from '../../packages/stablehand/src/orchestrator/interrupt.js';
 import { TestTurnRegistry } from '../utils/test-turn-registry.js';
 import type {
   InterruptRow,
-} from '../../packages/ctxmill/src/database/repository.js';
+} from '../../packages/stablehand/src/database/repository.js';
 import {
   createTestBus,
   collectEvents,

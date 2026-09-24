@@ -1,4 +1,4 @@
-# CTXMill Event Pipeline Mapping
+# Stablehand Event Pipeline Mapping
 
 > Current reference as of 2026-07-17. This document describes the canonical
 > event spine.
@@ -32,11 +32,11 @@ a canonical run frame that cannot be replayed from `event_store`.
 
 Source code:
 
-- [bus.ts](/path/to/stablehand/packages/ctxmill/src/events/bus.ts)
-- [projector.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/canonical/projector.ts)
-- [canonical-log.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/canonical/canonical-log.ts)
-- [sse.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sse.ts)
-- [stream.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/routes/agents/stream.ts)
+- [bus.ts](/path/to/stablehand/packages/stablehand/src/events/bus.ts)
+- [projector.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/canonical/projector.ts)
+- [canonical-log.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/canonical/canonical-log.ts)
+- [sse.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/sse.ts)
+- [stream.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/routes/agents/stream.ts)
 
 ## Channels
 
@@ -71,15 +71,15 @@ and [ADR 016](/path/to/stablehand/docs/adr/016-raw-event-provenance-on-event-spi
 
 | Internal event | Canonical frame(s) | Notes |
 |---|---|---|
-| `turn.pending` | `CUSTOM name: ctxmill.turn.pending` | Pre-start queued/accepted signal. |
+| `turn.pending` | `CUSTOM name: stablehand.turn.pending` | Pre-start queued/accepted signal. |
 | `turn.started` | `RUN_STARTED` | `runId = turnId`, `threadId = conversationId`. |
 | `user.message` | `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`, `TEXT_MESSAGE_END` | User echo uses `runId = turnId`, `threadId = conversationId`. |
 | `message.delta` | `TEXT_MESSAGE_START` if needed, then `TEXT_MESSAGE_CONTENT` | Assistant message ids are stable server-side ids: `${turnId}-m${n}`. |
 | `tool_call.started` | `TOOL_CALL_START`, `TOOL_CALL_ARGS` | Closes an open assistant text message before the tool call. |
-| `tool_call.completed` | `TOOL_CALL_END`, `TOOL_CALL_RESULT`, optional `CUSTOM name: ctxmill.a2ui.render` | A2UI blocks are detected from `a2ui-render` tool results and become replayable. |
-| `interrupt.requested` | `CUSTOM name: ctxmill.interrupt.requested` | HITL pause signal on the canonical wire. |
-| `interrupt.resolved` | `CUSTOM name: ctxmill.interrupt.resolved` | Resolution marker. |
-| `message.committed` | `CUSTOM name: ctxmill.message.committed` | Durable message commit signal. |
+| `tool_call.completed` | `TOOL_CALL_END`, `TOOL_CALL_RESULT`, optional `CUSTOM name: stablehand.a2ui.render` | A2UI blocks are detected from `a2ui-render` tool results and become replayable. |
+| `interrupt.requested` | `CUSTOM name: stablehand.interrupt.requested` | HITL pause signal on the canonical wire. |
+| `interrupt.resolved` | `CUSTOM name: stablehand.interrupt.resolved` | Resolution marker. |
+| `message.committed` | `CUSTOM name: stablehand.message.committed` | Durable message commit signal. |
 | `turn.completed` | Optional `RUN_ERROR`, then `RUN_FINISHED` | Error/cancelled turns emit AG-UI `RUN_ERROR.message`, then terminal finish. |
 | `ag_ui.event` | Passthrough frame type | Used for harness frames not otherwise normalized. |
 
@@ -88,7 +88,7 @@ and [ADR 016](/path/to/stablehand/docs/adr/016-raw-event-provenance-on-event-spi
 `GET /api/agents/:id/stream` writes:
 
 1. A `CONNECTED` bootstrap frame with `latestSeq`.
-2. `CUSTOM name: ctxmill.sandbox_session.snapshot` frames for live/restoring
+2. `CUSTOM name: stablehand.sandbox_session.snapshot` frames for live/restoring
    sandbox sessions. Each carries `agentId`, `conversationId`,
    `sandboxSessionId`, `activeTurnId`, `status`, `harnessName`,
    `containerName`, and `timestamp`.
@@ -134,7 +134,7 @@ in-memory replay buffer.
 | `ResolveArtifact` | Resolve artifact metadata/download info. | Used by daemon-side artifact tools. |
 
 Proto definitions live in
-[sandbox.proto](/path/to/stablehand/packages/proto/ctxmill/sandbox/v1/sandbox.proto);
+[sandbox.proto](/path/to/stablehand/packages/proto/stablehand/sandbox/v1/sandbox.proto);
 conversion lives in
 [proto-convert.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/proto-convert.ts).
 

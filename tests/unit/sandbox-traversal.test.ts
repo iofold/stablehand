@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveBaseDir, validateSandboxPath } from '../../packages/ctxmill/src/orchestrator/routes/agent-helpers.js';
+import { resolveBaseDir, validateSandboxPath } from '../../packages/stablehand/src/orchestrator/routes/agent-helpers.js';
 
 describe('validateSandboxPath – prefix traversal fix', () => {
   const baseDir = '/workspace/agent-1';
@@ -36,14 +36,14 @@ describe('resolveBaseDir', () => {
   it('uses conversation workspace when a conversation id and data dir are available', () => {
     expect(resolveBaseDir(
       { id: 'agent-1', workspaceDir: '/workspace/agent-1' },
-      { dataDir: '/var/lib/ctxmill', conversationId: 'conversation-1' },
-    )).toBe('/var/lib/ctxmill/agents/agent-1/conversations/conversation-1/workspace');
+      { dataDir: '/var/lib/stablehand', conversationId: 'conversation-1' },
+    )).toBe('/var/lib/stablehand/agents/agent-1/conversations/conversation-1/workspace');
   });
 
   it('does not resolve a legacy sandbox session workspace without a conversation id', () => {
     expect(resolveBaseDir(
       { id: 'agent-1', workspaceDir: '/workspace/agent-1' },
-      { dataDir: '/var/lib/ctxmill' },
+      { dataDir: '/var/lib/stablehand' },
     )).toBe('/workspace/agent-1');
   });
 

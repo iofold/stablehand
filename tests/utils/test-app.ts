@@ -6,12 +6,12 @@ import {
   createContainer,
   type AppContainer,
   type AppContainerOptions,
-} from '../../packages/ctxmill/src/config/container.js';
-import type { CTXMillConfig } from '../../packages/ctxmill/src/config/types.js';
+} from '../../packages/stablehand/src/config/container.js';
+import type { StablehandConfig } from '../../packages/stablehand/src/config/types.js';
 import {
   createServer,
   type ServerOptions,
-} from '../../packages/ctxmill/src/orchestrator/server.js';
+} from '../../packages/stablehand/src/orchestrator/server.js';
 import { resolveTestDatabaseUrl } from './test-db.js';
 
 export interface TestAppHandle {
@@ -28,7 +28,7 @@ type TestServerOverrides =
 
 interface CreateTestAppOptions {
   dirPrefix?: string;
-  config?: CTXMillConfig;
+  config?: StablehandConfig;
   databaseUrl?: string;
   serverOptions?: TestServerOverrides;
   containerRetriesOnAlreadyExists?: number;
@@ -37,7 +37,7 @@ interface CreateTestAppOptions {
 const TEST_CONTAINER_CLEANUP_TIMEOUT_MS = 5_000;
 const TEST_CONTAINER_CLEANUP_POLL_MS = 25;
 
-function buildContainerConfig(options: CreateTestAppOptions): CTXMillConfig {
+function buildContainerConfig(options: CreateTestAppOptions): StablehandConfig {
   return {
     ...(options.config ?? {}),
     database: {
@@ -48,7 +48,7 @@ function buildContainerConfig(options: CreateTestAppOptions): CTXMillConfig {
 }
 
 async function createContainerWithRetry(
-  config: CTXMillConfig,
+  config: StablehandConfig,
   dataDir: string,
   retries: number,
   options: AppContainerOptions,
@@ -159,7 +159,7 @@ async function buildServer(
 }
 
 export async function createTestApp(options: CreateTestAppOptions = {}): Promise<TestAppHandle> {
-  const dataDir = mkdtempSync(join(tmpdir(), options.dirPrefix ?? 'ctxmill-test-'));
+  const dataDir = mkdtempSync(join(tmpdir(), options.dirPrefix ?? 'stablehand-test-'));
   const container = await createContainerWithRetry(
     buildContainerConfig(options),
     dataDir,

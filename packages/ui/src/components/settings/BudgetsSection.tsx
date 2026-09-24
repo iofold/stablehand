@@ -7,7 +7,7 @@ import {
   type BudgetPolicyDoc,
   type BudgetSpendResponse,
   type ModelGatewayStatus,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 import {
   createBudgetPolicy,
   deleteBudgetPolicy,

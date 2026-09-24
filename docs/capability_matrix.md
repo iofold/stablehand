@@ -1,4 +1,4 @@
-# CTXMill Agent Capabilities Matrix
+# Stablehand Agent Capabilities Matrix
 
 **Purpose**: Comprehensive reference for stress testing all agent capabilities across harnesses, tools, providers, and features.
 
@@ -137,7 +137,7 @@ Artifact upload/download are daemon tools, not provider-managed HTTP uploads: `a
 - XSS injection in string props
 - Oversized data arrays (memory exhaustion)
 - Circular references in nested objects
-- Invalid component names (prefix stripping: `ctxmill.charts:`, `charts:`)
+- Invalid component names (prefix stripping: `stablehand.charts:`, `charts:`)
 - Missing required props
 - Type mismatches (string vs number)
 - Block size limit (50KB per block)
@@ -214,7 +214,7 @@ custom (type: string, payload: object)
 
 ## 7. EXTERNAL LEARNING AND RETRIEVAL
 
-CTXMill emits run, message, tool, feedback, and custom events so external learning and retrieval services can observe agent behavior. Runtime retrieval should be modeled as explicit tools, MCP servers, HTTP providers, or downstream services connected through webhooks/events.
+Stablehand emits run, message, tool, feedback, and custom events so external learning and retrieval services can observe agent behavior. Runtime retrieval should be modeled as explicit tools, MCP servers, HTTP providers, or downstream services connected through webhooks/events.
 
 **Stress Test Coverage**:
 - Webhook delivery retries
@@ -381,7 +381,7 @@ hitl:
 Every harness implements the same policy modes: `all`, `allow`, `deny`, and
 `none`. Only the SDK-owned tool names differ by harness. For example, Claude
 uses names such as `Read` and `Bash`, while PI uses lowercase names such as
-`read` and `bash`. CTXMill-provided tools are outside this policy.
+`read` and `bash`. Stablehand-provided tools are outside this policy.
 
 ### Native Tool Configuration
 ```yaml

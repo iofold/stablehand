@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { loadManifestProject } from '@ctxmill/manifest/node';
+import { loadManifestProject } from '@stablehand/manifest/node';
 
 const agentsDir = fileURLToPath(new URL('../agents/', import.meta.url));
 

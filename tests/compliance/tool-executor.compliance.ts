@@ -24,7 +24,7 @@ import type {
   ToolCall,
   ToolResult,
   ToolContext,
-} from '@ctxmill/sandbox-daemon';
+} from '@stablehand/sandbox-daemon';
 
 /* ------------------------------------------------------------------ */
 /*  Shared helpers                                                     */

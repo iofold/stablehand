@@ -3,19 +3,19 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 PROFILE_PATH="${1:-$ROOT_DIR/tests/performance/profiles/dev2-endurance-wave-c8.json}"
-GATES_PATH="${CTXMILL_PERF_GATES_PATH:-$ROOT_DIR/tests/performance/profiles/dev2-adaptive-capacity.json}"
+GATES_PATH="${STABLEHAND_PERF_GATES_PATH:-$ROOT_DIR/tests/performance/profiles/dev2-adaptive-capacity.json}"
 RUN_SLUG="$(date -u +%Y%m%dT%H%M%SZ)-dev2-endurance-10x-c8"
 OUTPUT_ROOT="${2:-$ROOT_DIR/.tmp/performance/$RUN_SLUG}"
 BUN="${BUN:-bun}"
-WAVES="${CTXMILL_PERF_ENDURANCE_WAVES:-10}"
-MAX_TOTAL_MODEL_CALLS="${CTXMILL_PERF_MAX_TOTAL_MODEL_CALLS:-2630}"
+WAVES="${STABLEHAND_PERF_ENDURANCE_WAVES:-10}"
+MAX_TOTAL_MODEL_CALLS="${STABLEHAND_PERF_MAX_TOTAL_MODEL_CALLS:-2630}"
 
 if ! [[ "$WAVES" =~ ^[1-9][0-9]*$ ]]; then
-  printf 'CTXMILL_PERF_ENDURANCE_WAVES must be a positive integer\n' >&2
+  printf 'STABLEHAND_PERF_ENDURANCE_WAVES must be a positive integer\n' >&2
   exit 2
 fi
 if ! [[ "$MAX_TOTAL_MODEL_CALLS" =~ ^[1-9][0-9]*$ ]]; then
-  printf 'CTXMILL_PERF_MAX_TOTAL_MODEL_CALLS must be a positive integer\n' >&2
+  printf 'STABLEHAND_PERF_MAX_TOTAL_MODEL_CALLS must be a positive integer\n' >&2
   exit 2
 fi
 
@@ -27,7 +27,7 @@ if ! [[ "$calls_per_wave" =~ ^[1-9][0-9]*$ ]]; then
 fi
 theoretical_calls=$((calls_per_wave * WAVES))
 if (( theoretical_calls > MAX_TOTAL_MODEL_CALLS )); then
-  printf 'Endurance run can issue %d model calls, above CTXMILL_PERF_MAX_TOTAL_MODEL_CALLS=%d\n' \
+  printf 'Endurance run can issue %d model calls, above STABLEHAND_PERF_MAX_TOTAL_MODEL_CALLS=%d\n' \
     "$theoretical_calls" "$MAX_TOTAL_MODEL_CALLS" >&2
   exit 2
 fi
@@ -68,7 +68,7 @@ while (( wave <= WAVES )); do
   printf 'Running endurance %s of %d\n' "$wave_name" "$WAVES"
 
   set +e
-  CTXMILL_PERF_RAMP_PATH="$GATES_PATH" \
+  STABLEHAND_PERF_RAMP_PATH="$GATES_PATH" \
     "$ROOT_DIR/tests/performance/scripts/run-dev2.sh" \
       "$wave_dir/profile.json" "$wave_dir"
   wave_status=$?

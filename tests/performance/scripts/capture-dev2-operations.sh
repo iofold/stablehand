@@ -4,8 +4,8 @@ set -euo pipefail
 PHASE="${1:?usage: capture-dev2-operations.sh <before|after> <output-directory> [since-time]}"
 OUTPUT_DIR="${2:?usage: capture-dev2-operations.sh <before|after> <output-directory> [since-time]}"
 SINCE_TIME="${3:-}"
-NAMESPACE="${CTXMILL_PERF_NAMESPACE:-ctxmill}"
-API_BASE="${CTXMILL_PERF_API_BASE:-https://stablehand.staging.example.com/api}"
+NAMESPACE="${STABLEHAND_PERF_NAMESPACE:-stablehand}"
+API_BASE="${STABLEHAND_PERF_API_BASE:-https://stablehand.staging.example.com/api}"
 KUBECTL="${KUBECTL:-kubectl}"
 
 if [[ "$PHASE" != "before" && "$PHASE" != "after" ]]; then
@@ -45,9 +45,9 @@ else
     >"$OUTPUT_DIR/$PHASE-litellm-metrics-status.json"
 fi
 
-if [[ -n "${CTXMILL_API_TOKEN:-}" ]]; then
+if [[ -n "${STABLEHAND_API_TOKEN:-}" ]]; then
   curl -fsS "$API_BASE/model-gateway/status" \
-    -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+    -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
     >"$OUTPUT_DIR/gateway-$PHASE.json" || \
     printf '{"state":"unavailable"}\n' >"$OUTPUT_DIR/gateway-$PHASE.json"
 else
@@ -72,16 +72,16 @@ for component in orchestrator litellm litellm-db postgres minio; do
     >"$OUTPUT_DIR/$component.log" 2>&1 || true
 done
 "$KUBECTL" -n "$NAMESPACE" logs \
-  -l 'app.kubernetes.io/name=ctxmill-sandbox' \
+  -l 'app.kubernetes.io/name=stablehand-sandbox' \
   --all-containers=true \
   --prefix=true \
   --since-time="$SINCE_TIME" \
   --max-log-requests=100 \
   >"$OUTPUT_DIR/sandbox.log" 2>&1 || true
 
-if [[ -n "${CTXMILL_API_TOKEN:-}" ]]; then
+if [[ -n "${STABLEHAND_API_TOKEN:-}" ]]; then
   curl -fsS "$API_BASE/sandbox/metrics" \
-    -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+    -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
     >"$OUTPUT_DIR/sandbox-metrics-after.json" || \
     printf '{}\n' >"$OUTPUT_DIR/sandbox-metrics-after.json"
 else

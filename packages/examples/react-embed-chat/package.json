@@ -1,17 +1,17 @@
 {
-  "name": "@ctxmill/example-react-embed-chat",
+  "name": "@stablehand/example-react-embed-chat",
   "version": "0.1.0",
   "license": "MIT",
   "private": true,
   "type": "module",
-  "description": "Embeddable React chat example for CTXMill AG-UI integrations",
+  "description": "Embeddable React chat example for Stablehand AG-UI integrations",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ctxmill/react": "workspace:*",
+    "@stablehand/react": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

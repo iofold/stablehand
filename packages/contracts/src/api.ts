@@ -277,7 +277,7 @@ const UNSAFE_RECORD_KEYS: ReadonlySet<string> = new Set([
 const UTF8_ENCODER = new TextEncoder();
 
 export function isReservedSandboxEnvironmentKey(key: string): boolean {
-  return key.startsWith('CTXMILL_')
+  return key.startsWith('STABLEHAND_')
     || RESERVED_SANDBOX_ENVIRONMENT_KEYS.has(key)
     || UNSAFE_RECORD_KEYS.has(key);
 }

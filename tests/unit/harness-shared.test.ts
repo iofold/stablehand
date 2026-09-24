@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeStreamTextDeltas } from '@ctxmill/sandbox-daemon';
+import { normalizeStreamTextDeltas } from '@stablehand/sandbox-daemon';
 
 describe('normalizeStreamTextDeltas', () => {
   it('returns plain string chunks unchanged', () => {

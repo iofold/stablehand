@@ -11,15 +11,15 @@
  *              the resolve endpoint (retryFailedInterruptResumeAttempt).
  *
  * The worker-side half of this bug is in
- * packages/ctxmill/src/orchestrator/__tests__/interrupt-resume-attempt-worker.repro.test.ts
+ * packages/stablehand/src/orchestrator/__tests__/interrupt-resume-attempt-worker.repro.test.ts
  *
  * Placed in tests/unit/ because that is where the Postgres-backed suites live
- * (see interrupt-resume-attempt-lease.test.ts); packages/ctxmill/**\/__tests__
+ * (see interrupt-resume-attempt-lease.test.ts); packages/stablehand/**\/__tests__
  * is pure-unit by convention.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
+import { DatabaseRepository } from '../../packages/stablehand/src/database/repository.js';
 import { createTestDb, type TestDb } from '../utils/test-db.js';
 
 /** A bounded retry budget in the shape the turn reconciler already uses. */

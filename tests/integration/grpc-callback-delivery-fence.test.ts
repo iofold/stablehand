@@ -3,25 +3,25 @@ import {
   type EmitEventRequest,
   type RegisterArtifactRequest,
   type RequestToolRequest,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
+import { TypedEventBus } from '../../packages/stablehand/src/events/bus.js';
 import {
   CALLBACK_AGENT_HEADER,
   CALLBACK_SESSION_HEADER,
   CALLBACK_TOKEN_HEADER,
   mintGrpcCallbackToken,
   validateGrpcCallbackAuth,
-} from '../../packages/ctxmill/src/orchestrator/grpc/callback-auth.js';
+} from '../../packages/stablehand/src/orchestrator/grpc/callback-auth.js';
 import {
   createOrchestratorServiceImpl,
   DefaultOrchestratorToolRegistry,
   registerDefaultToolHandlers,
-} from '../../packages/ctxmill/src/orchestrator/grpc/orchestrator-service.js';
-import { mintTurnDeliveryCapability } from '../../packages/ctxmill/src/orchestrator/grpc/turn-delivery-capability.js';
-import { CanonicalLog } from '../../packages/ctxmill/src/orchestrator/canonical/canonical-log.js';
-import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
+} from '../../packages/stablehand/src/orchestrator/grpc/orchestrator-service.js';
+import { mintTurnDeliveryCapability } from '../../packages/stablehand/src/orchestrator/grpc/turn-delivery-capability.js';
+import { CanonicalLog } from '../../packages/stablehand/src/orchestrator/canonical/canonical-log.js';
+import { InterruptManager } from '../../packages/stablehand/src/orchestrator/interrupt.js';
 import { createTestDb, type TestDb } from '../utils/test-db.js';
 
 const CALLBACK_SECRET = 'integration-callback-secret';
@@ -176,7 +176,7 @@ describe('sandbox callback delivery fence', () => {
     };
 
     const liveToolRequest = withDeliveryCapability<RequestToolRequest>({
-      $typeName: 'ctxmill.sandbox.v1.RequestToolRequest',
+      $typeName: 'stablehand.sandbox.v1.RequestToolRequest',
       turnId: turn.id,
       sandboxSessionId: sandboxSession.id,
       agentId: agent.id,
@@ -191,7 +191,7 @@ describe('sandbox callback delivery fence', () => {
       containerId: sandboxSession.containerId,
     });
     const liveEventRequest = withDeliveryCapability<EmitEventRequest>({
-      $typeName: 'ctxmill.sandbox.v1.EmitEventRequest',
+      $typeName: 'stablehand.sandbox.v1.EmitEventRequest',
       turnId: turn.id,
       sandboxSessionId: sandboxSession.id,
       agentId: agent.id,
@@ -205,7 +205,7 @@ describe('sandbox callback delivery fence', () => {
       containerId: sandboxSession.containerId,
     });
     const liveArtifact: ArtifactMeta = {
-      $typeName: 'ctxmill.sandbox.v1.ArtifactMeta',
+      $typeName: 'stablehand.sandbox.v1.ArtifactMeta',
       id: 'callback-artifact-live',
       turnId: turn.id,
       agentId: agent.id,
@@ -219,7 +219,7 @@ describe('sandbox callback delivery fence', () => {
       kind: 'callback_probe',
     };
     const liveArtifactRequest = withDeliveryCapability<RegisterArtifactRequest>({
-      $typeName: 'ctxmill.sandbox.v1.RegisterArtifactRequest',
+      $typeName: 'stablehand.sandbox.v1.RegisterArtifactRequest',
       turnId: turn.id,
       sandboxSessionId: sandboxSession.id,
       agentId: agent.id,
@@ -374,7 +374,7 @@ describe('sandbox callback delivery fence', () => {
       },
     });
     const predecessorRequest = withDeliveryCapability<RequestToolRequest>({
-      $typeName: 'ctxmill.sandbox.v1.RequestToolRequest',
+      $typeName: 'stablehand.sandbox.v1.RequestToolRequest',
       turnId: turn.id,
       sandboxSessionId: sandboxSession.id,
       agentId: agent.id,
@@ -522,7 +522,7 @@ describe('sandbox callback delivery fence', () => {
     });
 
     const approvalRequest = withDeliveryCapability<RequestToolRequest>({
-      $typeName: 'ctxmill.sandbox.v1.RequestToolRequest',
+      $typeName: 'stablehand.sandbox.v1.RequestToolRequest',
       turnId: turn.id,
       sandboxSessionId: sandboxSession.id,
       agentId: agent.id,

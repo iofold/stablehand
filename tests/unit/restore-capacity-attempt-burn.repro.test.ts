@@ -20,25 +20,25 @@
  * restore attempt accounting; this test pins that the defect survives at HEAD.
  *
  * Placed in tests/unit/ because that is where the Postgres-backed suites live;
- * packages/ctxmill/**\/__tests__ is pure-unit by convention.
+ * packages/stablehand/**\/__tests__ is pure-unit by convention.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
-import { DatabaseRepository, type SandboxSessionRow } from '../../packages/ctxmill/src/database/repository.js';
+import type { AgentDefinition } from '@stablehand/sandbox-daemon';
+import { DatabaseRepository, type SandboxSessionRow } from '../../packages/stablehand/src/database/repository.js';
 import {
   SessionRecoveryCoordinator,
   SessionRestoreBudgetExhaustedError,
-} from '../../packages/ctxmill/src/orchestrator/session-manager/session-recovery-coordinator.js';
+} from '../../packages/stablehand/src/orchestrator/session-manager/session-recovery-coordinator.js';
 import {
   classifyRestoreFailure,
   InvalidCheckpointError,
   MAX_RESTORE_ATTEMPTS,
   RESTORE_BACKOFF_MS,
-} from '../../packages/ctxmill/src/orchestrator/session-manager/restore-retry-policy.js';
-import { SessionStateStore } from '../../packages/ctxmill/src/orchestrator/session-manager/session-state-store.js';
-import { SessionStatusCoordinator } from '../../packages/ctxmill/src/orchestrator/session-manager/session-status-coordinator.js';
-import { ContainerLimitError } from '../../packages/ctxmill/src/sandbox/container-semaphore.js';
+} from '../../packages/stablehand/src/orchestrator/session-manager/restore-retry-policy.js';
+import { SessionStateStore } from '../../packages/stablehand/src/orchestrator/session-manager/session-state-store.js';
+import { SessionStatusCoordinator } from '../../packages/stablehand/src/orchestrator/session-manager/session-status-coordinator.js';
+import { ContainerLimitError } from '../../packages/stablehand/src/sandbox/container-semaphore.js';
 import { createTestDb, type TestDb } from '../utils/test-db.js';
 
 const MAX_CONTAINERS = 4;
@@ -203,7 +203,7 @@ describe('ctx-2mm8: capacity errors burn the restore budget', () => {
     const maxed = (await repo.getSandboxSession(session.id))!;
 
     const healthy = createCoordinator(
-      async () => ({ containerId: 'c-1', containerName: 'ctxmill-c-1' }),
+      async () => ({ containerId: 'c-1', containerName: 'stablehand-c-1' }),
       [],
     );
 

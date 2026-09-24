@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .env
+.stablehand/
+# Local data directories written before the 2026-09-24 rename.
 .ctxmill/
 *.tsbuildinfo
 .tmp/

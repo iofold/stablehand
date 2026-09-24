@@ -9,7 +9,7 @@ import { ConnectError, Code } from '@connectrpc/connect';
 import {
   RequestToolResponseSchema,
   TurnDeliveryCapabilitySchema,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 
 import {
   createToolProxy,
@@ -67,7 +67,7 @@ function callbackRoute(turnId = 'run-1', agentId = 'agent-1') {
       restoreFenceToken: 0n,
       containerId: 'container-1',
       agentId,
-      signature: 'ctxmill-open-turn-delivery-capability-v1',
+      signature: 'stablehand-open-turn-delivery-capability-v1',
     }),
     leaseExpiresAtMs,
     abortController: new AbortController(),

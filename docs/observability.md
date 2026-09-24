@@ -1,10 +1,10 @@
 # Observability Setup Guide
 
-This guide describes the observability features available in ctxmill for monitoring, tracing, and debugging agent runs and system performance.
+This guide describes the observability features available in stablehand for monitoring, tracing, and debugging agent runs and system performance.
 
 ## Overview
 
-ctxmill provides several layers of observability:
+stablehand provides several layers of observability:
 
 - **LangSmith Tracing**: Opt-in tracing for agent execution flows, LLM calls, and tool usage.
 - **SigNoz / OpenTelemetry Tracing**: Local Docker orchestrator traces via Node auto-instrumentation.
@@ -15,7 +15,7 @@ ctxmill provides several layers of observability:
 
 ## LangSmith Tracing
 
-ctxmill supports opt-in agent tracing via [LangSmith](https://smith.langchain.com). When enabled, every agent run produces a trace with span hierarchy, LLM call details, tool executions, and token usage.
+stablehand supports opt-in agent tracing via [LangSmith](https://smith.langchain.com). When enabled, every agent run produces a trace with span hierarchy, LLM call details, tool executions, and token usage.
 
 ### Setup
 
@@ -24,7 +24,7 @@ Add these variables to your `.env` file and restart the stack:
 ```bash
 LANGSMITH_TRACING=true
 LANGSMITH_API_KEY=lsv2_sk_...        # or lsv2_pt_...
-LANGSMITH_PROJECT=ctxmill           # Optional, defaults to 'ctxmill'
+LANGSMITH_PROJECT=stablehand           # Optional, defaults to 'stablehand'
 LANGSMITH_WORKSPACE_ID=...           # Required for service account keys (lsv2_sk_)
 ```
 
@@ -51,7 +51,7 @@ For more details, see [LangSmith Tracing](./langsmith-tracing.md).
 
 The Docker Compose orchestrator service can be preloaded with Node OpenTelemetry auto-instrumentation using the optional `docker-compose.signoz.yml` override. Sandbox harness images preload the same instrumentation through Bun. The override exports to the centralized dev2 SigNoz collector, not to a local SigNoz or local ClickHouse stack.
 
-This captures orchestrator-side HTTP, Fastify, PostgreSQL, and related Node spans under `ctxmill-orchestrator`, plus sandbox daemon spans under `ctxmill-sandbox-<harness>`. Keep `deployment.environment` resource attributes accurate for the source environment so dev2 SigNoz can distinguish local, dev1, dev2, and sandbox traffic.
+This captures orchestrator-side HTTP, Fastify, PostgreSQL, and related Node spans under `stablehand-orchestrator`, plus sandbox daemon spans under `stablehand-sandbox-<harness>`. Keep `deployment.environment` resource attributes accurate for the source environment so dev2 SigNoz can distinguish local, dev1, dev2, and sandbox traffic.
 
 For setup and trace verification commands, see [SigNoz for Debugging](./signoz-for-debugging.md).
 
@@ -62,7 +62,7 @@ For setup and trace verification commands, see [SigNoz for Debugging](./signoz-f
 The orchestrator uses the built-in Fastify logger (`logger: true`). These logs capture HTTP requests, database operations, and sandbox container lifecycle events.
 
 The `ContainerManager` also emits `console.debug` messages for container creation, including resource allocations and concurrency stats:
-`[ContainerManager] creating container ctxmill-sandbox-... (harness=..., cpus=..., mem=...MiB, active=.../...)`
+`[ContainerManager] creating container stablehand-sandbox-... (harness=..., cpus=..., mem=...MiB, active=.../...)`
 
 Access orchestrator logs via Docker Compose:
 
@@ -87,13 +87,13 @@ CLI.
 
 ### Finding Container IDs
 
-Container names use `ctxmill-sandbox-<sandboxSessionId>`, and the canonical
-selector is `ctxmill.sandbox-session-id=<sandboxSessionId>`.
+Container names use `stablehand-sandbox-<sandboxSessionId>`, and the canonical
+selector is `stablehand.sandbox-session-id=<sandboxSessionId>`.
 
 You can list all managed containers with:
 
 ```bash
-docker ps --filter "label=ctxmill.managed=true"
+docker ps --filter "label=stablehand.managed=true"
 ```
 
 ### Accessing Logs
@@ -112,7 +112,7 @@ docker logs -f <container-id>
 
 ## Event Audit Trail
 
-Every significant action in ctxmill emits a typed event. These events are persisted to the `events` table in PostgreSQL, providing a full audit trail of system activity.
+Every significant action in stablehand emits a typed event. These events are persisted to the `events` table in PostgreSQL, providing a full audit trail of system activity.
 
 ### Event Types
 
@@ -182,7 +182,7 @@ If a run hangs, check the event stream to see which step failed to complete. Not
 
 ## What Doesn't Exist Yet
 
-It's important to note that ctxmill currently lacks several standard observability features:
+It's important to note that stablehand currently lacks several standard observability features:
 
 - **No Structured Logging Library**: Logs are plain text or default Fastify JSON; there is no unified Pino or Winston setup across all services.
 - **Limited OpenTelemetry**: Local Docker deploys can emit orchestrator and sandbox daemon traces to an OTLP collector; Kubernetes sandbox Jobs receive the same sandbox OTEL environment. Detailed model/provider traces still rely on LangSmith unless a harness adds deeper model-level OTEL export.

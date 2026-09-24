@@ -7,7 +7,7 @@ import {
   getConversationWorkspacePath,
   ensureConversationWorkspace,
   cleanupSession,
-} from '../../packages/ctxmill/src/workspace/session-workspace.js';
+} from '../../packages/stablehand/src/workspace/session-workspace.js';
 
 async function writeTestFile(filePath: string, content: string): Promise<void> {
   await fs.mkdir(dirname(filePath), { recursive: true });
@@ -25,7 +25,7 @@ describe('session-workspace', () => {
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(join(tmpdir(), 'session-ws-test-'));
-    dataDir = join(tempDir, '.ctxmill');
+    dataDir = join(tempDir, '.stablehand');
     baseWorkspaceDir = join(tempDir, 'base', 'workspace');
     await fs.mkdir(baseWorkspaceDir, { recursive: true });
   });

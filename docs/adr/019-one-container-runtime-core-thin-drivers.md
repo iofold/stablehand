@@ -14,7 +14,7 @@ policy could diverge between runtimes.
 ## Decision
 
 Container runtime policy is centralized under
-`packages/ctxmill/src/sandbox/runtime/`:
+`packages/stablehand/src/sandbox/runtime/`:
 
 - `spec.ts` builds Docker create payloads and Kubernetes Job manifests from the
   same labels, environment, resource limits, memory floors, and startup-grace

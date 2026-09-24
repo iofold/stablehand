@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ApiMessage, ApiMessagePart, ApiToolCallState } from '@ctxmill/shared';
+import type { ApiMessage, ApiMessagePart, ApiToolCallState } from '@stablehand/shared';
 import { useInterruptStore } from './interrupt';
 
 export type ToolCallState = ApiToolCallState;
@@ -196,8 +196,8 @@ function isTurnScopedEvent(type: string): boolean {
     type === 'TOOL_CALL_ARGS' ||
     type === 'TOOL_CALL_END' ||
     type === 'TOOL_CALL_RESULT' ||
-    type === 'CTXMILL_MESSAGE_COMMITTED' ||
-    type === 'CTXMILL_MESSAGE_UPDATED' ||
+    type === 'STABLEHAND_MESSAGE_COMMITTED' ||
+    type === 'STABLEHAND_MESSAGE_UPDATED' ||
     type === 'RUN_FINISHED' ||
     type === 'RUN_ERROR';
 }
@@ -574,14 +574,14 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
   handleSSEEvent: (event: Record<string, unknown>) => {
     let type = event.type as string;
     // Canonical wire (ADR-015): orchestrator signals arrive as
-    // CUSTOM{name:'ctxmill.*'}; route them onto the existing handlers.
+    // CUSTOM{name:'stablehand.*'}; route them onto the existing handlers.
     if (type === 'CUSTOM' && typeof event.name === 'string') {
       switch (event.name) {
-        case 'ctxmill.turn.pending': type = 'CTXMILL_TURN_PENDING'; break;
-        case 'ctxmill.interrupt.requested': type = 'CTXMILL_INTERRUPT_REQUESTED'; break;
-        case 'ctxmill.message.committed': type = 'CTXMILL_MESSAGE_COMMITTED'; break;
-        case 'ctxmill.message.updated': type = 'CTXMILL_MESSAGE_UPDATED'; break;
-        default: break; // ctxmill.interrupt.resolved handled in the CUSTOM case
+        case 'stablehand.turn.pending': type = 'STABLEHAND_TURN_PENDING'; break;
+        case 'stablehand.interrupt.requested': type = 'STABLEHAND_INTERRUPT_REQUESTED'; break;
+        case 'stablehand.message.committed': type = 'STABLEHAND_MESSAGE_COMMITTED'; break;
+        case 'stablehand.message.updated': type = 'STABLEHAND_MESSAGE_UPDATED'; break;
+        default: break; // stablehand.interrupt.resolved handled in the CUSTOM case
       }
     }
     const eventId = event._eventId as string | undefined;
@@ -623,7 +623,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
     }
 
     switch (type) {
-      case 'CTXMILL_TURN_PENDING': {
+      case 'STABLEHAND_TURN_PENDING': {
         resetPreviewController();
         set({
           isStreaming: true,
@@ -828,7 +828,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
       }
 
       case 'CUSTOM': {
-        if (event.name === 'ctxmill.sandbox_session.snapshot') {
+        if (event.name === 'stablehand.sandbox_session.snapshot') {
           const convId = event.conversationId as string;
           const activeConv = get().activeConversationId;
           const activeTurnId = typeof event.activeTurnId === 'string' ? event.activeTurnId : '';
@@ -840,7 +840,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
           }
           break;
         }
-        if (event.name === 'ctxmill.interrupt.resolved') {
+        if (event.name === 'stablehand.interrupt.resolved') {
           const action = (event.action as string) || 'resolved';
           const isApproved = action === 'approve';
           const prefix = isApproved ? '✓ Approved' : '✗ Rejected';
@@ -866,7 +866,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
         break;
       }
 
-      case 'CTXMILL_INTERRUPT_REQUESTED': {
+      case 'STABLEHAND_INTERRUPT_REQUESTED': {
         const turnId = (event.turnId as string) || '';
         const interruptId = (event.interruptId as string) || '';
         if (!turnId || !interruptId) break;
@@ -882,7 +882,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
         break;
       }
 
-      case 'CTXMILL_MESSAGE_COMMITTED': {
+      case 'STABLEHAND_MESSAGE_COMMITTED': {
         if (typeof event.messageId !== 'string' || event.messageId.length === 0) break;
         const committedState = get();
         const existingCommittedMessage = committedState.messages
@@ -965,7 +965,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
         break;
       }
 
-      case 'CTXMILL_MESSAGE_UPDATED': {
+      case 'STABLEHAND_MESSAGE_UPDATED': {
         if (typeof event.messageId !== 'string' || event.messageId.length === 0) break;
         if (
           typeof event.messageRevision !== 'number'
@@ -1000,7 +1000,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
       case 'RUN_FINISHED': {
         useInterruptStore.getState().clear();
         flushPendingDelta();
-        // Transcript recovery is owned by the backend via ctxmill.message.committed.
+        // Transcript recovery is owned by the backend via stablehand.message.committed.
         // The UI only clears preview state here; it does not synthesize final messages.
         set({
           isStreaming: false,

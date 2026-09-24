@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { create } from '@bufbuild/protobuf';
-import { TurnDeliveryCapabilitySchema } from '@ctxmill/proto/sandbox/v1';
+import { TurnDeliveryCapabilitySchema } from '@stablehand/proto/sandbox/v1';
 import { z } from 'zod';
 
 import type { ToolContext, ToolDefinition } from '../../tool/types.js';
@@ -70,7 +70,7 @@ function makeDeliveryContext(
       restoreFenceToken: 0n,
       containerId: 'container-1',
       agentId: 'agent-1',
-      signature: 'ctxmill-open-turn-delivery-capability-v1',
+      signature: 'stablehand-open-turn-delivery-capability-v1',
     }),
     leaseExpiresAtMs,
     abortController: new AbortController(),

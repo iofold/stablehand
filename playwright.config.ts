@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const apiAuthHeaders = process.env.CTXMILL_API_TOKEN
-  ? { Authorization: `Bearer ${process.env.CTXMILL_API_TOKEN}` }
+const apiAuthHeaders = process.env.STABLEHAND_API_TOKEN
+  ? { Authorization: `Bearer ${process.env.STABLEHAND_API_TOKEN}` }
   : undefined;
 
 export default defineConfig({

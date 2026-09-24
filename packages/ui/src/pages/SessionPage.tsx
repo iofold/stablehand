@@ -5,7 +5,7 @@ import {
   Radio,
   AlertTriangle,
 } from 'lucide-react';
-import type { Turn } from '@ctxmill/contracts';
+import type { Turn } from '@stablehand/contracts';
 import { SessionThread } from '@/components/session/SessionThread';
 import { SessionInput } from '@/components/session/SessionInput';
 import { ErrorDisplay } from '@/components/session/ErrorDisplay';

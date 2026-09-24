@@ -1,17 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AgentTurnService } from '../../packages/ctxmill/src/orchestrator/agent-turn-service.js';
+import { AgentTurnService } from '../../packages/stablehand/src/orchestrator/agent-turn-service.js';
 import type {
   AgentTurnServiceDeps,
   ExecuteTurnParams,
-} from '../../packages/ctxmill/src/orchestrator/agent-turn-service.js';
-import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
-import type { EventMap } from '../../packages/ctxmill/src/events/bus.js';
-import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
-import type { SessionTurnExecutor } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
-import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
+} from '../../packages/stablehand/src/orchestrator/agent-turn-service.js';
+import { TypedEventBus } from '../../packages/stablehand/src/events/bus.js';
+import type { EventMap } from '../../packages/stablehand/src/events/bus.js';
+import type { DatabaseRepository } from '../../packages/stablehand/src/database/repository.js';
+import type { SessionTurnExecutor } from '../../packages/stablehand/src/orchestrator/session-turn-service.js';
+import type { AgentDefinition, Message } from '@stablehand/sandbox-daemon';
 import type { AgentSessionEvent, MessageCommittedEvent } from '../../packages/shared/src/events.js';
-import { TURN_CANCELLED_MESSAGE } from '../../packages/ctxmill/src/orchestrator/turn-cancellation.js';
-import { CanonicalLog } from '../../packages/ctxmill/src/orchestrator/canonical/canonical-log.js';
+import { TURN_CANCELLED_MESSAGE } from '../../packages/stablehand/src/orchestrator/turn-cancellation.js';
+import { CanonicalLog } from '../../packages/stablehand/src/orchestrator/canonical/canonical-log.js';
 import {
   TestTurnRegistry,
   createTestSandboxSessionManager,
@@ -20,7 +20,7 @@ import type {
   PerformanceAttributes,
   PerformanceMeasurement,
   PerformancePhase,
-} from '../../packages/ctxmill/src/observability/performance.js';
+} from '../../packages/stablehand/src/observability/performance.js';
 
 type StreamEvent = AgentSessionEvent | MessageCommittedEvent;
 
@@ -357,8 +357,8 @@ describe('AgentTurnService', () => {
     expect(observations.find(({ phase }) => phase === 'turn.first_token'))
       .toMatchObject({
         attributes: expect.objectContaining({
-          'ctxmill.turn.id': 'run-1',
-          'ctxmill.harness': 'claude-agents',
+          'stablehand.turn.id': 'run-1',
+          'stablehand.harness': 'claude-agents',
         }),
         outcome: 'ok',
       });

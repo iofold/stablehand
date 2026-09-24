@@ -1,5 +1,5 @@
 {
-  "name": "@ctxmill/ui",
+  "name": "@stablehand/ui",
   "version": "0.1.0",
   "license": "MIT",
   "type": "module",
@@ -13,9 +13,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@ctxmill/contracts": "workspace:*",
-    "@ctxmill/manifest": "workspace:*",
-    "@ctxmill/shared": "workspace:*",
+    "@stablehand/contracts": "workspace:*",
+    "@stablehand/manifest": "workspace:*",
+    "@stablehand/shared": "workspace:*",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "lucide-react": "^0.468.0",

@@ -1,8 +1,8 @@
-# CTXMill
+# Stablehand
 
 **A self-hosted framework for building AI products with a multi-harness agent runtime, streaming UI, and human-in-the-loop controls.**
 
-CTXMill ships a Docker-first stack with a Fastify orchestrator, PostgreSQL persistence, authenticated HTTP APIs, a React UI, durable SSE streaming, event-triggered background runs, and workspace isolation for agent sessions.
+Stablehand ships a Docker-first stack with a Fastify orchestrator, PostgreSQL persistence, authenticated HTTP APIs, a React UI, durable SSE streaming, event-triggered background runs, and workspace isolation for agent sessions.
 
 ## What Ships Today
 
@@ -19,27 +19,27 @@ CTXMill ships a Docker-first stack with a Fastify orchestrator, PostgreSQL persi
 - **PostgreSQL persistence**: agents, runs, messages, events, triggers, and secrets
 - **React operations UI**: dashboard, chat, analytics, events, artifacts, triggers, tools, access keys, and session detail views
 - **Cost control**: per-agent and per-tag budget policies, model-gateway routing, and spend reconciliation with honest settlement of lost evidence
-- **Scaffold CLI**: `create-ctxmill` for a generic starter project
+- **Scaffold CLI**: `create-stablehand` for a generic starter project
 
 ## Current Boundaries
 
 - The supported workflow in this repo is the Docker stack.
 - Agent harnesses execute inside Docker containers (one per run) via the sandbox subsystem.
 - Firecracker sandbox execution is planned, not shipped.
-- System persistence uses PostgreSQL. CTXMill does not ship a built-in knowledge/RAG search layer; the previously planned pgvector-backed knowledge search was removed and is not part of the active runtime.
+- System persistence uses PostgreSQL. Stablehand does not ship a built-in knowledge/RAG search layer; the previously planned pgvector-backed knowledge search was removed and is not part of the active runtime.
 
 ## Quick Start
 
 ```bash
 # 1. Clone and enter the project
-git clone https://github.com/iofold/ctxmill.git
-cd ctxmill
+git clone https://github.com/iofold/stablehand.git
+cd stablehand
 
 # 2. Configure your environment
 cp .env.example .env
 # Required for the production-labeled Docker stack:
 echo "SECRET_MASTER_KEY=$(openssl rand -hex 32)" >> .env
-echo "CTXMILL_API_TOKEN=$(openssl rand -hex 32)" >> .env
+echo "STABLEHAND_API_TOKEN=$(openssl rand -hex 32)" >> .env
 # Add the API keys your agents need, such as OPENAI_API_KEY or ANTHROPIC_API_KEY.
 
 # 3. Build and start the stack
@@ -47,7 +47,7 @@ docker compose up --build -d
 
 # 4. Open the UI
 # http://localhost:3200
-# Enter the master CTXMILL_API_TOKEN when the TokenGate prompts.
+# Enter the master STABLEHAND_API_TOKEN when the TokenGate prompts.
 ```
 
 > Sandbox harness images are included in the default compose stack. They build automatically with `docker compose up --build -d`.
@@ -82,12 +82,12 @@ pnpm test
 
 ```text
 packages/
-  ctxmill/              Core runtime and orchestrator
+  stablehand/              Core runtime and orchestrator
     src/
       a2ui/             Agent-to-UI structured block extraction
       agent/            Agent discovery and manifest loading
       artifact/         Artifact storage (S3/MinIO) and daemon tools
-      cli/              `ctxmill dev` and `ctxmill chat`
+      cli/              `stablehand dev` and `stablehand chat`
       config/           Presets, factories, DI container
       database/         PostgreSQL schema, repository, migrations
       events/           Typed event bus, triggers, wait primitives
@@ -100,14 +100,14 @@ packages/
       tool/             Tool executors and providers
       util/             Shared runtime utilities
       workspace/        Session-scoped workspace environments
-  sandbox-daemon/       @ctxmill/sandbox-daemon — gRPC daemon running inside harness
+  sandbox-daemon/       @stablehand/sandbox-daemon — gRPC daemon running inside harness
                         containers: harness adapters, tool proxy, proto-convert, checkpoint
   proto/                Protocol Buffers for sandbox gRPC IPC
   ui/                   React frontend (Vite + Tailwind)
   shared/               Shared event and API types
-  client/               @ctxmill/client — typed browser client for AG-UI streaming
-  react/                @ctxmill/react — React components and hooks for AG-UI chat
-  create-ctxmill/       Generic starter-project scaffold
+  client/               @stablehand/client — typed browser client for AG-UI streaming
+  react/                @stablehand/react — React components and hooks for AG-UI chat
+  create-stablehand/       Generic starter-project scaffold
   examples/
     kitchen-sink/       Multi-harness example project and tests
 docs/
@@ -126,7 +126,7 @@ tests/
 
 The maintained example in this repo is the kitchen-sink project in [packages/examples/kitchen-sink](packages/examples/kitchen-sink). It exercises the shipped harness set, shared tools, and event-triggered chaining across multiple agents.
 
-The scaffolded starter from `create-ctxmill` is intentionally generic. It creates a single assistant agent with file, knowledge, and search-style helper tools rather than a domain-specific finance, supply-chain, or marketing template.
+The scaffolded starter from `create-stablehand` is intentionally generic. It creates a single assistant agent with file, knowledge, and search-style helper tools rather than a domain-specific finance, supply-chain, or marketing template.
 
 ## UI Surface
 
@@ -164,9 +164,9 @@ The shipped UI includes:
 |----------|-------------|
 | [Architecture](docs/architecture.md) | System architecture, component interactions, data flow |
 | [Codebase Map](docs/codebase-map.md) | Current package map, runtime flows, capabilities, and gotchas |
-| [One-Pager](docs/ctxmill-one-pager.md) | High-level overview of what CTXMill is and does |
+| [One-Pager](docs/stablehand-one-pager.md) | High-level overview of what Stablehand is and does |
 | [API Reference](docs/api-reference.md) | Complete REST API and SSE streaming protocol reference |
-| [Extending CTXMill](EXTENDING.md) | Current Git-first extension handshake, state ownership, and UI boundary |
+| [Extending Stablehand](EXTENDING.md) | Current Git-first extension handshake, state ownership, and UI boundary |
 | [Scoped API Keys](docs/scoped-api-keys.md) | Capability map, creation, rotation, revocation, and verification |
 | [Environment Variables](docs/environment-variables.md) | Complete env var reference — core, sandbox, AI, storage, and system settings |
 | [Harness Comparison](docs/harness-comparison.md) | Feature matrix for choosing between LangGraph, Claude Agents, and PI Agent |
@@ -176,8 +176,8 @@ The shipped UI includes:
 | Document | Description |
 |----------|-------------|
 | [AG-UI Compatibility](docs/ag-ui-compat.md) | Drop-in AG-UI renderer support (CopilotKit, agui-hooks, assistant-ui) |
-| [React Chat Integration](docs/integrate-chat-ui.md) | Embed the CTXMill streaming chat UI with A2UI and HITL support |
-| [Embedding in Foreign Stacks](docs/embedding-in-foreign-stacks.md) | Integrating CTXMill into your existing application |
+| [React Chat Integration](docs/integrate-chat-ui.md) | Embed the Stablehand streaming chat UI with A2UI and HITL support |
+| [Embedding in Foreign Stacks](docs/embedding-in-foreign-stacks.md) | Integrating Stablehand into your existing application |
 | [Writing Tool Providers](docs/writing-tool-providers.md) | Adding custom tools (Local, MCP, HTTP, Composio) |
 | [Writing Skills](docs/writing-skills.md) | Current status of SDK-native workspace skills |
 | [Programmatic Tool Calling](docs/programmatic-tool-calling.md) | PTC API for structured tool invocations |

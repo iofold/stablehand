@@ -565,12 +565,12 @@ class LangGraphSession implements HarnessSession {
 
   private createNativeToolPolicyMiddleware(
     nativeToolPolicy: NonNullable<HarnessSessionConfig['nativeToolPolicy']>,
-    ctxmillToolNames: ReadonlySet<string>,
+    stablehandToolNames: ReadonlySet<string>,
   ): Record<string, unknown> {
     return {
-      name: 'ctxmill-native-tool-policy',
+      name: 'stablehand-native-tool-policy',
       beforeToolCall: (call: { name: string }) => {
-        if (ctxmillToolNames.has(call.name) || isNativeToolAllowed(nativeToolPolicy, call.name)) {
+        if (stablehandToolNames.has(call.name) || isNativeToolAllowed(nativeToolPolicy, call.name)) {
           return { blocked: false };
         }
         return {
@@ -842,7 +842,7 @@ const GRAPH_INTERRUPT_NAMES = new Set(['GraphInterrupt', 'NodeInterrupt']);
  */
 function createSystemMessageCompatibilityMiddleware(): Record<string, unknown> {
   return {
-    name: 'ctxmill-system-message-compatibility',
+    name: 'stablehand-system-message-compatibility',
     wrapModelCall: async (
       request: { systemMessage?: SystemMessage; [key: string]: unknown },
       handler: (req: { systemMessage?: SystemMessage; [key: string]: unknown }) => Promise<unknown>,
@@ -902,7 +902,7 @@ function createFanoutLimitMiddleware(opts: {
   };
 
   return {
-    name: 'ctxmill-turn-fanout-limits',
+    name: 'stablehand-turn-fanout-limits',
     wrapModelCall: async (
       request: Record<string, unknown>,
       handler: (req: Record<string, unknown>) => Promise<unknown>,
@@ -952,7 +952,7 @@ function createFanoutLimitMiddleware(opts: {
  */
 function createToolErrorBoundaryMiddleware(): Record<string, unknown> {
   return {
-    name: 'CtxmillToolErrorBoundary',
+    name: 'StablehandToolErrorBoundary',
     wrapToolCall: async (
       request: { toolCall: { id?: string; name: string }; [k: string]: unknown },
       handler: (req: unknown) => Promise<unknown>,

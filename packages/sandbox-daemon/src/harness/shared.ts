@@ -4,7 +4,7 @@ import {
   normalizeLLMProvider,
   supportedLLMProviderDescription,
   type CanonicalLLMProvider,
-} from '@ctxmill/shared';
+} from '@stablehand/shared';
 import type { ResolvedSecrets } from './types.js';
 
 const canonicalProviderValues = [...CANONICAL_LLM_PROVIDERS] as [CanonicalLLMProvider, ...CanonicalLLMProvider[]];

@@ -1,9 +1,9 @@
 {
-  "name": "@ctxmill/contracts",
+  "name": "@stablehand/contracts",
   "version": "0.1.0",
   "license": "MIT",
   "type": "module",
-  "description": "Strict runtime contracts for CTXMill APIs and event streams",
+  "description": "Strict runtime contracts for Stablehand APIs and event streams",
   "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

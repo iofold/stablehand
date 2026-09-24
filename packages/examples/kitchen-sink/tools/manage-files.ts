@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineTool } from 'ctxmill';
+import { defineTool } from 'stablehand';
 import fs from 'fs';
 import path from 'path';
 

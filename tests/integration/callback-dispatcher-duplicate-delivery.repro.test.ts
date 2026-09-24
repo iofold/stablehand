@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { CallbackDispatcher } from '../../packages/ctxmill/src/orchestrator/callback-dispatcher.js';
+import { CallbackDispatcher } from '../../packages/stablehand/src/orchestrator/callback-dispatcher.js';
 import { createTestDb, type TestDb } from '../utils/test-db.js';
 
 /**

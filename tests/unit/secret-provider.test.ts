@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { PostgresSecretProvider } from '../../packages/ctxmill/src/secrets/postgres-provider.js';
-import { deriveKey } from '../../packages/ctxmill/src/secrets/crypto.js';
+import { PostgresSecretProvider } from '../../packages/stablehand/src/secrets/postgres-provider.js';
+import { deriveKey } from '../../packages/stablehand/src/secrets/crypto.js';
 import { createTestDb, type TestDb } from '../utils/test-db.js';
 
 describe('PostgresSecretProvider', () => {

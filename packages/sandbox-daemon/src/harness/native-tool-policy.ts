@@ -1,4 +1,4 @@
-import type { NativeToolPolicy } from '@ctxmill/contracts';
+import type { NativeToolPolicy } from '@stablehand/contracts';
 
 /** Apply one canonical policy meaning to a harness-owned tool name. */
 export function isNativeToolAllowed(

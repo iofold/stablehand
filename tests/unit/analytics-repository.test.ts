@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import type { AnalyticsActivityBucket, AnalyticsMetrics } from '@ctxmill/contracts';
+import type { AnalyticsActivityBucket, AnalyticsMetrics } from '@stablehand/contracts';
 import { createTestDb, type TestDb } from '../utils/test-db.js';
 
 interface AnalyticsAgentRow extends AnalyticsMetrics {

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { TestTurnRegistry, MAX_CONCURRENT_TURNS_PER_AGENT } from '../utils/test-turn-registry.js';
-import { EventTriggerManager, MAX_TRIGGER_DEPTH } from '../../packages/ctxmill/src/events/trigger-manager.js';
+import { EventTriggerManager, MAX_TRIGGER_DEPTH } from '../../packages/stablehand/src/events/trigger-manager.js';
 import { createTestBus, createMockTriggerDb } from '../utils/event-bus-test-helpers.js';
-import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
+import type { DatabaseRepository } from '../../packages/stablehand/src/database/repository.js';
 
 const settle = () => new Promise((r) => setTimeout(r, 15));
 

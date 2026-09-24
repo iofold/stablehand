@@ -10,9 +10,9 @@ const GATEWAY = process.env.BENCH_GATEWAY_URL ?? 'http://127.0.0.1:4400/v1';
 export const JUDGE_MODEL = process.env.BENCH_JUDGE_MODEL ?? 'gpt-5.6-terra';
 
 function gatewayKey() {
-  if (process.env.CTXMILL_MODEL_GATEWAY_RUNTIME_KEY) return process.env.CTXMILL_MODEL_GATEWAY_RUNTIME_KEY;
+  if (process.env.STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY) return process.env.STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY;
   const env = readFileSync(join(REPO_ROOT, '.env'), 'utf8');
-  return env.match(/^CTXMILL_MODEL_GATEWAY_RUNTIME_KEY=(.+)$/m)[1].trim();
+  return env.match(/^STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY=(.+)$/m)[1].trim();
 }
 const KEY = gatewayKey();
 

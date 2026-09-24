@@ -3,7 +3,7 @@
   "name": "dev2-edge-capacity-mixed",
   "target": {
     "apiBase": "https://stablehand.staging.example.com/api",
-    "kubernetesNamespace": "ctxmill"
+    "kubernetesNamespace": "stablehand"
   },
   "levels": [8, 12, 16, 24, 32, 48],
   "maxGlobalContainers": 48,

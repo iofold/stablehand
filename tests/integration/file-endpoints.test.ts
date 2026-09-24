@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createGzip } from 'node:zlib';
 
-import { getConversationWorkspacePath } from '../../packages/ctxmill/src/workspace/session-workspace.js';
+import { getConversationWorkspacePath } from '../../packages/stablehand/src/workspace/session-workspace.js';
 import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
 interface TarPack {
@@ -15,7 +15,7 @@ interface TarPack {
 
 async function createWorkspaceArchive(files: Record<string, string>): Promise<Buffer> {
   const tarModulePath = new URL(
-    '../../packages/ctxmill/node_modules/tar-stream/index.js',
+    '../../packages/stablehand/node_modules/tar-stream/index.js',
     import.meta.url,
   ).href;
   const tar = await import(tarModulePath) as { pack(): TarPack };

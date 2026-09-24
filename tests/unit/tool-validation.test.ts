@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { z } from 'zod';
-import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
-import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
-import { DefaultToolRegistry } from '../../packages/ctxmill/src/tool/registry.js';
-import type { ToolProvider } from '../../packages/ctxmill/src/tool/provider.js';
-import type { ToolCall, ToolContext, ToolDefinition } from '@ctxmill/sandbox-daemon';
+import type { AgentDefinition } from '@stablehand/sandbox-daemon';
+import { LocalFunctionExecutor } from '../../packages/stablehand/src/tool/executor.js';
+import { DefaultToolRegistry } from '../../packages/stablehand/src/tool/registry.js';
+import type { ToolProvider } from '../../packages/stablehand/src/tool/provider.js';
+import type { ToolCall, ToolContext, ToolDefinition } from '@stablehand/sandbox-daemon';
 import {
   mapAgentHttpToolsToConfigs,
   registerAgentHttpTools,
-} from '../../packages/ctxmill/src/orchestrator/http-tools.js';
+} from '../../packages/stablehand/src/orchestrator/http-tools.js';
 
 const mockCtx: ToolContext = {
   agentId: 'test-agent',

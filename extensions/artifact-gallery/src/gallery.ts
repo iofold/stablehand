@@ -31,7 +31,7 @@ export const EMPTY_INDEX: GalleryIndex = { entries: {}, webhookAgentIds: [] };
 const SIGNATURE_MAX_AGE_SEC = 300;
 
 /**
- * Verify a CTXMill webhook delivery: `X-Webhook-Signature: v1=<hex>` where
+ * Verify a Stablehand webhook delivery: `X-Webhook-Signature: v1=<hex>` where
  * hex = HMAC-SHA256(secret, `${timestamp}.${rawBody}`).
  */
 export function verifyWebhookSignature(options: {

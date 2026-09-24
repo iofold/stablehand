@@ -3,12 +3,12 @@ import type {
   AgentCreateInput,
 } from '../../../packages/contracts/src/index.js';
 import type {
-  CtxmillControlClient,
+  StablehandControlClient,
 } from '../../../packages/client/src/index.js';
 
 import type { PerformanceStage } from './profile.js';
 
-const PERFORMANCE_OWNER_KEY = 'ctxmill.performance.managed';
+const PERFORMANCE_OWNER_KEY = 'stablehand.performance.managed';
 
 export function benchmarkAgentName(
   stage: PerformanceStage,
@@ -28,10 +28,10 @@ export function benchmarkAgentInput(
     systemPrompt: stage.systemPrompt,
     tools: [],
     mode: 'interactive',
-    description: `Managed CTXMILL performance agent for stage ${stage.name}`,
+    description: `Managed STABLEHAND performance agent for stage ${stage.name}`,
     metadata: {
       [PERFORMANCE_OWNER_KEY]: true,
-      'ctxmill.performance.stage': stage.name,
+      'stablehand.performance.stage': stage.name,
     },
   };
 }
@@ -42,7 +42,7 @@ export function isManagedBenchmarkAgent(
   return metadata?.[PERFORMANCE_OWNER_KEY] === true;
 }
 
-type AgentInventoryClient = Pick<CtxmillControlClient, 'agents'>;
+type AgentInventoryClient = Pick<StablehandControlClient, 'agents'>;
 
 function sameConfig(
   left: Record<string, unknown>,

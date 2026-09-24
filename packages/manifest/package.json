@@ -1,9 +1,9 @@
 {
-  "name": "@ctxmill/manifest",
+  "name": "@stablehand/manifest",
   "version": "0.1.0",
   "license": "MIT",
   "type": "module",
-  "description": "Strict browser-light and Node agent manifest contracts for CTXMill",
+  "description": "Strict browser-light and Node agent manifest contracts for Stablehand",
   "sideEffects": false,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -29,7 +29,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@ctxmill/contracts": "workspace:*",
+    "@stablehand/contracts": "workspace:*",
     "tar-stream": "^3.1.8",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"

@@ -16,7 +16,7 @@ import {
 } from 'node:path';
 import { createGzip } from 'node:zlib';
 
-import type { AgentCreateInput } from '@ctxmill/contracts';
+import type { AgentCreateInput } from '@stablehand/contracts';
 import * as tar from 'tar-stream';
 
 import { manifestToAgentCreateInput } from './convert.js';

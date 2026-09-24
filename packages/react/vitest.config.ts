@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   resolve: {
     alias: {
-      '@ctxmill/client': new URL('../client/src/index.ts', import.meta.url).pathname,
+      '@stablehand/client': new URL('../client/src/index.ts', import.meta.url).pathname,
     },
   },
   test: {

@@ -1,4 +1,4 @@
-// Shared types between @ctxmill/ui and ctxmill packages
+// Shared types between @stablehand/ui and stablehand packages
 export {
   API_CONVERSATION_STATUSES,
   API_TURN_STATUSES,

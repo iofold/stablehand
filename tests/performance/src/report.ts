@@ -25,12 +25,12 @@ export function renderPerformanceReport(
   kubernetes?: KubernetesResourceSummary,
 ): string {
   const lines = [
-    `# CTXMILL performance run ${result.runId}`,
+    `# STABLEHAND performance run ${result.runId}`,
     '',
     `Profile: ${result.profile}`,
     `Target: ${result.target.apiBase}`,
     `Window: ${result.startedAt} to ${result.completedAt}`,
-    `Planned load: ${result.plan.totalTurns} CTXMILL turns `
+    `Planned load: ${result.plan.totalTurns} STABLEHAND turns `
       + `(${result.plan.warmupTurns} warmup), about `
       + `${result.plan.estimatedModelCalls} model calls`,
     `Model gateway: ${result.modelGateway

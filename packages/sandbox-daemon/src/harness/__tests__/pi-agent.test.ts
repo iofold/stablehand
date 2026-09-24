@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { create } from '@bufbuild/protobuf';
 import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
-import { TurnDeliveryCapabilitySchema } from '@ctxmill/proto/sandbox/v1';
+import { TurnDeliveryCapabilitySchema } from '@stablehand/proto/sandbox/v1';
 import type { BashToolOptions } from '@earendil-works/pi-coding-agent';
 
 const mockCreateAgentSession = vi.fn();
@@ -232,7 +232,7 @@ describe('PIAgentHarness transcript syncing', () => {
     delete process.env.GEMINI_API_KEY;
   });
 
-  it('uses the canonical CTXMILL system prompt as the PI system prompt', async () => {
+  it('uses the canonical STABLEHAND system prompt as the PI system prompt', async () => {
     mockCreateAgentSession.mockResolvedValue({
       session: {
         subscribe: vi.fn(() => vi.fn()),
@@ -458,10 +458,10 @@ describe('PIAgentHarness transcript syncing', () => {
 
     const session = await new PIAgentHarness().openSession(makeConfig({
       secrets: {
-        CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
-        CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
-        CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
-        CTXMILL_MODEL_GATEWAY_REVISION: 'dev2-1',
+        STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+        STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+        STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+        STABLEHAND_MODEL_GATEWAY_REVISION: 'dev2-1',
       },
       harnessConfigJson: JSON.stringify({
         provider: 'openai',
@@ -512,10 +512,10 @@ describe('PIAgentHarness transcript syncing', () => {
     const session = await new PIAgentHarness().openSession(makeConfig({
       secrets: {
         OPENAI_API_KEY: 'upstream-key-must-not-win',
-        CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
-        CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
-        CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
-        CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+        STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+        STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+        STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+        STABLEHAND_MODEL_GATEWAY_REVISION: 'dev1-1',
       },
       harnessConfigJson: JSON.stringify({
         provider: 'openai',
@@ -587,10 +587,10 @@ describe('PIAgentHarness transcript syncing', () => {
     const session = await new PIAgentHarness().openSession(makeConfig({
       secrets: {
         GOOGLE_API_KEY: 'upstream-key-must-not-win',
-        CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
-        CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
-        CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
-        CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+        STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+        STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+        STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+        STABLEHAND_MODEL_GATEWAY_REVISION: 'dev1-1',
       },
       harnessConfigJson: JSON.stringify({
         provider: 'google',
@@ -744,7 +744,7 @@ describe('PIAgentHarness transcript syncing', () => {
           restoreFenceToken: 1n,
           leaseExpiresAtMs: BigInt(Date.now() + 60_000),
           agentId: 'test-agent',
-          signature: 'ctxmill-open-turn-delivery-capability-v1',
+          signature: 'stablehand-open-turn-delivery-capability-v1',
         }),
         leaseExpiresAtMs: Date.now() + 60_000,
       };
@@ -1021,7 +1021,7 @@ describe('PIAgentHarness AgentEvent contract baseline', () => {
         type: 'tool_execution_start',
         toolCallId: 'tool-pi-search',
         toolName: 'search',
-        args: { query: 'ctxmill' },
+        args: { query: 'stablehand' },
       });
       listener?.({
         type: 'tool_execution_end',
@@ -1069,7 +1069,7 @@ describe('PIAgentHarness AgentEvent contract baseline', () => {
         expectedTool: {
           id: 'tool-pi-search',
           name: 'search',
-          args: { query: 'ctxmill' },
+          args: { query: 'stablehand' },
           result: 'pi search result',
         },
       });
@@ -1080,7 +1080,7 @@ describe('PIAgentHarness AgentEvent contract baseline', () => {
 
   it('traces PI normalized AgentEvents through the shared decorator', async () => {
     process.env.LANGSMITH_TRACING = 'true';
-    process.env.LANGSMITH_PROJECT = 'ctxmill-test';
+    process.env.LANGSMITH_PROJECT = 'stablehand-test';
     let listener: ((event: Record<string, unknown>) => void) | undefined;
     const prompt = vi.fn(async () => {
       listener?.({
@@ -1091,7 +1091,7 @@ describe('PIAgentHarness AgentEvent contract baseline', () => {
         type: 'tool_execution_start',
         toolCallId: 'tool-pi-search',
         toolName: 'search',
-        args: { query: 'ctxmill' },
+        args: { query: 'stablehand' },
       });
       listener?.({
         type: 'tool_execution_end',
@@ -1139,7 +1139,7 @@ describe('PIAgentHarness AgentEvent contract baseline', () => {
     expect(root.config).toEqual(expect.objectContaining({
       name: 'pi-agent-agent-test-agent',
       run_type: 'chain',
-      project_name: 'ctxmill-test',
+      project_name: 'stablehand-test',
     }));
     const turn = root.children[0];
     expect(turn.config).toEqual(expect.objectContaining({
@@ -1154,7 +1154,7 @@ describe('PIAgentHarness AgentEvent contract baseline', () => {
     const tool = turn.children.find((child) => child.config.run_type === 'tool');
     expect(tool?.config).toEqual(expect.objectContaining({
       name: 'search',
-      inputs: { args: { query: 'ctxmill' }, toolCallId: 'tool-pi-search' },
+      inputs: { args: { query: 'stablehand' }, toolCallId: 'tool-pi-search' },
     }));
     expect(tool?.end).toHaveBeenCalledWith(expect.objectContaining({
       result: 'pi search result',

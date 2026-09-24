@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineTool } from 'ctxmill';
+import { defineTool } from 'stablehand';
 import { execSync } from 'child_process';
 
 export default defineTool({

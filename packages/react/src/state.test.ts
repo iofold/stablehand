@@ -2,15 +2,15 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { parseCanonicalStreamEvent } from '@ctxmill/client';
+import { parseCanonicalStreamEvent } from '@stablehand/client';
 
 import {
   createInitialChatState,
-  reduceCtxmillChatState,
-  toCtxmillMessages,
+  reduceStablehandChatState,
+  toStablehandMessages,
 } from './state.js';
 
-describe('@ctxmill/react chat reducer', () => {
+describe('@stablehand/react chat reducer', () => {
   it('reduces every server-emitted canonical fixture frame', () => {
     const fixture = JSON.parse(readFileSync(
       new URL('../../contracts/test-fixtures/canonical-stream-events.json', import.meta.url),
@@ -19,7 +19,7 @@ describe('@ctxmill/react chat reducer', () => {
     let state = createInitialChatState('conversation-1');
 
     for (const raw of fixture) {
-      state = reduceCtxmillChatState(state, {
+      state = reduceStablehandChatState(state, {
         type: 'stream_event',
         event: parseCanonicalStreamEvent(raw),
       });
@@ -31,7 +31,7 @@ describe('@ctxmill/react chat reducer', () => {
   it('reduces canonical text, A2UI, and interrupt events into chat state', () => {
     let state = createInitialChatState('conversation-1');
 
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'RUN_STARTED',
@@ -40,7 +40,7 @@ describe('@ctxmill/react chat reducer', () => {
         timestamp: 1,
       },
     });
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'TEXT_MESSAGE_START',
@@ -51,7 +51,7 @@ describe('@ctxmill/react chat reducer', () => {
         timestamp: 2,
       },
     });
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'TEXT_MESSAGE_CONTENT',
@@ -62,11 +62,11 @@ describe('@ctxmill/react chat reducer', () => {
         timestamp: 3,
       },
     });
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'CUSTOM',
-        name: 'ctxmill.a2ui.render',
+        name: 'stablehand.a2ui.render',
         runId: 'turn-1',
         threadId: 'conversation-1',
         block: {
@@ -77,11 +77,11 @@ describe('@ctxmill/react chat reducer', () => {
         timestamp: 4,
       },
     });
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'CUSTOM',
-        name: 'ctxmill.interrupt.requested',
+        name: 'stablehand.interrupt.requested',
         agentId: 'agent-1',
         turnId: 'turn-1',
         conversationId: 'conversation-1',
@@ -118,17 +118,17 @@ describe('@ctxmill/react chat reducer', () => {
     let state = createInitialChatState('conversation-1');
     expect(state.runPhase).toBe('idle');
 
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'append_user_message',
       message: { id: 'user-1', role: 'user', content: 'hi' },
     });
     expect(state.runPhase).toBe('submitted');
 
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'CUSTOM',
-        name: 'ctxmill.turn.pending',
+        name: 'stablehand.turn.pending',
         agentId: 'agent-1',
         turnId: 'turn-1',
         conversationId: 'conversation-1',
@@ -138,7 +138,7 @@ describe('@ctxmill/react chat reducer', () => {
     });
     expect(state.runPhase).toBe('provisioning');
 
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'RUN_STARTED',
@@ -149,7 +149,7 @@ describe('@ctxmill/react chat reducer', () => {
     });
     expect(state.runPhase).toBe('thinking');
 
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'TOOL_CALL_START',
@@ -162,7 +162,7 @@ describe('@ctxmill/react chat reducer', () => {
     });
     expect(state.runPhase).toBe('tool');
 
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'TOOL_CALL_END',
@@ -172,7 +172,7 @@ describe('@ctxmill/react chat reducer', () => {
         timestamp: 4,
       },
     });
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'TOOL_CALL_RESULT',
@@ -193,7 +193,7 @@ describe('@ctxmill/react chat reducer', () => {
       status: 'complete',
     });
 
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'TEXT_MESSAGE_CONTENT',
@@ -206,7 +206,7 @@ describe('@ctxmill/react chat reducer', () => {
     });
     expect(state.runPhase).toBe('streaming');
 
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'RUN_FINISHED',
@@ -235,11 +235,11 @@ describe('@ctxmill/react chat reducer', () => {
       pendingHitl: pending,
     };
 
-    const unrelated = reduceCtxmillChatState(state, {
+    const unrelated = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'CUSTOM',
-        name: 'ctxmill.interrupt.resolved',
+        name: 'stablehand.interrupt.resolved',
         agentId: 'agent-1',
         turnId: 'turn-2',
         conversationId: 'conversation-2',
@@ -250,11 +250,11 @@ describe('@ctxmill/react chat reducer', () => {
     });
     expect(unrelated.pendingHitl).toEqual(pending);
 
-    const resolved = reduceCtxmillChatState(unrelated, {
+    const resolved = reduceStablehandChatState(unrelated, {
       type: 'stream_event',
       event: {
         type: 'CUSTOM',
-        name: 'ctxmill.interrupt.resolved',
+        name: 'stablehand.interrupt.resolved',
         agentId: 'agent-1',
         turnId: 'turn-1',
         conversationId: 'conversation-1',
@@ -268,20 +268,20 @@ describe('@ctxmill/react chat reducer', () => {
 
   it('settles a run whose stream ends without a terminal frame', () => {
     let state = createInitialChatState('conversation-1');
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'append_user_message',
       message: { id: 'user-1', role: 'user', content: 'hi' },
     });
     expect(state.isRunning).toBe(true);
 
-    state = reduceCtxmillChatState(state, { type: 'run_settled' });
+    state = reduceStablehandChatState(state, { type: 'run_settled' });
     expect(state.isRunning).toBe(false);
     expect(state.runPhase).toBe('idle');
     expect(state.activeAssistantMessageId).toBeNull();
   });
 
   it('discards only a user message whose optimistic send was rejected', () => {
-    let state = reduceCtxmillChatState(
+    let state = reduceStablehandChatState(
       createInitialChatState('conversation-1'),
       {
         type: 'append_user_message',
@@ -293,7 +293,7 @@ describe('@ctxmill/react chat reducer', () => {
       },
     );
 
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'discard_optimistic_user_message',
       messageId: 'optimistic-user-1',
     });
@@ -303,7 +303,7 @@ describe('@ctxmill/react chat reducer', () => {
   });
 
   it('uses the canonical RUN_ERROR message field', () => {
-    const state = reduceCtxmillChatState(
+    const state = reduceStablehandChatState(
       { ...createInitialChatState('conversation-1'), isRunning: true },
       {
         type: 'stream_event',
@@ -322,7 +322,7 @@ describe('@ctxmill/react chat reducer', () => {
   });
 
   it('preserves the role of a server-emitted user message', () => {
-    const state = reduceCtxmillChatState(
+    const state = reduceStablehandChatState(
       createInitialChatState('conversation-1'),
       {
         type: 'stream_event',
@@ -341,7 +341,7 @@ describe('@ctxmill/react chat reducer', () => {
   });
 
   it('reconciles an optimistic user message with its canonical server echo', () => {
-    let state = reduceCtxmillChatState(
+    let state = reduceStablehandChatState(
       createInitialChatState('conversation-1'),
       {
         type: 'append_user_message',
@@ -353,7 +353,7 @@ describe('@ctxmill/react chat reducer', () => {
       },
     );
 
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'TEXT_MESSAGE_START',
@@ -370,7 +370,7 @@ describe('@ctxmill/react chat reducer', () => {
       content: 'Reconcile me once',
       createdAt: '1970-01-01T00:00:00.001Z',
     });
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'TEXT_MESSAGE_CONTENT',
@@ -381,7 +381,7 @@ describe('@ctxmill/react chat reducer', () => {
         timestamp: 2,
       },
     });
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'TEXT_MESSAGE_END',
@@ -403,7 +403,7 @@ describe('@ctxmill/react chat reducer', () => {
 
   it('does not attach a tool call to the preceding user echo', () => {
     let state = createInitialChatState('conversation-1');
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'TEXT_MESSAGE_START',
@@ -414,7 +414,7 @@ describe('@ctxmill/react chat reducer', () => {
         timestamp: 1,
       },
     });
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'TEXT_MESSAGE_CONTENT',
@@ -425,7 +425,7 @@ describe('@ctxmill/react chat reducer', () => {
         timestamp: 2,
       },
     });
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: {
         type: 'TOOL_CALL_START',
@@ -458,7 +458,7 @@ describe('@ctxmill/react chat reducer', () => {
   it('keeps the active assistant projection when a canonical tool message is committed', () => {
     let state = createInitialChatState('conversation-1');
     const emit = (raw: unknown) => {
-      state = reduceCtxmillChatState(state, {
+      state = reduceStablehandChatState(state, {
         type: 'stream_event',
         event: parseCanonicalStreamEvent(raw),
       });
@@ -485,7 +485,7 @@ describe('@ctxmill/react chat reducer', () => {
     });
     emit({
       type: 'CUSTOM',
-      name: 'ctxmill.message.committed',
+      name: 'stablehand.message.committed',
       ...customIdentity,
       messageId: 'assistant-canonical',
       messageSeq: 0,
@@ -510,7 +510,7 @@ describe('@ctxmill/react chat reducer', () => {
     });
     emit({
       type: 'CUSTOM',
-      name: 'ctxmill.message.committed',
+      name: 'stablehand.message.committed',
       ...customIdentity,
       messageId: 'tool-canonical',
       messageSeq: 1,
@@ -548,7 +548,7 @@ describe('@ctxmill/react chat reducer', () => {
   it('does not let a later raw tool result replace a canonical tool outcome', () => {
     let state = createInitialChatState('conversation-1');
     const emit = (raw: unknown) => {
-      state = reduceCtxmillChatState(state, {
+      state = reduceStablehandChatState(state, {
         type: 'stream_event',
         event: parseCanonicalStreamEvent(raw),
       });
@@ -577,7 +577,7 @@ describe('@ctxmill/react chat reducer', () => {
     });
     emit({
       type: 'CUSTOM',
-      name: 'ctxmill.message.committed',
+      name: 'stablehand.message.committed',
       ...customIdentity,
       messageId: 'assistant-canonical',
       messageSeq: 0,
@@ -595,7 +595,7 @@ describe('@ctxmill/react chat reducer', () => {
     });
     emit({
       type: 'CUSTOM',
-      name: 'ctxmill.message.committed',
+      name: 'stablehand.message.committed',
       ...customIdentity,
       messageId: 'tool-canonical',
       messageSeq: 1,
@@ -623,7 +623,7 @@ describe('@ctxmill/react chat reducer', () => {
   });
 
   it('hydrates missing tool parts from REST toolCalls and ignores an older committed baseline', () => {
-    let state = reduceCtxmillChatState(createInitialChatState('conversation-1'), {
+    let state = reduceStablehandChatState(createInitialChatState('conversation-1'), {
       type: 'load_messages',
       messages: [{
         id: 'message-1',
@@ -653,11 +653,11 @@ describe('@ctxmill/react chat reducer', () => {
       },
     ]);
 
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'stream_event',
       event: parseCanonicalStreamEvent({
         type: 'CUSTOM',
-        name: 'ctxmill.message.committed',
+        name: 'stablehand.message.committed',
         agentId: 'agent-1',
         turnId: 'turn-1',
         conversationId: 'conversation-1',
@@ -676,7 +676,7 @@ describe('@ctxmill/react chat reducer', () => {
   });
 
   it('preserves canonical persisted timestamps across transcript reloads', () => {
-    const state = reduceCtxmillChatState(
+    const state = reduceStablehandChatState(
       createInitialChatState('conversation-1'),
       {
         type: 'load_messages',
@@ -696,7 +696,7 @@ describe('@ctxmill/react chat reducer', () => {
   });
 
   it('preserves timestamps and tool-result identity from AG-UI snapshots', () => {
-    const state = reduceCtxmillChatState(
+    const state = reduceStablehandChatState(
       createInitialChatState('conversation-1'),
       {
         type: 'stream_event',
@@ -721,7 +721,7 @@ describe('@ctxmill/react chat reducer', () => {
       toolCallId: 'tool-call-1',
       createdAt: '2026-07-20T11:28:55.222Z',
     });
-    expect(toCtxmillMessages(state.messages)[0]).toMatchObject({
+    expect(toStablehandMessages(state.messages)[0]).toMatchObject({
       id: 'tool-message-1',
       role: 'tool',
       toolCallId: 'tool-call-1',
@@ -731,7 +731,7 @@ describe('@ctxmill/react chat reducer', () => {
   it('keeps canonical message revisions authoritative across replay and REST convergence', () => {
     let state = createInitialChatState('conversation-1');
     const emit = (raw: unknown) => {
-      state = reduceCtxmillChatState(state, {
+      state = reduceStablehandChatState(state, {
         type: 'stream_event',
         event: parseCanonicalStreamEvent(raw),
       });
@@ -771,7 +771,7 @@ describe('@ctxmill/react chat reducer', () => {
 
     const baselineCommit = {
       type: 'CUSTOM',
-      name: 'ctxmill.message.committed',
+      name: 'stablehand.message.committed',
       ...customIdentity,
       messageId: 'message-tools',
       messageSeq: 0,
@@ -819,7 +819,7 @@ describe('@ctxmill/react chat reducer', () => {
 
     const revisionOne = {
       type: 'CUSTOM',
-      name: 'ctxmill.message.updated',
+      name: 'stablehand.message.updated',
       ...customIdentity,
       messageId: 'message-tools',
       messageSeq: 0,
@@ -869,7 +869,7 @@ describe('@ctxmill/react chat reducer', () => {
     });
     emit({
       type: 'CUSTOM',
-      name: 'ctxmill.message.updated',
+      name: 'stablehand.message.updated',
       ...customIdentity,
       messageId: 'message-tools',
       messageSeq: 0,
@@ -908,7 +908,7 @@ describe('@ctxmill/react chat reducer', () => {
     });
     const finalCommit = {
       type: 'CUSTOM',
-      name: 'ctxmill.message.committed',
+      name: 'stablehand.message.committed',
       ...customIdentity,
       messageId: 'message-final',
       messageSeq: 1,
@@ -935,7 +935,7 @@ describe('@ctxmill/react chat reducer', () => {
     ]);
     expect(state.messageRevisions.get('message-tools')).toBe(2);
 
-    state = reduceCtxmillChatState(state, {
+    state = reduceStablehandChatState(state, {
       type: 'load_messages',
       threadId: 'conversation-1',
       messages: [

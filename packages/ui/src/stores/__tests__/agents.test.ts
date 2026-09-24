@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Agent } from '@ctxmill/contracts';
+import type { Agent } from '@stablehand/contracts';
 import { makeAgentFixture } from '@/test/agent-fixture';
 
 const mocks = vi.hoisted(() => ({

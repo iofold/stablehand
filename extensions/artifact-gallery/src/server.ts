@@ -17,7 +17,7 @@ import {
 } from './gallery.js';
 
 /**
- * artifact-gallery: reference CTXMill extension (ctx-7ay9).
+ * artifact-gallery: reference Stablehand extension (ctx-7ay9).
  *
  * Out-of-process service on a least-privilege scoped key
  * (artifacts:read + webhooks:manage). Ingests artifact.created webhook
@@ -27,8 +27,8 @@ import {
  * store is a rebuildable projection — deleting it loses nothing.
  */
 
-const BASE_URL = (process.env.CTXMILL_BASE_URL ?? 'http://localhost:3002').replace(/\/+$/, '');
-const API_KEY = process.env.CTXMILL_API_KEY ?? '';
+const BASE_URL = (process.env.STABLEHAND_BASE_URL ?? 'http://localhost:3002').replace(/\/+$/, '');
+const API_KEY = process.env.STABLEHAND_API_KEY ?? '';
 const PORT = Number(process.env.GALLERY_PORT ?? 8090);
 const PUBLIC_URL = (process.env.GALLERY_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/+$/, '');
 const DATA_DIR = process.env.GALLERY_DATA_DIR ?? path.join(process.cwd(), 'data');
@@ -36,7 +36,7 @@ const WEBHOOK_SECRET = process.env.GALLERY_WEBHOOK_SECRET ?? '';
 const SYNC_INTERVAL_MS = Number(process.env.GALLERY_SYNC_INTERVAL_MS ?? 60_000);
 
 if (!API_KEY) {
-  console.error('[gallery] CTXMILL_API_KEY is required (scoped key: artifacts:read + webhooks:manage)');
+  console.error('[gallery] STABLEHAND_API_KEY is required (scoped key: artifacts:read + webhooks:manage)');
   process.exit(1);
 }
 if (!WEBHOOK_SECRET) {
@@ -155,7 +155,7 @@ async function ensureWebhooks(): Promise<void> {
     const res = await api(`/api/agents/${agentId}/webhooks`, {
       method: 'POST',
       body: JSON.stringify({
-        url: `${PUBLIC_URL}/hooks/ctxmill`,
+        url: `${PUBLIC_URL}/hooks/stablehand`,
         events: ['artifact.created'],
         secret: WEBHOOK_SECRET,
       }),
@@ -190,7 +190,7 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === 'POST' && url.pathname === '/hooks/ctxmill') {
+    if (req.method === 'POST' && url.pathname === '/hooks/stablehand') {
       const rawBody = await readBody(req);
       const valid = verifyWebhookSignature({
         secret: WEBHOOK_SECRET,

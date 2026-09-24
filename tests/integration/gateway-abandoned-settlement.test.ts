@@ -18,7 +18,7 @@ describe('settleAbandonedGatewayTurns', () => {
   beforeEach(() => { allowConsoleErrors(); });
 
   beforeAll(async () => {
-    testApp = await createTestApp({ dirPrefix: 'ctxmill-gw-settle-test-' });
+    testApp = await createTestApp({ dirPrefix: 'stablehand-gw-settle-test-' });
     db = testApp.container.db;
     const createRes = await testApp.app.inject({
       method: 'POST',

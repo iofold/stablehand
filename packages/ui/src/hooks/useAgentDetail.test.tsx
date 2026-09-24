@@ -1,7 +1,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ConversationSummary } from '@ctxmill/contracts';
+import type { ConversationSummary } from '@stablehand/contracts';
 
 import { useAgentDetail } from './useAgentDetail';
 import type { TabId } from '@/components/agent/types';

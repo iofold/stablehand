@@ -41,7 +41,7 @@ const CapacityRampSchema = z.strictObject({
   name: z.string().trim().min(1),
   target: z.strictObject({
     apiBase: z.url(),
-    kubernetesNamespace: z.string().trim().min(1).default('ctxmill'),
+    kubernetesNamespace: z.string().trim().min(1).default('stablehand'),
   }),
   levels: z.array(z.number().int().positive().max(100)).min(1),
   maxGlobalContainers: z.number().int().positive().max(100),
@@ -386,7 +386,7 @@ function activeSandboxJobs(jobs: KubernetesList): number {
     return Boolean(
       labels
       && typeof labels === 'object'
-      && (labels as Record<string, unknown>)['ctxmill.sandbox-session-id'],
+      && (labels as Record<string, unknown>)['stablehand.sandbox-session-id'],
     ) && Number((status as Record<string, unknown>)['active'] ?? 0) > 0;
   }).length;
 }
@@ -438,8 +438,8 @@ function traceCoverage(
   }
   const covered = turns.filter((turn) => {
     const names = spans.get(turn.turnId);
-    return names?.has('ctxmill.turn.execute')
-      && names.has('ctxmill.turn.delivery');
+    return names?.has('stablehand.turn.execute')
+      && names.has('stablehand.turn.delivery');
   }).length;
   return covered / turns.length;
 }
@@ -452,7 +452,7 @@ function sandboxTraceCoverage(
   const deliveredSessions = new Set(
     traces
       .filter((trace) =>
-        trace.service_name?.startsWith('ctxmill-sandbox-')
+        trace.service_name?.startsWith('stablehand-sandbox-')
         && trace.url_path?.endsWith('HarnessService/DeliverTurn'))
       .map((trace) => trace.sandbox_session_id)
       .filter((sessionId): sessionId is string => Boolean(sessionId)),

@@ -1,6 +1,6 @@
 # Custom API Providers
 
-CTXMill agents can route through OpenRouter, Cloudflare AI Gateway, or any OpenAI-compatible endpoint, no code changes required. Just configure `baseUrl` and `apiKeyRef` in your agent manifest.
+Stablehand agents can route through OpenRouter, Cloudflare AI Gateway, or any OpenAI-compatible endpoint, no code changes required. Just configure `baseUrl` and `apiKeyRef` in your agent manifest.
 
 ## How It Works
 
@@ -8,14 +8,14 @@ The `baseUrl` field in agent manifests overrides the default API endpoint. The p
 
 The `provider` field controls which SDK class is used, not which company. Set `provider: openai` to use the OpenAI SDK pointed at any OpenAI-compatible endpoint.
 
-Canonical provider values are `openai`, `anthropic`, and `google`. Manifests and API requests also accept `gemini` as a compatibility alias, but CTXMill normalizes it to `google` before storage or execution. Unknown provider values are rejected during manifest/API validation.
+Canonical provider values are `openai`, `anthropic`, and `google`. Manifests and API requests also accept `gemini` as a compatibility alias, but Stablehand normalizes it to `google` before storage or execution. Unknown provider values are rejected during manifest/API validation.
 
 ## OpenRouter
 
 ### LangGraph Harness (OpenAI-compatible endpoint)
 
 ```yaml
-apiVersion: ctxmill.io/v1
+apiVersion: stablehand.io/v1
 kind: Agent
 metadata:
   name: openrouter-analyst
@@ -37,7 +37,7 @@ Set the `OPENAI_API_KEY` env var to your OpenRouter API key (format: `sk-or-v1-.
 ### Claude Agents Harness (Anthropic-compatible endpoint)
 
 ```yaml
-apiVersion: ctxmill.io/v1
+apiVersion: stablehand.io/v1
 kind: Agent
 metadata:
   name: openrouter-writer
@@ -132,7 +132,7 @@ harnessConfig:
 The direct Workers AI endpoint works on the LangGraph and PI Agent harnesses
 through its OpenAI-compatible path; `@cf/zai-org/glm-5.2` is verified there for
 tool calling and streaming. Workers AI does not itself expose the Anthropic
-Messages schema required by Claude Agents. A CTXMILL deployment with LiteLLM
+Messages schema required by Claude Agents. A STABLEHAND deployment with LiteLLM
 can bridge that protocol: configure the Claude harness with `provider:
 anthropic` and the LiteLLM alias (for example `cf-glm-5.2`), omit `apiKeyRef`
 and `baseUrl`, and let the deployment gateway translate `/v1/messages` to the
@@ -143,7 +143,7 @@ especially for streaming tool arguments. Other notable catalog entries:
 
 ### Authenticated Gateways caveat
 
-If your Cloudflare gateway has authentication enabled, it requires a `cf-aig-authorization` header. CTXMill agent manifests don't currently support custom headers, so either:
+If your Cloudflare gateway has authentication enabled, it requires a `cf-aig-authorization` header. Stablehand agent manifests don't currently support custom headers, so either:
 
 - Disable gateway authentication in the Cloudflare dashboard, or
 - Use BYOK (Bring Your Own Keys) stored in Cloudflare. The gateway token goes in `apiKeyRef` and Cloudflare injects the provider key server-side.

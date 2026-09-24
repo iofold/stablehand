@@ -48,8 +48,8 @@ vi.mock('@langchain/google-genai', () => ({
   ChatGoogleGenerativeAI: MockChatGoogleGenerativeAI,
 }));
 
-import type { AgentEvent, HarnessSessionConfig } from '@ctxmill/sandbox-daemon';
-import type { Message } from '@ctxmill/sandbox-daemon';
+import type { AgentEvent, HarnessSessionConfig } from '@stablehand/sandbox-daemon';
+import type { Message } from '@stablehand/sandbox-daemon';
 
 function makeMessage(role: Message['role'], content: string): Message {
   return {
@@ -212,10 +212,10 @@ describe('LangGraphHarness', () => {
     const { LangGraphHarness } = await import('../langgraph.js');
     const session = await new LangGraphHarness().openSession(makeConfig({
       secrets: {
-        CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
-        CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
-        CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
-        CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+        STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+        STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+        STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+        STABLEHAND_MODEL_GATEWAY_REVISION: 'dev1-1',
       },
       harnessConfigJson: JSON.stringify({
         model: 'gemini-2.5-flash',
@@ -231,10 +231,10 @@ describe('LangGraphHarness', () => {
       provider: 'google',
       model: 'gemini-2.5-flash',
     }, {
-      CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
-      CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
-      CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
-      CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+      STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+      STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+      STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+      STABLEHAND_MODEL_GATEWAY_REVISION: 'dev1-1',
     }, 'sensitive-google-turn');
 
     expect(mockChatGoogleGenerativeAI).toHaveBeenCalledWith(expect.objectContaining({
@@ -698,7 +698,7 @@ describe('LangGraphHarness subagent annotation (ctx-5myn)', () => {
       // Subagent activity: prose must not splice into the parent stream;
       // tool calls ride flat with the parent pointer.
       { event: 'on_chat_model_stream', data: { chunk: { content: 'thinking...' } }, metadata: subagentMeta },
-      { event: 'on_tool_start', data: { name: 'web_search', input: { q: 'ctxmill' } }, run_id: 'sub-run', metadata: subagentMeta },
+      { event: 'on_tool_start', data: { name: 'web_search', input: { q: 'stablehand' } }, run_id: 'sub-run', metadata: subagentMeta },
       { event: 'on_tool_end', data: { output: 'results' }, run_id: 'sub-run', metadata: subagentMeta },
       { event: 'on_tool_end', data: { output: 'subagent report' }, run_id: 'task-run' },
     ]));

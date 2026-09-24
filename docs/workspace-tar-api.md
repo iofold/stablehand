@@ -11,7 +11,7 @@ Replaces the entire base workspace for the specified agent.
 
 #### Request
 - **Headers**:
-  - `Authorization: Bearer $CTXMILL_API_TOKEN` unless auth is explicitly disabled.
+  - `Authorization: Bearer $STABLEHAND_API_TOKEN` unless auth is explicitly disabled.
   - `Content-Type: application/gzip` or `application/x-gzip`.
 - **Body**: Raw `tar.gz` binary data.
 - **Query Parameters**:
@@ -41,7 +41,7 @@ The system strictly validates every entry in the tarball to prevent security bre
 - **No Path Traversal**: Entries containing `../` are rejected.
 - **No Symlinks or Hardlinks**: Only regular files and directories are allowed.
 - **No Special Files**: Devices, sockets, and FIFOs are forbidden.
-- **No Reserved Paths**: You can't write to `.git/` or `.ctxmill/` directories.
+- **No Reserved Paths**: You can't write to `.git/` or `.stablehand/` directories.
 - **Size Limits**: The total extracted size must be under 100 MB. This limit is configurable in the system settings.
 - **Target Confinement**: Files must stay within the agent's workspace directory.
 
@@ -80,7 +80,7 @@ Send the raw binary data using the `--data-binary` flag.
 
 ```bash
 curl -X POST http://localhost:3002/api/agents/agent-123/workspace \
-  -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+  -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
   -H "Content-Type: application/gzip" \
   --data-binary @workspace.tar.gz
 ```
@@ -96,7 +96,7 @@ async function uploadWorkspace(agentId, filePath) {
   const stream = fs.createReadStream(filePath);
   await axios.post(`http://localhost:3002/api/agents/${agentId}/workspace`, stream, {
     headers: {
-      'Authorization': `Bearer ${process.env.CTXMILL_API_TOKEN}`,
+      'Authorization': `Bearer ${process.env.STABLEHAND_API_TOKEN}`,
       'Content-Type': 'application/gzip',
     },
   });

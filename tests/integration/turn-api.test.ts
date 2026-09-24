@@ -15,7 +15,7 @@ describe('Turn API lifecycle', () => {
 
   beforeAll(async () => {
     testApp = await createTestApp({
-      dirPrefix: 'ctxmill-session-test-',
+      dirPrefix: 'stablehand-session-test-',
     });
     app = testApp.app;
     container = testApp.container;

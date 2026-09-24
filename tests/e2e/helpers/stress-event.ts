@@ -13,7 +13,7 @@ import { API_BASE, getEvents } from '../support';
  * failures, not warnings. Harnesses that cannot emit `schemaVersion` today
  * must be tracked under a follow-up sub-issue.
  *
- * `CTXMILL_STRESS_SCHEMA_VERSION_OPTIONAL=1` relaxes the schemaVersion check
+ * `STABLEHAND_STRESS_SCHEMA_VERSION_OPTIONAL=1` relaxes the schemaVersion check
  * for environments that haven't deployed the harness payload upgrade yet.
  * The flag is intended for short-term migration only and MUST NOT be set in
  * the required release-gate runner.
@@ -50,7 +50,7 @@ function parsePayload(raw: string): ParsedStressPayload | null {
 }
 
 function isSchemaVersionOptional(): boolean {
-  return process.env.CTXMILL_STRESS_SCHEMA_VERSION_OPTIONAL === '1';
+  return process.env.STABLEHAND_STRESS_SCHEMA_VERSION_OPTIONAL === '1';
 }
 
 function asNumber(value: unknown): number | null {

@@ -42,7 +42,7 @@ describe('A2UIBlock', () => {
         <A2UIBlock
           block={{
             id: 'b2',
-            component: 'ctxmill.hitl:ApprovalCard',
+            component: 'stablehand.hitl:ApprovalCard',
             props: {
               title: 'Approve deployment',
               description: 'Review the deployment request.',

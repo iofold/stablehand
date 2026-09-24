@@ -21,7 +21,7 @@ import {
   type RestoreBootstrap,
   type SessionCheckpoint as ProtoSessionCheckpoint,
   type ToolMetadata as ProtoToolMetadata,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent, ResolvedSecrets } from '../../harness/types.js';
@@ -320,7 +320,7 @@ describe('protoDeliverTurnToInput', () => {
             create(ToolCallSchema, {
               id: 'tc-1',
               name: 'search',
-              argumentsJson: '{"query":"ctxmill","filters":["tests"]}',
+              argumentsJson: '{"query":"stablehand","filters":["tests"]}',
             }),
             create(ToolCallSchema, {
               id: 'tc-2',
@@ -351,7 +351,7 @@ describe('protoDeliverTurnToInput', () => {
         {
           id: 'tc-1',
           name: 'search',
-          arguments: { query: 'ctxmill', filters: ['tests'] },
+          arguments: { query: 'stablehand', filters: ['tests'] },
         },
         {
           id: 'tc-2',
@@ -418,7 +418,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
           type: 'tool_call_start',
           id: 'tc-1',
           name: 'search',
-          args: '{"query":"ctxmill"}',
+          args: '{"query":"stablehand"}',
         },
         expectedCase: 'toolCallStart',
         assert: (payload) => {
@@ -428,7 +428,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
           expect(payload.event.value).toMatchObject({
             id: 'tc-1',
             name: 'search',
-            argsJson: '{"query":"ctxmill"}',
+            argsJson: '{"query":"stablehand"}',
           });
         },
       },
@@ -586,7 +586,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
         {
           id: 'tc-1',
           name: 'search',
-          arguments: { query: 'ctxmill' },
+          arguments: { query: 'stablehand' },
         },
         {
           id: 'tc-2',
@@ -612,13 +612,13 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
     });
     expect(converted.payload.value.toolCalls).toEqual([
       {
-        $typeName: 'ctxmill.sandbox.v1.ToolCall',
+        $typeName: 'stablehand.sandbox.v1.ToolCall',
         id: 'tc-1',
         name: 'search',
-        argumentsJson: '{"query":"ctxmill"}',
+        argumentsJson: '{"query":"stablehand"}',
       },
       {
-        $typeName: 'ctxmill.sandbox.v1.ToolCall',
+        $typeName: 'stablehand.sandbox.v1.ToolCall',
         id: 'tc-2',
         name: 'raw',
         argumentsJson: '{"already":"encoded"}',
@@ -816,7 +816,7 @@ describe('protoToToolDefs', () => {
 
   it('wires a real orchestrator proxy when client and routing metadata are provided', async () => {
     const requestTool = vi.fn<OrchestratorServiceClient['requestTool']>().mockResolvedValue({
-      $typeName: 'ctxmill.sandbox.v1.RequestToolResponse',
+      $typeName: 'stablehand.sandbox.v1.RequestToolResponse',
       requestId: 'req-1',
       result: '{"delivered":true}',
       error: undefined,
@@ -842,7 +842,7 @@ describe('protoToToolDefs', () => {
         restoreFenceToken: 0n,
         containerId: 'container-123',
         agentId: 'agent-123',
-        signature: 'ctxmill-open-turn-delivery-capability-v1',
+        signature: 'stablehand-open-turn-delivery-capability-v1',
       }),
       leaseExpiresAtMs,
       abortController: new AbortController(),

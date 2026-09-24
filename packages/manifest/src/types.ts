@@ -5,7 +5,7 @@ import type {
   LangGraphConfig,
   NativeToolPolicy,
   PIAgentConfig,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 
 export interface ManifestMetadata {
   name: string;
@@ -111,7 +111,7 @@ export type ManifestSpec =
   | PIAgentManifestSpec;
 
 export interface AgentManifest {
-  apiVersion: 'ctxmill.io/v1';
+  apiVersion: 'stablehand.io/v1';
   kind: 'Agent';
   metadata: ManifestMetadata;
   spec: ManifestSpec;

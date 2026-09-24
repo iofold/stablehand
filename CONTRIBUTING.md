@@ -1,4 +1,4 @@
-# Contributing to CTXMill
+# Contributing to Stablehand
 
 ## Prerequisites
 
@@ -10,7 +10,7 @@
 
 ```bash
 git clone <repo-url>
-cd ctxmill
+cd stablehand
 cp .env.example .env
 # Add the API keys you need
 
@@ -47,14 +47,14 @@ docker compose down
 
 ```text
 packages/
-  ctxmill/           Core runtime, orchestrator, harness registry, tools, workspace
+  stablehand/           Core runtime, orchestrator, harness registry, tools, workspace
   sandbox-daemon/    gRPC daemon + harness adapters that run inside sandbox containers
   proto/             Protocol Buffers for sandbox gRPC IPC
   ui/                Frontend (React, SSE, Zustand, Tailwind)
   shared/            Shared API and event types
   client/            Typed browser client for AG-UI streaming integrations
   react/             React components and hooks for AG-UI chat integrations
-  create-ctxmill/    Starter-project scaffold
+  create-stablehand/    Starter-project scaffold
   examples/          Example projects
 ```
 
@@ -116,7 +116,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs these jobs on every push and PR
 ## Notes on Current Architecture
 
 - The repo is Docker-first today.
-- Agent harnesses execute inside Docker containers via the sandbox subsystem (`packages/ctxmill/src/sandbox/`). The orchestrator creates a container per run, communicates via gRPC, and supports checkpoint/resume, timeout enforcement, and orphan cleanup.
+- Agent harnesses execute inside Docker containers via the sandbox subsystem (`packages/stablehand/src/sandbox/`). The orchestrator creates a container per run, communicates via gRPC, and supports checkpoint/resume, timeout enforcement, and orphan cleanup.
 - The maintained example project is `packages/examples/kitchen-sink`.
 
 ## Pull Request Guidelines

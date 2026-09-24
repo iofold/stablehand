@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { DefaultHarnessRegistry } from '../../packages/ctxmill/src/harness/registry.js';
+import { DefaultHarnessRegistry } from '../../packages/stablehand/src/harness/registry.js';
 import {
   HARNESS_CONFIG_SCHEMAS,
   LangGraphConfigSchema,

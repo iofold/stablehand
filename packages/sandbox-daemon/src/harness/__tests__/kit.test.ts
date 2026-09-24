@@ -19,7 +19,7 @@ describe('harness adapter kit', () => {
     const accumulator = new TurnAccumulator({ turnId: 'turn-1' });
 
     expect(accumulator.appendText('Hello')).toEqual({ type: 'text_delta', content: 'Hello' });
-    accumulator.recordToolStart({ id: 'tool-1', name: 'search', args: { query: 'ctxmill' } });
+    accumulator.recordToolStart({ id: 'tool-1', name: 'search', args: { query: 'stablehand' } });
     accumulator.recordToolEnd({ id: 'tool-1', result: 'search result' });
     accumulator.recordDone({ type: 'done', usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 } });
 
@@ -32,8 +32,8 @@ describe('harness adapter kit', () => {
       toolCalls: [{
         id: 'tool-1',
         name: 'search',
-        arguments: { query: 'ctxmill' },
-        args: '{"query":"ctxmill"}',
+        arguments: { query: 'stablehand' },
+        args: '{"query":"stablehand"}',
         status: 'complete',
       }],
     });
@@ -115,14 +115,14 @@ describe('harness adapter kit', () => {
       id: 'approval-1',
       turnId: 'turn-1',
       toolName: 'guarded_search',
-      args: { query: 'ctxmill' },
+      args: { query: 'stablehand' },
       onApprovalNeeded: vi.fn(async () => ({ action: 'approve' as const })),
       emit: (event) => events.push(event),
     });
 
     expect(result).toEqual({ approved: true });
     expect(events).toEqual([
-      { type: 'approval_needed', id: 'approval-1', tool: 'guarded_search', args: { query: 'ctxmill' } },
+      { type: 'approval_needed', id: 'approval-1', tool: 'guarded_search', args: { query: 'stablehand' } },
       { type: 'approval_resolved', id: 'approval-1', action: 'approve' },
     ]);
   });

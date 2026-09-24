@@ -8,7 +8,7 @@
  *   - KillSession (unary) — kills the current session
  *
  * Usage:
- *   node --loader ts-node/esm packages/ctxmill/src/sandbox/daemon.ts
+ *   node --loader ts-node/esm packages/stablehand/src/sandbox/daemon.ts
  *
  * Environment:
  *   SANDBOX_PORT — Port to listen on (default: 50051)
@@ -34,7 +34,7 @@ import {
   type SuspendSessionRequest,
   type KillSessionRequest,
   KillSessionResponseSchema,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 
 import {
   openSession,

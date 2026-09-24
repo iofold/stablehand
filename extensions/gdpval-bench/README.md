@@ -1,16 +1,16 @@
 # gdpval-bench — harness benchmark extension
 
 Runs the GDPval-CTX slice (and later the Terminal-Bench slice) against
-CTXMill harnesses, grades the results locally, and reports per-cell scores
+Stablehand harnesses, grades the results locally, and reports per-cell scores
 and costs. Everything lives in this extension; **core is never modified**:
 
 - **Images**: `images/Dockerfile` derives tooling-extended harness images
-  (`ctxmill-bench/harness-*`) FROM the stock `ctxmill/harness-*` images
+  (`stablehand-bench/harness-*`) FROM the stock `stablehand/harness-*` images
   (adds headless LibreOffice, ffmpeg, fonts). Build with
   `./build-images.sh` after any stock image rebuild.
-- **Activation**: the orchestrator's existing `CTXMILL_IMAGE_PREFIX` env
+- **Activation**: the orchestrator's existing `STABLEHAND_IMAGE_PREFIX` env
   seam points sandboxes at the derived images —
-  `CTXMILL_IMAGE_PREFIX=ctxmill-bench/harness` in the (uncommitted)
+  `STABLEHAND_IMAGE_PREFIX=stablehand-bench/harness` in the (uncommitted)
   `docker-compose.override.yml` during a benchmark window. Remove the
   var to return to stock images.
 - **Slice**: `slice/slice.json` pins the 60-task GDPval-CTX slice

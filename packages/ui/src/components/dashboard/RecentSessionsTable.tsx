@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { X } from 'lucide-react';
-import type { ConversationSummary } from '@ctxmill/contracts';
+import type { ConversationSummary } from '@stablehand/contracts';
 import { StatusBadge } from './StatusBadge';
 import { isTerminalConversationStatus } from '@/lib/lifecycle-status';
 import { cn } from '@/lib/utils';

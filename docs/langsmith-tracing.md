@@ -8,7 +8,7 @@ Opt-in agent tracing via [LangSmith](https://smith.langchain.com). When enabled,
 # Add to .env
 LANGSMITH_TRACING=true
 LANGSMITH_API_KEY=lsv2_sk_...        # or lsv2_pt_...
-LANGSMITH_PROJECT=ctxmill
+LANGSMITH_PROJECT=stablehand
 LANGSMITH_WORKSPACE_ID=...           # Required for service account keys (lsv2_sk_)
 ```
 
@@ -28,10 +28,10 @@ Tracing is **harness-level**. LangGraph, Claude Agents, and PI Agent all use the
 |----------|----------|-------------|
 | `LANGSMITH_TRACING` | Yes | Set to `true` to enable tracing |
 | `LANGSMITH_API_KEY` | Yes | API key from smith.langchain.com/settings |
-| `LANGSMITH_PROJECT` | No | Project name (default: `ctxmill`) |
+| `LANGSMITH_PROJECT` | No | Project name (default: `stablehand`) |
 | `LANGSMITH_WORKSPACE_ID` | Conditional | Required for service account keys (`lsv2_sk_`). Not needed for personal keys (`lsv2_pt_`). |
 
-All variables are added to `SANDBOX_SECRET_ALLOWLIST` in `packages/ctxmill/src/config/container.ts` and forwarded to sandbox containers alongside LLM API keys.
+All variables are added to `SANDBOX_SECRET_ALLOWLIST` in `packages/stablehand/src/config/container.ts` and forwarded to sandbox containers alongside LLM API keys.
 
 If you prefer not to rely on host env passthrough, you can also store these keys as per-agent secrets. The current runtime injects arbitrary per-agent secret keys into the sandbox env, while host env passthrough remains allowlist-only.
 
@@ -117,7 +117,7 @@ pi-agent-agent-{id} (chain)
 | LangGraph | Visible only if the adapter maps it into normal AgentEvents | Not traced by the shared AgentEvent tracer | Only aggregate `done.usage` when available |
 | Claude Agents | Visible only if the SDK stream folds it into normal AgentEvents | Not traced by the shared AgentEvent tracer | Only aggregate `done.usage` when available |
 
-The shared tracer intentionally records the normalized CTXMILL event contract, not SDK-private execution graphs. If subagent-internal token attribution becomes critical, add a second explicit reconciler that reads each harness' persisted transcript/log format and posts separate RunTrees, rather than reintroducing harness-specific live tracing paths.
+The shared tracer intentionally records the normalized STABLEHAND event contract, not SDK-private execution graphs. If subagent-internal token attribution becomes critical, add a second explicit reconciler that reads each harness' persisted transcript/log format and posts separate RunTrees, rather than reintroducing harness-specific live tracing paths.
 
 Workaround options if subagent token attribution becomes critical:
 - Implement local transcript reconciliation in our harness (read `~/.claude/projects/<sanitized>/sessions/<conversationId>.jsonl` after each run, post fresh `RunTree`s for missing subagent turns, patch usage on existing LLM runs).
@@ -137,7 +137,7 @@ curl -sS -XPOST -H 'Content-Type: application/json' \
 
 Then in LangSmith (`https://smith.langchain.com`):
 
-1. Open the project named in `LANGSMITH_PROJECT` (default `ctxmill`).
+1. Open the project named in `LANGSMITH_PROJECT` (default `stablehand`).
 2. The run should appear within 5–15s of the agent completing.
 3. The root span name reflects the harness: `langgraph-agent-<id>` (chain), `claude-agents-agent-<id>` (chain), or `pi-agent-agent-<id>` (chain).
 
@@ -154,7 +154,7 @@ Then in LangSmith (`https://smith.langchain.com`):
 To see what the sandbox logged during a run:
 
 ```bash
-docker logs $(docker ps --filter "label=ctxmill.managed=true" --format "{{.Names}}" | head -1)
+docker logs $(docker ps --filter "label=stablehand.managed=true" --format "{{.Names}}" | head -1)
 ```
 
 ## Disabling Tracing
@@ -175,7 +175,7 @@ No performance overhead when disabled — `langsmith` is never imported.
 
 | File | Change |
 |------|--------|
-| `packages/ctxmill/src/config/container.ts` | Added `LANGSMITH_*` to `SANDBOX_SECRET_ALLOWLIST` |
+| `packages/stablehand/src/config/container.ts` | Added `LANGSMITH_*` to `SANDBOX_SECRET_ALLOWLIST` |
 | `docker-compose.yml` | Pass `LANGSMITH_*` env vars to orchestrator |
 | `.env.example` | Documented new env vars |
 | `packages/sandbox-daemon/package.json` | Added `langsmith` dependency |

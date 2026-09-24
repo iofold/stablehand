@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { prepareWorkspace } from '../../packages/ctxmill/src/sandbox/workspace-preparation.js';
+import { prepareWorkspace } from '../../packages/stablehand/src/sandbox/workspace-preparation.js';
 
 describe('prepareWorkspace', () => {
   let tempDir: string;

@@ -6,7 +6,7 @@ import {
   manifestToAgentCreateInput,
   parseManifestString,
   validateManifest,
-} from '@ctxmill/manifest';
+} from '@stablehand/manifest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentsDir = join(__dirname, '..', 'agents');

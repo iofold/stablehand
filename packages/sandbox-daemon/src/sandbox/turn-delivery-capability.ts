@@ -3,10 +3,10 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import {
   type TurnDeliveryCapability,
   TurnDeliveryCapabilitySchema,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 
 export const OPEN_TURN_DELIVERY_CAPABILITY_SIGNATURE =
-  'ctxmill-open-turn-delivery-capability-v1';
+  'stablehand-open-turn-delivery-capability-v1';
 
 const HMAC_SHA256_BASE64URL = /^[A-Za-z0-9_-]{43}$/;
 

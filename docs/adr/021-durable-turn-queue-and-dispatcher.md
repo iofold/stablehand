@@ -63,6 +63,6 @@ certification, fixed in 75adc069).
   idle-held slots (ctx-v78a); concurrent-admission cap overshoot by in-flight
   requests (ctx-xrrc).
 
-Relevant code: `packages/ctxmill/src/orchestrator/turn-queue-admission.ts`,
-`packages/ctxmill/src/orchestrator/turn-dispatcher.ts`,
-`packages/ctxmill/src/orchestrator/turn-startup-service.ts`.
+Relevant code: `packages/stablehand/src/orchestrator/turn-queue-admission.ts`,
+`packages/stablehand/src/orchestrator/turn-dispatcher.ts`,
+`packages/stablehand/src/orchestrator/turn-startup-service.ts`.

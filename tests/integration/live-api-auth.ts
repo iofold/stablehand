@@ -19,9 +19,9 @@ function readTokenFromDotenv(): string | undefined {
     for (const line of content.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) continue;
-      if (!trimmed.startsWith('CTXMILL_API_TOKEN=')) continue;
+      if (!trimmed.startsWith('STABLEHAND_API_TOKEN=')) continue;
 
-      const token = unquote(trimmed.slice('CTXMILL_API_TOKEN='.length));
+      const token = unquote(trimmed.slice('STABLEHAND_API_TOKEN='.length));
       return token.length > 0 ? token : undefined;
     }
   } catch {
@@ -32,7 +32,7 @@ function readTokenFromDotenv(): string | undefined {
 
 function liveApiToken(): string | undefined {
   if (!tokenLoaded) {
-    cachedToken = process.env.CTXMILL_API_TOKEN?.trim() || readTokenFromDotenv();
+    cachedToken = process.env.STABLEHAND_API_TOKEN?.trim() || readTokenFromDotenv();
     tokenLoaded = true;
   }
   return cachedToken;

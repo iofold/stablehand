@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ApiA2UIBlock } from '@ctxmill/shared';
+import type { ApiA2UIBlock } from '@stablehand/shared';
 import { cn } from '@/lib/utils';
 import type { ToolCallState } from '@/stores/conversation';
 import { A2UIBlock } from '@/components/a2ui/A2UIBlock';

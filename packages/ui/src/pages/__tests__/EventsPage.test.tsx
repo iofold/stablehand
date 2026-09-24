@@ -172,7 +172,7 @@ describe('EventsPage', () => {
           conversationId: null,
           createdAt: Date.now(),
           payload: JSON.stringify({
-            name: 'ctxmill.turn.pending',
+            name: 'stablehand.turn.pending',
             mode: 'background',
             taskDescription: 'Summarize recent restore failures for the operator.',
           }),
@@ -185,7 +185,7 @@ describe('EventsPage', () => {
           conversationId: null,
           createdAt: Date.now(),
           payload: JSON.stringify({
-            name: 'ctxmill.message.committed',
+            name: 'stablehand.message.committed',
             role: 'assistant',
             content: 'Restore failed because the checkpoint exceeded the configured limit.',
           }),
@@ -210,7 +210,7 @@ describe('EventsPage', () => {
           conversationId: null,
           createdAt: Date.now(),
           payload: JSON.stringify({
-            name: 'ctxmill.a2ui.render',
+            name: 'stablehand.a2ui.render',
             block: { component: 'MetricCard', props: { label: 'Failures' } },
           }),
         },

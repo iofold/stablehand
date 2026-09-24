@@ -13,7 +13,7 @@ import {
   TurnDeliveryCapabilitySchema,
   ToolLocation,
   ToolMetadataSchema,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -89,7 +89,7 @@ function createDeliverTurnRequest(sessionId: string, turnId: string) {
       restoreFenceToken: 0n,
       containerId: 'container-generation-1',
       agentId: 'agent-1',
-      signature: 'ctxmill-open-turn-delivery-capability-v1',
+      signature: 'stablehand-open-turn-delivery-capability-v1',
     }),
   });
 }
@@ -226,7 +226,7 @@ describe('runner openSession PTC bootstrap', () => {
     await openSession(createOpenSessionRequest('/tmp/ptc-degraded'), {});
 
     expect(mocks.harnessOpenSession).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: expect.stringContaining('[CTXMill degraded mode] Programmatic tool-calling (PTC) setup failed'),
+      systemPrompt: expect.stringContaining('[Stablehand degraded mode] Programmatic tool-calling (PTC) setup failed'),
     }));
     expect(mocks.harnessOpenSession).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining('bun is unavailable'),
@@ -561,7 +561,7 @@ describe('runner openSession PTC bootstrap', () => {
     const request = createDeliverTurnRequest(session.sessionId, 'turn-secret-reserved');
     Object.assign(request, {
       turnSecrets: {
-        CTXMILL_CALLBACK_TOKEN: 'forged-callback-token',
+        STABLEHAND_CALLBACK_TOKEN: 'forged-callback-token',
       },
     });
 
@@ -618,7 +618,7 @@ describe('runner openSession PTC bootstrap', () => {
     invalidSuccessor.deliveryCapability!.ownerId = 'delivery-owner-2';
     invalidSuccessor.deliveryCapability!.fenceToken = 2n;
     invalidSuccessor.turnSecrets = {
-      CTXMILL_CALLBACK_TOKEN: 'forged-callback-token',
+      STABLEHAND_CALLBACK_TOKEN: 'forged-callback-token',
     };
     const invalidEvents = [];
     for await (const event of deliverTurn(invalidSuccessor)) {

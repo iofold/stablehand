@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import type { AnalyticsOverview, AnalyticsWindow } from '@ctxmill/contracts';
+import type { AnalyticsOverview, AnalyticsWindow } from '@stablehand/contracts';
 import { cn } from '@/lib/utils';
 import { formatCompactNumber } from '@/lib/format';
 

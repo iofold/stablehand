@@ -1,10 +1,10 @@
-# Extending CTXMill today
+# Extending Stablehand today
 
-CTXMill extensions are deliberately not first-class database objects. Today an
+Stablehand extensions are deliberately not first-class database objects. Today an
 extension is a Git-pinned codebase plus an independently deployed process, a
-scoped CTXMill API key, and optional webhook, event, artifact, tool, or agent
+scoped Stablehand API key, and optional webhook, event, artifact, tool, or agent
 integration. Git remains the source of truth for its definitions and deployment
-configuration; CTXMill does not install, discover, or upgrade extension repos.
+configuration; Stablehand does not install, discover, or upgrade extension repos.
 
 This boundary keeps extension release cadence, state, and UI ownership outside
 the core control plane while giving each integration a reviewable API blast
@@ -17,10 +17,10 @@ workflow:
 
 1. Pin and review the extension source from Git, including its requested
    capability list and external destinations.
-2. Deploy its service and extension-owned datastore beside CTXMill.
+2. Deploy its service and extension-owned datastore beside Stablehand.
 3. In **Settings → Access keys**, create a named scoped key with only those
    capabilities. Copy the one-time value into the extension's secret store.
-4. Configure the extension with the CTXMill API base URL and bearer token.
+4. Configure the extension with the Stablehand API base URL and bearer token.
 5. Let the extension register only the webhooks or schedules it owns, or have
    the operator provision them explicitly.
 6. Probe a required endpoint and a deliberately forbidden endpoint. A scoped
@@ -34,7 +34,7 @@ examples, rotation, and verification contract.
 
 ## Where extension UI lives
 
-An extension that needs a dashboard owns and hosts that dashboard. The CTXMill
+An extension that needs a dashboard owns and hosts that dashboard. The Stablehand
 UI remains an operator control plane and does not currently provide an
 extension registry, launcher, iframe host, or arbitrary navigation injection.
 The extension can be exposed on its own origin or through the deployment's
@@ -63,11 +63,11 @@ Use four homes for four kinds of state:
 1. Definitions, schemas, prompts, agent templates, and deployment manifests
    live in the extension's Git repository.
 2. Operational projections and indexes live in the extension's own database
-   and database role. Do not grant it SQL access to CTXMill's database.
-3. Large durable payloads live in CTXMill's artifact store and are referenced by
+   and database role. Do not grant it SQL access to Stablehand's database.
+3. Large durable payloads live in Stablehand's artifact store and are referenced by
    artifact ID and SHA-256 where integrity matters.
 4. The extension service's scoped key and webhook verification secrets live in
-   its own secret store. Secrets needed by CTXMill agents live in CTXMill's
+   its own secret store. Secrets needed by Stablehand agents live in Stablehand's
    agent secret store.
 
 An extension database should be rebuildable from Git definitions plus retained
@@ -90,7 +90,7 @@ artifacts, review a new key or rotation adding `artifacts:write`; do not hand it
 the master token for convenience.
 
 The supported integration contracts are the strict schemas in
-`@ctxmill/contracts`, the authenticated client in `@ctxmill/client`, the REST
+`@stablehand/contracts`, the authenticated client in `@stablehand/client`, the REST
 and streaming API in [the API reference](docs/api-reference.md), and the
 extension-owned Git revision. A future registry or marketplace can automate
 this workflow, but it is not part of the shipped handshake today.

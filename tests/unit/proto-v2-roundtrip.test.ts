@@ -6,7 +6,7 @@ import {
   type MessageShape,
 } from '../../packages/proto/node_modules/@bufbuild/protobuf/dist/esm/index.js';
 import { describe, expect, it } from 'vitest';
-import * as sandboxProto from '../../packages/proto/gen/ctxmill/sandbox/v1/sandbox_pb.js';
+import * as sandboxProto from '../../packages/proto/gen/stablehand/sandbox/v1/sandbox_pb.js';
 
 import {
   FreshBootstrapSchema,
@@ -15,7 +15,7 @@ import {
   OpenSessionRequestSchema,
   ToolLocation,
   ToolMetadataSchema,
-} from '../../packages/proto/gen/ctxmill/sandbox/v1/sandbox_pb.js';
+} from '../../packages/proto/gen/stablehand/sandbox/v1/sandbox_pb.js';
 
 function expectRoundTrip<Desc extends DescMessage>(schema: Desc, value: MessageShape<Desc>): MessageShape<Desc> {
   const bytes = toBinary(schema, value);

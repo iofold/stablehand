@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { fetchCatalogTools, type CatalogTool } from '@/lib/api';
 import { ToolBadges, ToolDetailsPanel } from '@/components/tools/ToolPresentation';
-import type { Agent, BuiltinToolPolicy, NativeToolPolicy } from '@ctxmill/contracts';
+import type { Agent, BuiltinToolPolicy, NativeToolPolicy } from '@stablehand/contracts';
 
 type HttpToolDefinition = Agent['httpTools'][number];
 

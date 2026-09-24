@@ -5,7 +5,7 @@ import {
   LangGraphConfigSchema,
   NativeToolPolicySchema,
   PIAgentConfigSchema,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 import { z } from 'zod';
 
 import type { AgentManifest } from './types.js';
@@ -125,7 +125,7 @@ const manifestSpecCommon = {
 } as const;
 
 const langGraphManifestSchema = z.strictObject({
-  apiVersion: z.literal('ctxmill.io/v1'),
+  apiVersion: z.literal('stablehand.io/v1'),
   kind: z.literal('Agent'),
   metadata: manifestMetadataSchema,
   spec: z.strictObject({
@@ -136,7 +136,7 @@ const langGraphManifestSchema = z.strictObject({
 });
 
 const claudeAgentsManifestSchema = z.strictObject({
-  apiVersion: z.literal('ctxmill.io/v1'),
+  apiVersion: z.literal('stablehand.io/v1'),
   kind: z.literal('Agent'),
   metadata: manifestMetadataSchema,
   spec: z.strictObject({
@@ -147,7 +147,7 @@ const claudeAgentsManifestSchema = z.strictObject({
 });
 
 const piAgentManifestSchema = z.strictObject({
-  apiVersion: z.literal('ctxmill.io/v1'),
+  apiVersion: z.literal('stablehand.io/v1'),
   kind: z.literal('Agent'),
   metadata: manifestMetadataSchema,
   spec: z.strictObject({

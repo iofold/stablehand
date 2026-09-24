@@ -41,10 +41,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
+import { InterruptManager } from '../../packages/stablehand/src/orchestrator/interrupt.js';
 import { TestTurnRegistry } from '../utils/test-turn-registry.js';
 import { createTestBus } from '../utils/event-bus-test-helpers.js';
-import type { ContainerManager } from '../../packages/ctxmill/src/sandbox/container-manager.js';
+import type { ContainerManager } from '../../packages/stablehand/src/sandbox/container-manager.js';
 
 // ---------------------------------------------------------------------------
 // Minimal ContainerManager stub — only the two methods the cleanup path calls.

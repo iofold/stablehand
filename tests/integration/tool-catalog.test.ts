@@ -34,7 +34,7 @@ describe('GET /api/catalogs/tools', () => {
 
   beforeAll(async () => {
     testApp = await createTestApp({
-      dirPrefix: 'ctxmill-tool-catalog-',
+      dirPrefix: 'stablehand-tool-catalog-',
     });
     app = testApp.app;
   });

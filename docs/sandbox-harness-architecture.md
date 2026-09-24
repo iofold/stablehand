@@ -2,7 +2,7 @@
 
 ## Overview
 
-CTXMill executes agents within isolated Docker sandbox containers, providing a secure and reproducible environment for tool-using agents. Each container runs a Bun-based daemon process that acts as the bridge between the central orchestrator and the specific agent harness.
+Stablehand executes agents within isolated Docker sandbox containers, providing a secure and reproducible environment for tool-using agents. Each container runs a Bun-based daemon process that acts as the bridge between the central orchestrator and the specific agent harness.
 
 The daemon serves two primary interfaces:
 - **gRPC (ConnectRPC on port 50051)**: Used for high-performance, streaming communication with the orchestrator.
@@ -14,7 +14,7 @@ Each container hosts exactly one harness adapter that wraps a specific agent SDK
 
 The lifecycle of a sandbox container is managed by the orchestrator's sandbox subsystem:
 
-1. **Creation**: The orchestrator spawns a new Docker container from the appropriate harness image (e.g., `ctxmill/harness-langgraph`).
+1. **Creation**: The orchestrator spawns a new Docker container from the appropriate harness image (e.g., `stablehand/harness-langgraph`).
 2. **Startup**: The Bun daemon starts inside the container and begins listening for gRPC requests.
 3. **OpenSession**: The orchestrator sends an `OpenSession` RPC to initialize the harness. This can be a "fresh" bootstrap or a "restore" from a previous checkpoint.
 4. **DeliverTurn**: The orchestrator sends one or more `DeliverTurn` RPCs. This is a server-streaming call where the harness executes the agent logic and streams back events (text deltas, tool calls, etc.).
@@ -45,7 +45,7 @@ The daemon is a single-process runtime designed for low latency and native TypeS
 All harnesses implement a common `AgentHarness` interface. This interface abstracts the underlying SDK differences, providing a unified way to open sessions, deliver turns, and export state.
 
 Harnesses are responsible for:
-- Converting CTXMill `ToolDefinition` objects into the format expected by the specific SDK.
+- Converting Stablehand `ToolDefinition` objects into the format expected by the specific SDK.
 - Mapping SDK-specific streaming events into the standard `SessionEvent` proto format.
 - Managing the conversation transcript and system prompts.
 
@@ -53,7 +53,7 @@ Harnesses are responsible for:
 
 - **SDK**: `@anthropic-ai/claude-agent-sdk`
 - **Mechanism**: Uses `sdk.query()` to execute agent turns. It uses an internal MCP (Model Context Protocol) server to handle tool execution.
-- **Tool Conversion**: `convertToolsWithSDK()` wraps CTXMill tools as MCP tools that the Claude SDK can invoke.
+- **Tool Conversion**: `convertToolsWithSDK()` wraps Stablehand tools as MCP tools that the Claude SDK can invoke.
 - **Streaming**: The SDK's internal streaming events are captured and mapped to `SessionEvent` deltas.
 - **Design Decision**: The harness uses the official Agent SDK rather than the raw Messages API. This provides built-in support for complex tool execution, MCP integration, and session persistence.
 - **Dockerfile**: Installs `@anthropic-ai/claude-code` globally. The SDK depends on this CLI as a runtime dependency, spawning it as a Node.js subprocess.
@@ -66,13 +66,13 @@ Harnesses are responsible for:
 - **Tool Conversion**: Maps tools to the LangChain tool format via `@langchain/core`.
 - **Model Support**: Supports dynamic loading of `@langchain/openai`, `@langchain/anthropic`, and `@langchain/google-genai` based on configuration.
 - **Design Decision**: Migrated from a Python-based implementation to pure JavaScript using `deepagents`. This allowed for the removal of Python from the Docker image, saving ~200-300MB and simplifying the build.
-- **Design Decision**: Creates a fresh agent instance per turn. The turns are stateless from the SDK's perspective; conversation state is managed by CTXMill's checkpoint system.
+- **Design Decision**: Creates a fresh agent instance per turn. The turns are stateless from the SDK's perspective; conversation state is managed by Stablehand's checkpoint system.
 
 ### PI Agent Harness
 
 - **SDK**: `@mariozechner/pi-coding-agent` and `@mariozechner/pi-ai`
 - **Mechanism**: Uses `createAgentSession` to manage the agent lifecycle. It interacts with a `NativePiSession` that supports asynchronous prompting and event subscription.
-- **Tool Conversion**: `convertTools` maps CTXMill tools to PI's internal tool format.
+- **Tool Conversion**: `convertTools` maps Stablehand tools to PI's internal tool format.
 - **Native Tools**: Supports a set of "native tools" (read, bash, edit, etc.) provided by the PI SDK, which are optimized for coding tasks.
 - **Design Decision**: Uses a `ConvertToolsContext` to share mutable state (like HITL approval handlers) with tool closures. This avoids the need to rebuild the entire tool list for every turn.
 - **Design Decision**: Utilizes in-memory implementations for session, settings, and auth management within the container to maintain isolation.
@@ -127,4 +127,4 @@ The daemon uses Bun for its fast startup times and native TypeScript support. Bu
 By using the `deepagents` JS SDK, the LangGraph harness avoids any dependency on Python. This significantly reduces the image size and eliminates the complexity of managing a Python environment alongside the Node/Bun runtime.
 
 ### Harness SDK wrapping over raw API calls
-Instead of calling LLM provider APIs directly, CTXMill wraps official or high-level agent SDKs. This allows the system to benefit from SDK-level features like built-in tool execution loops, MCP support, and reliable error handling, while maintaining a consistent interface for the orchestrator.
+Instead of calling LLM provider APIs directly, Stablehand wraps official or high-level agent SDKs. This allows the system to benefit from SDK-level features like built-in tool execution loops, MCP support, and reliable error handling, while maintaining a consistent interface for the orchestrator.

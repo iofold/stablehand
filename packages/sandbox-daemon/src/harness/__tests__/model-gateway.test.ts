@@ -7,10 +7,10 @@ import {
 } from '../model-gateway.js';
 
 const gatewaySecrets = {
-  CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
-  CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
-  CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
-  CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+  STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+  STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+  STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+  STABLEHAND_MODEL_GATEWAY_REVISION: 'dev1-1',
 };
 
 describe('resolveHarnessModelConnection', () => {
@@ -100,8 +100,8 @@ describe('resolveHarnessModelConnection', () => {
     expect(() => resolveHarnessModelConnection({
       provider: 'openai',
       secrets: {
-        CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
-        CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
+        STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+        STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
       },
     })).toThrow(/runtime credential/);
   });
@@ -125,7 +125,7 @@ describe('gateway correlation', () => {
       'x-litellm-spend-logs-metadata': expect.any(String),
     });
     expect(JSON.parse(headers['x-litellm-spend-logs-metadata']!)).toEqual({
-      ctxmill_turn_correlation: expect.stringMatching(/^ct_[a-f0-9]{32}$/),
+      stablehand_turn_correlation: expect.stringMatching(/^ct_[a-f0-9]{32}$/),
     });
     expect(JSON.stringify(headers)).not.toContain('sensitive-turn-name');
   });

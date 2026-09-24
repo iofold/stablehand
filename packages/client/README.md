@@ -1,19 +1,19 @@
-# @ctxmill/client
+# @stablehand/client
 
-Strict CTXMill clients sharing one authenticated, validated transport.
+Strict Stablehand clients sharing one authenticated, validated transport.
 
-Use `CtxmillControlClient` in a trusted server:
+Use `StablehandControlClient` in a trusted server:
 
 ```ts
-import { CtxmillControlClient } from '@ctxmill/client/control';
+import { StablehandControlClient } from '@stablehand/client/control';
 
-const ctxmill = new CtxmillControlClient({
+const stablehand = new StablehandControlClient({
   apiBase: 'https://platform.example.com/api',
-  token: () => process.env.CTXMILL_API_TOKEN!,
+  token: () => process.env.STABLEHAND_API_TOKEN!,
 });
 
-const agents = await ctxmill.agents.list();
-const turn = await ctxmill.turns.startBackground(
+const agents = await stablehand.agents.list();
+const turn = await stablehand.turns.startBackground(
   agents[0]!.id,
   { task: 'Close April', requestedTurnId: crypto.randomUUID() },
   { idempotencyKey: crypto.randomUUID() },
@@ -24,17 +24,17 @@ For an extension, inject a dedicated scoped key instead of the operator master
 token:
 
 ```ts
-import { CtxmillApiError, CtxmillControlClient } from '@ctxmill/client';
+import { StablehandApiError, StablehandControlClient } from '@stablehand/client';
 
-const ctxmill = new CtxmillControlClient({
-  apiBase: process.env.CTXMILL_API_URL,
-  token: () => process.env.CTXMILL_EXTENSION_TOKEN!,
+const stablehand = new StablehandControlClient({
+  apiBase: process.env.STABLEHAND_API_URL,
+  token: () => process.env.STABLEHAND_EXTENSION_TOKEN!,
 });
 
 try {
-  await ctxmill.artifacts.list();
+  await stablehand.artifacts.list();
 } catch (error) {
-  if (error instanceof CtxmillApiError && error.status === 403) {
+  if (error instanceof StablehandApiError && error.status === 403) {
     console.error('Required capability:', error.requiredCapability);
   }
   throw error;
@@ -47,13 +47,13 @@ uses; `config.get()` is master-only. See the repository's
 [scoped-key guide](../../docs/scoped-api-keys.md) for the capability map and
 rotation contract.
 
-Use `CtxmillAgUiClient` at an AG-UI boundary:
+Use `StablehandAgUiClient` at an AG-UI boundary:
 
 ```ts
-import { CtxmillAgUiClient } from '@ctxmill/client/ag-ui';
+import { StablehandAgUiClient } from '@stablehand/client/ag-ui';
 
-const ctxmill = new CtxmillAgUiClient({ apiBase: '/api' });
-for await (const event of ctxmill.streamAgentRun(input)) {
+const stablehand = new StablehandAgUiClient({ apiBase: '/api' });
+for await (const event of stablehand.streamAgentRun(input)) {
   render(event);
 }
 ```

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { z } from 'zod';
-import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
+import { LocalFunctionExecutor } from '../../packages/stablehand/src/tool/executor.js';
 import { createMockToolContext } from '../utils/event-bus-test-helpers.js';
-import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
+import type { ToolDefinition } from '@stablehand/sandbox-daemon';
 
 const mockCtx = createMockToolContext();
 

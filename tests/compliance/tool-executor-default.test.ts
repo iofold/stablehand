@@ -7,7 +7,7 @@
  */
 
 import { describe } from 'vitest';
-import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
+import { LocalFunctionExecutor } from '../../packages/stablehand/src/tool/executor.js';
 import { runToolExecutorCompliance } from './tool-executor.compliance.js';
 
 describe('LocalFunctionExecutor – compliance', () => {

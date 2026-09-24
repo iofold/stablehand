@@ -24,7 +24,7 @@ const registry = new Map<string, ComponentType<AnyProps>>();
 export function registerCatalog(name: string, components: Record<string, ComponentType<AnyProps>>) {
   for (const [key, component] of Object.entries(components)) {
     registry.set(`${name}:${key}`, component);
-    registry.set(`ctxmill.${name}:${key}`, component);
+    registry.set(`stablehand.${name}:${key}`, component);
     // Also register without prefix for convenience
     if (!registry.has(key)) {
       registry.set(key, component);

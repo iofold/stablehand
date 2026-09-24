@@ -3,7 +3,7 @@ import {
   TURN_CANCELLED_MESSAGE,
   projectConversationStatus,
   projectTurnStatus,
-} from '@ctxmill/shared';
+} from '@stablehand/shared';
 
 describe('status projections', () => {
   const openTurn = { completedAt: null, error: null };

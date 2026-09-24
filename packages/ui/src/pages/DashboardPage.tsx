@@ -5,7 +5,7 @@ import type {
   AnalyticsWindow,
   ConversationSummary,
   ModelGatewayStatus,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 import { useAgentsStore } from '@/stores/agents';
 import { Dashboard } from '@/components/dashboard/Dashboard';
 import { RecentSessionsTable } from '@/components/dashboard/RecentSessionsTable';

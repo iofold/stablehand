@@ -1,4 +1,4 @@
-import type { AgentSessionEvent } from '@ctxmill/shared';
+import type { AgentSessionEvent } from '@stablehand/shared';
 import type {
   HarnessEnforcementCapabilities,
   HarnessTurnEnforcer,
@@ -247,7 +247,7 @@ export function fanoutTelemetryEvent(
     type: 'CUSTOM',
     timestamp: Date.now(),
     runId: '',
-    // Not 'ctxmill.*': the canonical projector reserves that namespace for
+    // Not 'stablehand.*': the canonical projector reserves that namespace for
     // orchestrator-generated frames and drops harness customs using it.
     name: 'harness.fanout.limit',
     subtype: 'turn_fanout_limit',

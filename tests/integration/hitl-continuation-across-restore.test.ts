@@ -1,24 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
-import type { MessageCommittedEvent } from '@ctxmill/shared';
-import { AgentTurnService } from '../../packages/ctxmill/src/orchestrator/agent-turn-service.js';
-import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
+import type { AgentDefinition } from '@stablehand/sandbox-daemon';
+import type { MessageCommittedEvent } from '@stablehand/shared';
+import { AgentTurnService } from '../../packages/stablehand/src/orchestrator/agent-turn-service.js';
+import { TypedEventBus } from '../../packages/stablehand/src/events/bus.js';
 import type {
   DatabaseRepository,
   InterruptResumeAttemptRow,
-} from '../../packages/ctxmill/src/database/repository.js';
-import { InterruptResumeAttemptWorker } from '../../packages/ctxmill/src/orchestrator/interrupt-resume-attempt-worker.js';
+} from '../../packages/stablehand/src/database/repository.js';
+import { InterruptResumeAttemptWorker } from '../../packages/stablehand/src/orchestrator/interrupt-resume-attempt-worker.js';
 import {
   SandboxSessionManager,
   type SessionRecord,
-} from '../../packages/ctxmill/src/orchestrator/sandbox-session-manager.js';
-import type { SessionTurnExecutor } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
-import { SessionStateStore } from '../../packages/ctxmill/src/orchestrator/session-manager/session-state-store.js';
-import { SessionStatusCoordinator } from '../../packages/ctxmill/src/orchestrator/session-manager/session-status-coordinator.js';
-import type { ContainerLifecyclePolicy } from '../../packages/ctxmill/src/orchestrator/container-lifecycle-policy.js';
-import type { ContainerManager } from '../../packages/ctxmill/src/sandbox/container-manager.js';
-import { WorkspaceDiffService } from '../../packages/ctxmill/src/sandbox/workspace-diff.js';
+} from '../../packages/stablehand/src/orchestrator/sandbox-session-manager.js';
+import type { SessionTurnExecutor } from '../../packages/stablehand/src/orchestrator/session-turn-service.js';
+import { SessionStateStore } from '../../packages/stablehand/src/orchestrator/session-manager/session-state-store.js';
+import { SessionStatusCoordinator } from '../../packages/stablehand/src/orchestrator/session-manager/session-status-coordinator.js';
+import type { ContainerLifecyclePolicy } from '../../packages/stablehand/src/orchestrator/container-lifecycle-policy.js';
+import type { ContainerManager } from '../../packages/stablehand/src/sandbox/container-manager.js';
+import { WorkspaceDiffService } from '../../packages/stablehand/src/sandbox/workspace-diff.js';
 
 const AGENT_DEF: AgentDefinition = {
   name: 'approval-agent',

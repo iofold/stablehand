@@ -161,7 +161,7 @@ export const StateDeltaEventSchema = z.strictObject({
 
 export const TurnPendingEventSchema = z.strictObject({
   type: z.literal('CUSTOM'),
-  name: z.literal('ctxmill.turn.pending'),
+  name: z.literal('stablehand.turn.pending'),
   agentId: AgentIdSchema,
   turnId: TurnIdSchema,
   conversationId: ConversationIdSchema,
@@ -172,7 +172,7 @@ export const TurnPendingEventSchema = z.strictObject({
 
 export const InterruptRequestedEventSchema = z.strictObject({
   type: z.literal('CUSTOM'),
-  name: z.literal('ctxmill.interrupt.requested'),
+  name: z.literal('stablehand.interrupt.requested'),
   agentId: AgentIdSchema,
   turnId: TurnIdSchema,
   conversationId: ConversationIdSchema,
@@ -186,7 +186,7 @@ export const InterruptRequestedEventSchema = z.strictObject({
 
 export const InterruptResolvedEventSchema = z.strictObject({
   type: z.literal('CUSTOM'),
-  name: z.literal('ctxmill.interrupt.resolved'),
+  name: z.literal('stablehand.interrupt.resolved'),
   agentId: AgentIdSchema,
   turnId: TurnIdSchema,
   conversationId: ConversationIdSchema,
@@ -198,7 +198,7 @@ export const InterruptResolvedEventSchema = z.strictObject({
 
 export const MessageCommittedEventSchema = z.strictObject({
   type: z.literal('CUSTOM'),
-  name: z.literal('ctxmill.message.committed'),
+  name: z.literal('stablehand.message.committed'),
   agentId: AgentIdSchema,
   turnId: TurnIdSchema,
   conversationId: ConversationIdSchema,
@@ -214,7 +214,7 @@ export const MessageCommittedEventSchema = z.strictObject({
 
 export const MessageUpdatedEventSchema = z.strictObject({
   type: z.literal('CUSTOM'),
-  name: z.literal('ctxmill.message.updated'),
+  name: z.literal('stablehand.message.updated'),
   agentId: AgentIdSchema,
   turnId: TurnIdSchema,
   conversationId: ConversationIdSchema,
@@ -230,7 +230,7 @@ export const MessageUpdatedEventSchema = z.strictObject({
 
 export const A2UiRenderEventSchema = z.strictObject({
   type: z.literal('CUSTOM'),
-  name: z.literal('ctxmill.a2ui.render'),
+  name: z.literal('stablehand.a2ui.render'),
   runId: z.string().trim().min(1).optional(),
   threadId: z.string().trim().min(1).optional(),
   block: z.strictObject({
@@ -243,7 +243,7 @@ export const A2UiRenderEventSchema = z.strictObject({
 
 export const SandboxSessionSnapshotEventSchema = z.strictObject({
   type: z.literal('CUSTOM'),
-  name: z.literal('ctxmill.sandbox_session.snapshot'),
+  name: z.literal('stablehand.sandbox_session.snapshot'),
   agentId: AgentIdSchema,
   conversationId: ConversationIdSchema,
   sandboxSessionId: SandboxSessionIdSchema,
@@ -256,8 +256,8 @@ export const SandboxSessionSnapshotEventSchema = z.strictObject({
 
 export const GenericCustomEventSchema = z.strictObject({
   type: z.literal('CUSTOM'),
-  name: z.string().refine((name) => !name.startsWith('ctxmill.'), {
-    message: 'ctxmill.* custom events require a dedicated contract',
+  name: z.string().refine((name) => !name.startsWith('stablehand.'), {
+    message: 'stablehand.* custom events require a dedicated contract',
   }),
   runId: z.string().trim().min(1).optional(),
   threadId: z.string().trim().min(1).optional(),

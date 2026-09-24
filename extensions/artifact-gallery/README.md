@@ -1,6 +1,6 @@
 # artifact-gallery
 
-Reference CTXMill extension: a public, self-hosted gallery of agent-published
+Reference Stablehand extension: a public, self-hosted gallery of agent-published
 artifacts. It exists to prove the extension contract by consumption — an
 out-of-process service, a least-privilege scoped key, webhook + read-API
 integration, and its own rebuildable state — while giving every demo run a
@@ -18,7 +18,7 @@ visible destination.
   links at `/a/:artifactId`. HTML/SVG artifacts are served behind a
   sandboxing CSP; everything is `nosniff`.
 - The local store (`data/`) is a projection: delete it and the next sweep
-  rebuilds it from CTXMill.
+  rebuilds it from Stablehand.
 
 ## Capabilities
 
@@ -34,10 +34,10 @@ over-privileged.
 ## Run
 
 ```bash
-export CTXMILL_BASE_URL=https://your-ctxmill
-export CTXMILL_API_KEY=cmk_...            # scoped key from Settings → Access keys
+export STABLEHAND_BASE_URL=https://your-stablehand
+export STABLEHAND_API_KEY=cmk_...            # scoped key from Settings → Access keys
 export GALLERY_WEBHOOK_SECRET=$(openssl rand -hex 24)
-export GALLERY_PUBLIC_URL=https://gallery.example.com   # must be reachable by CTXMill
+export GALLERY_PUBLIC_URL=https://gallery.example.com   # must be reachable by Stablehand
 export GALLERY_PORT=8090                  # optional
 export GALLERY_DATA_DIR=./data            # optional
 

@@ -341,7 +341,7 @@ describe('convertTools', () => {
 });
 
 describe('PIAgentHarness private helpers', () => {
-  it('should map PI events to ctxmill events', () => {
+  it('should map PI events to stablehand events', () => {
     expect(_piMapAgentEvent({
       type: 'message_update',
       assistantMessageEvent: { type: 'text_delta', delta: 'Hello world' },
@@ -620,7 +620,7 @@ describe('PIAgentHarness native tool flow', () => {
     await session.close();
   });
 
-  it('should merge ctxmill tools with filtered native tools for session creation inputs', () => {
+  it('should merge stablehand tools with filtered native tools for session creation inputs', () => {
     const harness = new PIAgentHarness();
     const customTool: ToolDefinition = {
       name: 'ctx-tool',

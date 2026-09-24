@@ -11,7 +11,7 @@ import { Readable } from 'node:stream';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { validateAndExtractTarball } from '../../../ctxmill/src/workspace/tar-upload.js';
+import { validateAndExtractTarball } from '../../../stablehand/src/workspace/tar-upload.js';
 import type { AgentManifest } from '../types.js';
 
 interface WorkspacePlanFile {
@@ -77,7 +77,7 @@ function manifest(
   workspaceFiles?: Array<{ src: string; dest: string }>,
 ): Record<string, unknown> {
   return {
-    apiVersion: 'ctxmill.io/v1',
+    apiVersion: 'stablehand.io/v1',
     kind: 'Agent',
     metadata: { name: 'node-loader-test' },
     spec: {
@@ -91,7 +91,7 @@ function manifest(
   };
 }
 
-describe('@ctxmill/manifest/node project loader', () => {
+describe('@stablehand/manifest/node project loader', () => {
   let scratchRoot: string;
 
   beforeEach(async () => {
@@ -116,7 +116,7 @@ describe('@ctxmill/manifest/node project loader', () => {
     const loaded = await importNodeModule();
     expect(loaded).not.toBeNull();
     if (!loaded) {
-      throw new Error('Expected @ctxmill/manifest/node module');
+      throw new Error('Expected @stablehand/manifest/node module');
     }
     return loaded;
   }

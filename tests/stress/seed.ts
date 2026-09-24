@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   loadManifestProject,
   type LoadedManifestProject,
-} from '@ctxmill/manifest/node';
+} from '@stablehand/manifest/node';
 
 type AgentPayload = LoadedManifestProject['agentCreateInput'];
 
@@ -31,7 +31,7 @@ type TriggerPayload = {
 const API_BASE = process.env.API_BASE ?? 'http://localhost:3002';
 const AGENTS_DIR = new URL('./agents/', import.meta.url);
 const CLEAN_FLAG = '--clean';
-const API_TOKEN = process.env.CTXMILL_API_TOKEN;
+const API_TOKEN = process.env.STABLEHAND_API_TOKEN;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;

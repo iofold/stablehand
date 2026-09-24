@@ -1,4 +1,4 @@
-import type { TurnUsage } from '@ctxmill/contracts';
+import type { TurnUsage } from '@stablehand/contracts';
 
 export type UsageCostState =
   | 'unavailable'

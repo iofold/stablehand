@@ -23,14 +23,14 @@ import {
 } from './ids.js';
 import { TurnUsageSchema } from './usage.js';
 
-export const CTXMILL_WEBHOOK_SIGNATURE_VERSION = 'v1';
-export const CTXMILL_WEBHOOK_DEFAULT_TOLERANCE_SECONDS = 300;
+export const STABLEHAND_WEBHOOK_SIGNATURE_VERSION = 'v1';
+export const STABLEHAND_WEBHOOK_DEFAULT_TOLERANCE_SECONDS = 300;
 
 const WebhookTimestampHeaderSchema = z.string()
   .regex(/^(0|[1-9]\d*)$/, 'Expected Unix time in whole seconds')
   .refine((value) => Number.isSafeInteger(Number(value)), 'Timestamp exceeds safe integer range');
 
-export const CtxmillWebhookHeadersSchema = z.strictObject({
+export const StablehandWebhookHeadersSchema = z.strictObject({
   'X-Delivery-Id': WebhookDeliveryIdSchema,
   'X-Event-Type': WebhookEventNameSchema,
   'X-Agent-Id': AgentIdSchema,
@@ -242,30 +242,30 @@ export const WebhookPayloadSchema = z.union([
 ]);
 
 export type WebhookEventName = z.infer<typeof WebhookEventNameSchema>;
-export type CtxmillWebhookHeaders = z.infer<typeof CtxmillWebhookHeadersSchema>;
+export type StablehandWebhookHeaders = z.infer<typeof StablehandWebhookHeadersSchema>;
 export type WebhookPayload = z.infer<typeof WebhookPayloadSchema>;
 
-export type CtxmillWebhookRawBody = string | Uint8Array | ArrayBuffer;
+export type StablehandWebhookRawBody = string | Uint8Array | ArrayBuffer;
 
-export interface CreateCtxmillWebhookSignatureInput {
+export interface CreateStablehandWebhookSignatureInput {
   secret: string;
   timestamp: string;
-  rawBody: CtxmillWebhookRawBody;
+  rawBody: StablehandWebhookRawBody;
 }
 
-export interface VerifyCtxmillWebhookInput {
-  headers: CtxmillWebhookHeaders | Record<string, string> | Headers;
-  rawBody: CtxmillWebhookRawBody;
+export interface VerifyStablehandWebhookInput {
+  headers: StablehandWebhookHeaders | Record<string, string> | Headers;
+  rawBody: StablehandWebhookRawBody;
   secrets: string | readonly string[];
   /** Unix time in whole seconds. Defaults to the current clock. */
   nowSeconds?: number;
   toleranceSeconds?: number;
 }
 
-export type VerifyCtxmillWebhookResult =
+export type VerifyStablehandWebhookResult =
   | {
     valid: true;
-    headers: CtxmillWebhookHeaders;
+    headers: StablehandWebhookHeaders;
     payload: WebhookPayload;
   }
   | {
@@ -282,7 +282,7 @@ export type VerifyCtxmillWebhookResult =
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder('utf-8', { fatal: true });
 
-function rawBodyBytes(rawBody: CtxmillWebhookRawBody): Uint8Array {
+function rawBodyBytes(rawBody: StablehandWebhookRawBody): Uint8Array {
   if (typeof rawBody === 'string') {
     return textEncoder.encode(rawBody);
   }
@@ -294,7 +294,7 @@ function rawBodyBytes(rawBody: CtxmillWebhookRawBody): Uint8Array {
 
 function signingBytes(
   timestamp: string,
-  rawBody: CtxmillWebhookRawBody,
+  rawBody: StablehandWebhookRawBody,
 ): Uint8Array<ArrayBuffer> {
   const prefix = textEncoder.encode(`${timestamp}.`);
   const body = rawBodyBytes(rawBody);
@@ -328,7 +328,7 @@ function constantTimeEqual(left: Uint8Array, right: Uint8Array): boolean {
 async function hmacSha256(
   secret: string,
   timestamp: string,
-  rawBody: CtxmillWebhookRawBody,
+  rawBody: StablehandWebhookRawBody,
 ): Promise<Uint8Array> {
   if (!globalThis.crypto?.subtle) {
     throw new Error('Web Crypto HMAC support is required');
@@ -352,17 +352,17 @@ async function hmacSha256(
  * Creates `v1=<hex-hmac>` over the exact bytes:
  * `utf8(X-Webhook-Timestamp) || "." || raw HTTP body`.
  */
-export async function createCtxmillWebhookSignature(
-  input: CreateCtxmillWebhookSignatureInput,
+export async function createStablehandWebhookSignature(
+  input: CreateStablehandWebhookSignatureInput,
 ): Promise<string> {
   const timestamp = WebhookTimestampHeaderSchema.parse(input.timestamp);
   const secret = z.string().min(1).parse(input.secret);
   const signature = await hmacSha256(secret, timestamp, input.rawBody);
-  return `${CTXMILL_WEBHOOK_SIGNATURE_VERSION}=${bytesToHex(signature)}`;
+  return `${STABLEHAND_WEBHOOK_SIGNATURE_VERSION}=${bytesToHex(signature)}`;
 }
 
 function canonicalHeaders(
-  input: VerifyCtxmillWebhookInput['headers'],
+  input: VerifyStablehandWebhookInput['headers'],
 ): unknown {
   if (typeof Headers !== 'undefined' && input instanceof Headers) {
     return {
@@ -380,10 +380,10 @@ function canonicalHeaders(
  * Verifies clock skew, all active/previous rotation keys without key-order
  * short-circuiting, the exact raw-body HMAC, and signed header/body identities.
  */
-export async function verifyCtxmillWebhook(
-  input: VerifyCtxmillWebhookInput,
-): Promise<VerifyCtxmillWebhookResult> {
-  const parsedHeaders = CtxmillWebhookHeadersSchema.safeParse(canonicalHeaders(input.headers));
+export async function verifyStablehandWebhook(
+  input: VerifyStablehandWebhookInput,
+): Promise<VerifyStablehandWebhookResult> {
+  const parsedHeaders = StablehandWebhookHeadersSchema.safeParse(canonicalHeaders(input.headers));
   if (!parsedHeaders.success) {
     return { valid: false, reason: 'invalid_headers' };
   }
@@ -398,7 +398,7 @@ export async function verifyCtxmillWebhook(
 
   const nowSeconds = input.nowSeconds ?? Math.floor(Date.now() / 1_000);
   const toleranceSeconds = input.toleranceSeconds
-    ?? CTXMILL_WEBHOOK_DEFAULT_TOLERANCE_SECONDS;
+    ?? STABLEHAND_WEBHOOK_DEFAULT_TOLERANCE_SECONDS;
   if (
     !Number.isSafeInteger(nowSeconds)
     || !Number.isSafeInteger(toleranceSeconds)
@@ -412,7 +412,7 @@ export async function verifyCtxmillWebhook(
   }
 
   const receivedSignature = hexToBytes(
-    headers['X-Webhook-Signature'].slice(`${CTXMILL_WEBHOOK_SIGNATURE_VERSION}=`.length),
+    headers['X-Webhook-Signature'].slice(`${STABLEHAND_WEBHOOK_SIGNATURE_VERSION}=`.length),
   );
   let signatureValid = false;
   for (const secret of parsedSecrets.data) {

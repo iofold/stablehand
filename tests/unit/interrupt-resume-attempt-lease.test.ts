@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { createDatabase } from '../../packages/ctxmill/src/database/connection.js';
-import { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
+import { createDatabase } from '../../packages/stablehand/src/database/connection.js';
+import { DatabaseRepository } from '../../packages/stablehand/src/database/repository.js';
 import {
   createTestDb,
   resolveTestDatabaseUrl,

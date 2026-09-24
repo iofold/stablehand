@@ -14,11 +14,11 @@ import type {
   AgentCreateInput,
   AgentPatchInput,
   Turn,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 import { normalizeSandboxSessionStatusCounts } from '@/lib/lifecycle-status';
 
 export type AgentTurn = Turn;
-export type { Agent } from '@ctxmill/contracts';
+export type { Agent } from '@stablehand/contracts';
 
 interface AgentsStore {
   agents: Agent[];

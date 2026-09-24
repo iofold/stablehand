@@ -1,5 +1,7 @@
 node_modules
 **/node_modules
+**/.stablehand
+# Local data directories written before the 2026-09-24 rename (contain overlay whiteouts).
 **/.ctxmill
 **/dist
 *.png

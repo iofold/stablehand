@@ -1,6 +1,6 @@
 # Container Lifecycle Reference
 
-This document describes the current lifecycle of sandbox containers in CTXMill, including the active state machine, timeout thresholds, resource limits, and reconciliation logic.
+This document describes the current lifecycle of sandbox containers in Stablehand, including the active state machine, timeout thresholds, resource limits, and reconciliation logic.
 
 ## Container State Machine
 
@@ -26,15 +26,15 @@ Key points:
 ## Lifecycle Phases
 
 ### 1. Creation
-Containers are created using the `ctxmill/harness-{harness}:latest` images.
-- **Network**: Attached to the `ctxmill-agents` bridge network.
+Containers are created using the `stablehand/harness-{harness}:latest` images.
+- **Network**: Attached to the `stablehand-agents` bridge network.
 - **Labels**:
-  - `ctxmill.managed`: `true`
-  - `ctxmill.sandbox-session-id`: UUID of the sandbox session
-  - `ctxmill.agent-id`: ID of the agent
-  - `ctxmill.harness`: Harness type (for example `langgraph`)
-  - `ctxmill.started-at`: ISO timestamp
-  - `ctxmill.timeout`: Maximum run duration in seconds
+  - `stablehand.managed`: `true`
+  - `stablehand.sandbox-session-id`: UUID of the sandbox session
+  - `stablehand.agent-id`: ID of the agent
+  - `stablehand.harness`: Harness type (for example `langgraph`)
+  - `stablehand.started-at`: ISO timestamp
+  - `stablehand.timeout`: Maximum run duration in seconds
 - **Secrets**: Injected into the sandbox container environment at session startup / restore. Checkpoints may contain secret references, never resolved secret values.
 
 ### 2. Startup
@@ -105,7 +105,7 @@ API or UI updates to `resourceLimits` are stored in agent metadata and override 
 
 To prevent resource exhaustion, the orchestrator uses a global `ContainerSemaphore`.
 
-- **Max Concurrent Containers**: `20` by default (`CTXMILL_MAX_GLOBAL_CONTAINERS`).
+- **Max Concurrent Containers**: `20` by default (`STABLEHAND_MAX_GLOBAL_CONTAINERS`).
 - **Queueing**: Requests wait in FIFO order when capacity is exhausted.
 - **Timeout**: If a request exceeds `queueTimeoutMs` (default `10 minutes`), it fails with `503 Service Unavailable` / `ContainerLimitError`.
 - **Boot accounting**: Live containers are rehydrated into `ContainerAccounting` before lifecycle reconciliation. This can temporarily exceed the configured maximum until stale containers are reconciled and slots are released.
@@ -130,22 +130,22 @@ Operators can inspect or remove managed containers with standard Docker commands
 
 ### List Managed Containers
 ```bash
-docker ps --filter "label=ctxmill.managed=true"
+docker ps --filter "label=stablehand.managed=true"
 ```
 
 ### Inspect a Session
 ```bash
-docker inspect "$(docker ps -aq --filter "label=ctxmill.sandbox-session-id=<sandbox-session-id>")"
+docker inspect "$(docker ps -aq --filter "label=stablehand.sandbox-session-id=<sandbox-session-id>")"
 ```
 
 ### View Logs
 ```bash
-docker logs "$(docker ps -aq --filter "label=ctxmill.sandbox-session-id=<sandbox-session-id>")"
+docker logs "$(docker ps -aq --filter "label=stablehand.sandbox-session-id=<sandbox-session-id>")"
 ```
 
 ### Manually Kill a Container
 ```bash
-docker rm -f "$(docker ps -aq --filter "label=ctxmill.sandbox-session-id=<sandbox-session-id>")"
+docker rm -f "$(docker ps -aq --filter "label=stablehand.sandbox-session-id=<sandbox-session-id>")"
 ```
 
 The orchestrator will reconcile the missing container on the next lifecycle pass and mark the session `TERMINATED` or `CHECKPOINTED`, depending on checkpoint availability.
@@ -181,11 +181,11 @@ On orchestrator startup, reconciliation repairs state that may have been left be
 
 ### Resource Exhaustion
 If you see `ContainerLimitError` (`503`) in the UI:
-- Increase `CTXMILL_MAX_GLOBAL_CONTAINERS` or `queueTimeoutMs`.
+- Increase `STABLEHAND_MAX_GLOBAL_CONTAINERS` or `queueTimeoutMs`.
 - Check for orphan containers that reconciliation might have missed.
 
 ### Health Check Failures
 If containers are created but fail to start:
-- Ensure the `ctxmill-agents` network exists with `docker network ls`.
+- Ensure the `stablehand-agents` network exists with `docker network ls`.
 - Check container logs for gRPC startup errors.
 - Verify the harness image was rebuilt after sandbox-daemon changes.

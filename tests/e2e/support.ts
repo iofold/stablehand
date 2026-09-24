@@ -1,6 +1,6 @@
 import { expect, type APIRequestContext } from '@playwright/test';
 import { join } from 'node:path';
-import { loadManifestProject } from '@ctxmill/manifest/node';
+import { loadManifestProject } from '@stablehand/manifest/node';
 
 export const API_BASE =
   process.env.PLAYWRIGHT_API_BASE_URL ?? 'http://localhost:3002';

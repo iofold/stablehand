@@ -1,6 +1,6 @@
 ---
 name: stress-test
-description: Full stress-test suite for ctxmill — exercises tools, chaining, HITL, multi-model, code execution
+description: Full stress-test suite for stablehand — exercises tools, chaining, HITL, multi-model, code execution
 ---
 
 # Full stress test plan
@@ -52,7 +52,7 @@ curl -sf http://localhost:9000/minio/health/live > /dev/null 2>&1 && echo "MinIO
 
 # Sandbox harness images exist
 for img in langgraph claude-agents pi-agent; do
-  docker image inspect "ctxmill/harness-${img}:latest" > /dev/null 2>&1 && echo "Image ${img}: OK" || echo "Image ${img}: MISSING — run: docker compose up --build"
+  docker image inspect "stablehand/harness-${img}:latest" > /dev/null 2>&1 && echo "Image ${img}: OK" || echo "Image ${img}: MISSING — run: docker compose up --build"
 done
 ```
 

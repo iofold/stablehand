@@ -17,7 +17,7 @@ describe('TokenGate', () => {
     window.localStorage.clear();
     useApiAuthStore.setState({ token: '', authRequired: false });
     mockJson.mockResolvedValue({
-      system: { version: 'test', uptimeMs: 1, dbPath: '.ctxmill' },
+      system: { version: 'test', uptimeMs: 1, dbPath: '.stablehand' },
       agentDefaults: { harness: 'langgraph', temperature: 0.7, maxTokens: 4096 },
       authentication: { mode: 'enforced' },
     });
@@ -107,6 +107,6 @@ describe('TokenGate', () => {
     });
 
     expect(container.textContent).toContain('Scoped keys cannot unlock the dashboard');
-    expect(container.textContent).toContain('master CTXMILL_API_TOKEN');
+    expect(container.textContent).toContain('master STABLEHAND_API_TOKEN');
   });
 });

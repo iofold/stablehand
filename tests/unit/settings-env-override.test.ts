@@ -5,8 +5,8 @@ import {
   DEFAULT_TURN_TIMEOUT_MS,
   DEFAULT_IDLE_TIMEOUT_MS,
   DEFAULT_DEFAULT_CPUS,
-} from '../../packages/ctxmill/src/settings/service.js';
-import type { SettingsDb } from '../../packages/ctxmill/src/settings/service.js';
+} from '../../packages/stablehand/src/settings/service.js';
+import type { SettingsDb } from '../../packages/stablehand/src/settings/service.js';
 
 function createMockDb(overrides: Record<string, string> = {}): SettingsDb {
   return {
@@ -47,9 +47,9 @@ describe('SystemSettingsService env var overrides', () => {
   });
 
   it('env var overrides hardcoded default when no DB value exists', async () => {
-    process.env.CTXMILL_TURN_TIMEOUT_MS = '600000';
-    process.env.CTXMILL_IDLE_TIMEOUT_MS = '120000';
-    process.env.CTXMILL_MAX_GLOBAL_CONTAINERS = '9';
+    process.env.STABLEHAND_TURN_TIMEOUT_MS = '600000';
+    process.env.STABLEHAND_IDLE_TIMEOUT_MS = '120000';
+    process.env.STABLEHAND_MAX_GLOBAL_CONTAINERS = '9';
 
     const service = new SystemSettingsService(createMockDb());
     const settings = await service.getAll();
@@ -60,7 +60,7 @@ describe('SystemSettingsService env var overrides', () => {
   });
 
   it('DB value takes precedence over env var', async () => {
-    process.env.CTXMILL_TURN_TIMEOUT_MS = '600000';
+    process.env.STABLEHAND_TURN_TIMEOUT_MS = '600000';
 
     const service = new SystemSettingsService(createMockDb({
       turnTimeoutMs: '900000',
@@ -71,7 +71,7 @@ describe('SystemSettingsService env var overrides', () => {
   });
 
   it('invalid env var falls back to hardcoded default', async () => {
-    process.env.CTXMILL_TURN_TIMEOUT_MS = 'not-a-number';
+    process.env.STABLEHAND_TURN_TIMEOUT_MS = 'not-a-number';
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const service = new SystemSettingsService(createMockDb());
@@ -79,13 +79,13 @@ describe('SystemSettingsService env var overrides', () => {
 
     expect(settings.turnTimeoutMs).toBe(DEFAULT_TURN_TIMEOUT_MS);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('CTXMILL_TURN_TIMEOUT_MS'),
+      expect.stringContaining('STABLEHAND_TURN_TIMEOUT_MS'),
     );
     warnSpy.mockRestore();
   });
 
   it('negative env var falls back to hardcoded default for positive-int settings', async () => {
-    process.env.CTXMILL_TURN_TIMEOUT_MS = '-1';
+    process.env.STABLEHAND_TURN_TIMEOUT_MS = '-1';
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const service = new SystemSettingsService(createMockDb());
@@ -96,7 +96,7 @@ describe('SystemSettingsService env var overrides', () => {
   });
 
   it('float env var works for defaultCpus', async () => {
-    process.env.CTXMILL_DEFAULT_CPUS = '2.5';
+    process.env.STABLEHAND_DEFAULT_CPUS = '2.5';
 
     const service = new SystemSettingsService(createMockDb());
     const settings = await service.getAll();
@@ -105,7 +105,7 @@ describe('SystemSettingsService env var overrides', () => {
   });
 
   it('empty string env var falls back to hardcoded default', async () => {
-    process.env.CTXMILL_TURN_TIMEOUT_MS = '';
+    process.env.STABLEHAND_TURN_TIMEOUT_MS = '';
 
     const service = new SystemSettingsService(createMockDb());
     const settings = await service.getAll();

@@ -86,10 +86,10 @@ describe('LangGraph provider model configuration', () => {
       reasoning: 'off',
     });
     config.secrets = {
-      CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
-      CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
-      CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
-      CTXMILL_MODEL_GATEWAY_REVISION: 'dev2-1',
+      STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+      STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+      STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+      STABLEHAND_MODEL_GATEWAY_REVISION: 'dev2-1',
     };
     const session = await new LangGraphHarness().openSession(config);
     const buildModel = Reflect.get(session, 'buildModelFromConfig') as (
@@ -144,10 +144,10 @@ describe('LangGraph provider model configuration', () => {
       useResponsesApi: true,
     });
     config.secrets = {
-      CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
-      CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
-      CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
-      CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+      STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+      STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+      STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+      STABLEHAND_MODEL_GATEWAY_REVISION: 'dev1-1',
     };
     const session = await new LangGraphHarness().openSession(config);
     const buildModel = Reflect.get(session, 'buildModelFromConfig') as (
@@ -174,13 +174,13 @@ describe('LangGraph provider model configuration', () => {
     const config = makeConfig('openai');
     config.harnessConfigJson = JSON.stringify({
       provider: 'openai',
-      model: 'ctxmill-openai',
+      model: 'stablehand-openai',
     });
     config.secrets = {
-      CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
-      CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
-      CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
-      CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+      STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+      STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+      STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+      STABLEHAND_MODEL_GATEWAY_REVISION: 'dev1-1',
     };
     const session = await new LangGraphHarness().openSession(config);
     const buildModel = Reflect.get(session, 'buildModelFromConfig') as (
@@ -197,7 +197,7 @@ describe('LangGraph provider model configuration', () => {
     expect(constructorCalls.openai).toEqual([
       expect.objectContaining({
         apiKey: 'runtime-key',
-        modelName: 'ctxmill-openai',
+        modelName: 'stablehand-openai',
         configuration: {
           baseURL: 'http://litellm:4000/v1',
           defaultHeaders: {
@@ -213,13 +213,13 @@ describe('LangGraph provider model configuration', () => {
     const config = makeConfig('anthropic');
     config.harnessConfigJson = JSON.stringify({
       provider: 'anthropic',
-      model: 'ctxmill-anthropic',
+      model: 'stablehand-anthropic',
     });
     config.secrets = {
-      CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
-      CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
-      CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
-      CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+      STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+      STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+      STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+      STABLEHAND_MODEL_GATEWAY_REVISION: 'dev1-1',
     };
     const session = await new LangGraphHarness().openSession(config);
     const buildModel = Reflect.get(session, 'buildModelFromConfig') as (
@@ -237,7 +237,7 @@ describe('LangGraph provider model configuration', () => {
       expect.objectContaining({
         anthropicApiKey: 'runtime-key',
         anthropicApiUrl: 'http://litellm:4000',
-        model: 'ctxmill-anthropic',
+        model: 'stablehand-anthropic',
         clientOptions: {
           defaultHeaders: expect.objectContaining({
             'x-litellm-trace-id': expect.stringMatching(/^ct_[a-f0-9]{32}$/),

@@ -29,13 +29,13 @@ import {
   NativeToolPolicy as ProtoNativeToolPolicy,
   type NativeToolPolicyConfig as ProtoNativeToolPolicyConfig,
   type Message as ProtoMessage,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 import {
   NativeToolPolicySchema,
   type NativeToolPolicy,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 
-import type { AgentSessionEvent } from '@ctxmill/shared';
+import type { AgentSessionEvent } from '@stablehand/shared';
 import type {
   AgentEvent,
   HarnessSessionConfig,

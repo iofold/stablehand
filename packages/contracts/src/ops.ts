@@ -25,7 +25,7 @@ export const QueueStatusResponseSchema = z.strictObject({
 export type QueueStatusResponse = z.infer<typeof QueueStatusResponseSchema>;
 
 // ── GET/PUT /api/settings ─────────────────────────────────────────────
-// Field list must match @ctxmill/shared SYSTEM_SETTING_BOUNDS; a drift test
+// Field list must match @stablehand/shared SYSTEM_SETTING_BOUNDS; a drift test
 // in the orchestrator asserts the two key sets are identical.
 export const SystemSettingsSchema = z.strictObject({
   maxWorkspaceTarBytes: z.number().int().positive(),

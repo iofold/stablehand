@@ -3,7 +3,7 @@ import type { HandlerContext } from '@connectrpc/connect';
 import {
   FreshBootstrapSchema,
   OpenSessionRequestSchema,
-} from '@ctxmill/proto/sandbox/v1';
+} from '@stablehand/proto/sandbox/v1';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({

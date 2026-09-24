@@ -1,4 +1,4 @@
-apiVersion: ctxmill.io/v1
+apiVersion: stablehand.io/v1
 kind: Agent
 metadata:
   name: vqa-langgraph

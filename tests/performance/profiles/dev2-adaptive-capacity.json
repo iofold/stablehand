@@ -3,7 +3,7 @@
   "name": "dev2-adaptive-capacity",
   "target": {
     "apiBase": "https://stablehand.staging.example.com/api",
-    "kubernetesNamespace": "ctxmill"
+    "kubernetesNamespace": "stablehand"
   },
   "levels": [1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 80, 100],
   "maxGlobalContainers": 100,

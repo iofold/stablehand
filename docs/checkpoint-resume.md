@@ -1,6 +1,6 @@
 # Checkpoint and Resume Operational Guide
 
-CTXMill uses application-level checkpoint/restore for sandbox sessions. Sandbox
+Stablehand uses application-level checkpoint/restore for sandbox sessions. Sandbox
 session status values are uppercase (`ACTIVE`, `CHECKPOINTED`, `RESTORING`,
 `TERMINATED`).
 
@@ -74,7 +74,7 @@ When an agent requests human approval:
 
 1. The orchestrator persists a pending interrupt and emits
    `interrupt.requested`, projected as
-   `CUSTOM name: ctxmill.interrupt.requested`.
+   `CUSTOM name: stablehand.interrupt.requested`.
 2. The sandbox session may remain live or later be checkpointed through normal lifecycle rules.
 3. When the user approves or rejects, the orchestrator resumes the sandbox session or restores it from checkpoint.
 4. A continuation turn delivers the resolution back to the harness.
@@ -97,7 +97,7 @@ Stops and removes the live container, terminating the sandbox session.
 
 The workspace diff process is:
 
-1. **Extract**: CTXMill identifies changed files in the container writable layer.
+1. **Extract**: Stablehand identifies changed files in the container writable layer.
 2. **Compress**: Files are bundled into a `.tar.gz`.
 3. **Store**: The archive is written under `data/checkpoints/{sandboxSessionId}/`.
 4. **Restore**: On sandbox-session restore, the archive is unpacked into the new container before execution continues.
@@ -115,4 +115,4 @@ The workspace diff process is:
 
 - **Check checkpoint files**: Inspect `data/checkpoints/{sandboxSessionId}` for JSON/tar presence and size.
 - **Check logs**: Look for `[WorkspaceDiff]`, `[SandboxSessionManager]`, and daemon checkpoint log lines.
-- **Check container status**: Use `docker ps -a --filter "label=ctxmill.sandbox-session-id=<sandbox-session-id>"`.
+- **Check container status**: Use `docker ps -a --filter "label=stablehand.sandbox-session-id=<sandbox-session-id>"`.

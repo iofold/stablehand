@@ -3,7 +3,7 @@
 Scoped API keys are the credential boundary for out-of-process extensions and
 other non-operator integrations. They let an operator grant a named principal
 only the API capabilities it needs while retaining the master
-`CTXMILL_API_TOKEN` for the dashboard and administrative work.
+`STABLEHAND_API_TOKEN` for the dashboard and administrative work.
 
 The authorization boundary is intentionally coarse and deployment-wide. A key
 can be restricted by capability, but not by agent, artifact, conversation, or
@@ -13,14 +13,14 @@ tenant. Review the effective permission receipt before creating one.
 
 | Credential | Intended holder | Access |
 |---|---|---|
-| Master `CTXMILL_API_TOKEN` | Deployment operator and dashboard | Every authenticated API route, including key administration |
+| Master `STABLEHAND_API_TOKEN` | Deployment operator and dashboard | Every authenticated API route, including key administration |
 | Scoped `cmk_...` key | One extension or integration | Only routes mapped to one of its capabilities |
 
 Routes without a declared scoped capability are master-only. This fail-closed
 rule means a new or forgotten route annotation narrows access rather than
 accidentally granting it. A scoped key can never list, create, or revoke keys.
 
-When `CTXMILL_AUTH_DISABLED=true` is active and no `CTXMILL_API_TOKEN` is
+When `STABLEHAND_AUTH_DISABLED=true` is active and no `STABLEHAND_API_TOKEN` is
 configured, HTTP authentication is open and scoped keys provide no isolation.
 A separate callback secret can still protect sandbox callbacks, but does not
 close the HTTP API. The Access keys UI disables creation in open mode.
@@ -36,14 +36,14 @@ The bundled CLI provides the same lifecycle operations. It requires the master
 token:
 
 ```bash
-ctxmill ops keys create \
+stablehand ops keys create \
   --name artifact-gallery-prod \
   --cap artifacts:read \
   --cap webhooks:manage \
   --note "Production artifact gallery"
 
-ctxmill ops keys list
-ctxmill ops keys revoke key_123 --yes
+stablehand ops keys list
+stablehand ops keys revoke key_123 --yes
 ```
 
 `--cap` is repeatable and also accepts comma-separated values. `--expires-at`
@@ -54,8 +54,8 @@ still safe because no token is minted. Treat `--json` output as secret-bearing.
 The HTTP API is also master-only:
 
 ```bash
-curl -sS -X POST "$CTXMILL_API_URL/api/keys" \
-  -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+curl -sS -X POST "$STABLEHAND_API_URL/api/keys" \
+  -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
   -H 'Content-Type: application/json' \
   --data '{
     "name": "artifact-gallery-prod",
@@ -66,7 +66,7 @@ curl -sS -X POST "$CTXMILL_API_URL/api/keys" \
 ```
 
 `POST /api/keys` returns `Cache-Control: no-store`. Its `token` field is shown
-once and cannot be retrieved later. CTXMill stores only its SHA-256 hash.
+once and cannot be retrieved later. Stablehand stores only its SHA-256 hash.
 
 ## Capability map
 
@@ -116,7 +116,7 @@ That grant permits `custom.gallery.published` and
 the event is persisted or any trigger can fire. The wildcard is trailing only.
 
 Events emitted with a scoped key carry the key ID as top-level persisted event
-provenance. CTXMill does not inject that provenance into the caller's nested
+provenance. Stablehand does not inject that provenance into the caller's nested
 payload.
 
 ## Extension runtime use
@@ -125,11 +125,11 @@ Pass the scoped token exactly as a bearer token. The official client accepts a
 string or token provider:
 
 ```ts
-import { CtxmillControlClient } from '@ctxmill/client/control';
+import { StablehandControlClient } from '@stablehand/client/control';
 
-const ctxmill = new CtxmillControlClient({
-  apiBase: process.env.CTXMILL_API_URL,
-  token: () => process.env.CTXMILL_EXTENSION_TOKEN!,
+const stablehand = new StablehandControlClient({
+  apiBase: process.env.STABLEHAND_API_URL,
+  token: () => process.env.STABLEHAND_EXTENSION_TOKEN!,
 });
 ```
 
@@ -146,7 +146,7 @@ Authorization failures are designed for startup diagnostics:
 - `403` with `requiredCapability: "events:read"` names a missing grant.
 - `403` with `requiredCapability: null` means the route is master-only.
 
-`CtxmillApiError.requiredCapability` exposes the same value to client users.
+`StablehandApiError.requiredCapability` exposes the same value to client users.
 Do not fall back to the master token when a capability is missing; ask the
 operator to review and rotate the scoped key.
 

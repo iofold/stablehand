@@ -13,15 +13,15 @@
 // row ids are reported — a partial rotation is never committed.
 //
 // Deployments that started without SECRET_MASTER_KEY wrote rows under the
-// development fallback passphrase 'ctxmill-dev-key-change-in-prod'; pass that
+// development fallback passphrase 'stablehand-dev-key-change-in-prod'; pass that
 // as OLD_SECRET_MASTER_KEY to migrate them onto a real key.
 
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
 import { createRequire } from 'node:module';
 
-// Crypto parameters must match packages/ctxmill/src/secrets/crypto.ts.
+// Crypto parameters must match packages/stablehand/src/secrets/crypto.ts.
 const ALGO = 'aes-256-gcm';
-const SALT = 'ctxmill-salt-v1';
+const SALT = 'stablehand-salt-v1';
 
 function deriveKey(passphrase) {
   return scryptSync(passphrase, SALT, 32);
@@ -61,8 +61,8 @@ if (!oldPassphrase) fail('OLD_SECRET_MASTER_KEY must be set');
 if (!newPassphrase) fail('NEW_SECRET_MASTER_KEY must be set');
 if (oldPassphrase === newPassphrase) fail('OLD_ and NEW_SECRET_MASTER_KEY are identical — nothing to rotate');
 
-// postgres is a dependency of packages/ctxmill, not the workspace root.
-const require = createRequire(new URL('../packages/ctxmill/package.json', import.meta.url));
+// postgres is a dependency of packages/stablehand, not the workspace root.
+const require = createRequire(new URL('../packages/stablehand/package.json', import.meta.url));
 const postgres = require('postgres');
 
 const oldKey = deriveKey(oldPassphrase);

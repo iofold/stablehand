@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { verifyCtxmillWebhook } from '@ctxmill/contracts';
+import { verifyStablehandWebhook } from '@stablehand/contracts';
 import { allowConsoleErrors } from '../setup-strict.js';
 
 import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
@@ -17,7 +17,7 @@ describe('Events and Triggers Integration', () => {
 
   beforeAll(async () => {
     testApp = await createTestApp({
-      dirPrefix: 'ctxmill-ekt-',
+      dirPrefix: 'stablehand-ekt-',
     });
     app = testApp.app;
     container = testApp.container;
@@ -353,7 +353,7 @@ describe('Events and Triggers Integration', () => {
             method: 'POST',
             url: `/api/agents/${eventAgentId}/webhooks`,
             payload: {
-              url: 'https://pack-b.test/hooks/ctxmill',
+              url: 'https://pack-b.test/hooks/stablehand',
               events: [eventType],
               secret: signingSecret,
             },
@@ -380,11 +380,11 @@ describe('Events and Triggers Integration', () => {
 
           expect(fetchDelivery).toHaveBeenCalledOnce();
           const [deliveryUrl, deliveryInit] = fetchDelivery.mock.calls[0];
-          expect(deliveryUrl).toBe('https://pack-b.test/hooks/ctxmill');
+          expect(deliveryUrl).toBe('https://pack-b.test/hooks/stablehand');
           const headers = new Headers(deliveryInit?.headers);
           const rawBody = String(deliveryInit?.body);
           expect(headers.get('X-Event-Type')).toBe(eventType);
-          const verified = await verifyCtxmillWebhook({
+          const verified = await verifyStablehandWebhook({
             headers,
             rawBody,
             secrets: signingSecret,
@@ -649,7 +649,7 @@ describe('Events and Triggers Integration', () => {
         )).toBe(true);
         const [, deliveryInit] = fetchDelivery.mock.calls[0]!;
         const headers = new Headers(deliveryInit?.headers);
-        const verified = await verifyCtxmillWebhook({
+        const verified = await verifyStablehandWebhook({
           headers,
           rawBody: String(deliveryInit?.body),
           secrets: signingSecret,

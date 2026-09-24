@@ -10,7 +10,7 @@
 
 ## Problem Statement
 
-ctxmill supports subagents in 2 of 3 harnesses (LangGraph and Claude Agents). When a subagent runs, its text generation, tool calls, and events are **indistinguishable from the main agent's output** throughout the entire pipeline — harness → proto → orchestrator → database → UI.
+stablehand supports subagents in 2 of 3 harnesses (LangGraph and Claude Agents). When a subagent runs, its text generation, tool calls, and events are **indistinguishable from the main agent's output** throughout the entire pipeline — harness → proto → orchestrator → database → UI.
 
 This means:
 - Budget/cost tracking middleware cannot attribute spend to specific subagents
@@ -43,7 +43,7 @@ LangGraph's `streamEvents` v2 API provides subagent attribution in two places:
    - Tracks subagent status (pending/running/complete/error)
    - Supports nested subagents with parent-child relationships
 
-**ctxmill harness gap:**
+**stablehand harness gap:**
 
 The LangGraph harness event loop (`langgraph.ts:226-356`) only checks `ev.event` (the event type like `on_chat_model_stream`). It does **not** inspect:
 - `ev.name` — the namespace path identifying the source agent
@@ -83,7 +83,7 @@ When Claude invokes a subagent, it emits a `tool_use` block with `name: 'Agent'`
 
 All subsequent messages from that subagent have `parent_tool_use_id: "tool-123"`.
 
-**ctxmill harness gap:**
+**stablehand harness gap:**
 
 The Claude harness (`claude-agents.ts`) receives `parent_tool_use_id` from the SDK but only uses it as a fallback for `tool_use_id` mapping (line 753). It does **not**:
 - Propagate `parent_tool_use_id` to `AgentEvent`
@@ -160,7 +160,7 @@ UI (SessionThread.tsx)                          ← NO RENDERING FOR IT
 | **SDK attribution mechanism** | Event namespace + checkpoint metadata | `parent_tool_use_id` on every message | N/A |
 | **Attribution granularity** | Per-event (namespace path) | Per-message (parent tool use ID) | N/A |
 | **Nesting depth** | Unlimited (namespace grows) | 1 level (SDK constraint) | N/A |
-| **ctxmill uses attribution** | ❌ No | ❌ No | N/A |
+| **stablehand uses attribution** | ❌ No | ❌ No | N/A |
 | **Middleware propagation** | ✅ Custom subagents, ❌ GP subagent | ❌ Not applicable (no middleware system) | ✅ Extensions apply to single agent |
 
 ---

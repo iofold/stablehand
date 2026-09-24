@@ -18,7 +18,7 @@ import { formatCompactNumber } from '@/lib/format';
 import type {
   AgentBudgetStatus,
   ModelGatewayStatus,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 import { harnessLabel } from '@/lib/harness';
 
 interface AgentCardProps {

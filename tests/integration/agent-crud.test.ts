@@ -2,9 +2,9 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
 
 import { vi } from 'vitest';
-import { AgentSchema } from '@ctxmill/contracts';
+import { AgentSchema } from '@stablehand/contracts';
 import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
-import { buildAgentDefinition } from '../../packages/ctxmill/src/orchestrator/agent-definition.js';
+import { buildAgentDefinition } from '../../packages/stablehand/src/orchestrator/agent-definition.js';
 
 const VALID_AGENT = {
   name: 'test-agent',
@@ -19,7 +19,7 @@ function canonicalManifest(
   spec: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    apiVersion: 'ctxmill.io/v1',
+    apiVersion: 'stablehand.io/v1',
     kind: 'Agent',
     metadata: { name },
     spec: {
@@ -41,7 +41,7 @@ describe('Agent CRUD & related endpoints', () => {
 
   beforeAll(async () => {
     testApp = await createTestApp({
-      dirPrefix: 'ctxmill-agent-crud-',
+      dirPrefix: 'stablehand-agent-crud-',
     });
     app = testApp.app;
     container = testApp.container;
@@ -1004,12 +1004,12 @@ describe('Agent CRUD & related endpoints', () => {
       vi.spyOn(container.containerManager, 'listManagedContainersWithLabels').mockResolvedValueOnce([
         {
           containerId: 'orphan-container-id',
-          containerName: 'ctxmill-sandbox-orphan',
+          containerName: 'stablehand-sandbox-orphan',
           sessionId: 'orphan-session-id',
           agentId: id,
           harnessName: 'langgraph',
           status: 'running',
-          labels: { 'ctxmill.agent-id': id },
+          labels: { 'stablehand.agent-id': id },
         },
       ]);
 

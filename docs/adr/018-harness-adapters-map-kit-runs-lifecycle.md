@@ -5,7 +5,7 @@
 
 ## Context
 
-CTXMill supports multiple sandbox harness adapters. Before consolidation, each
+Stablehand supports multiple sandbox harness adapters. Before consolidation, each
 adapter independently implemented turn accumulation, message commit boundaries,
 approval events, abort wiring, model auth resolution, token usage normalization,
 and LangSmith tracing. Those copies drifted: LangGraph had unstable turn IDs and

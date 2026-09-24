@@ -5,9 +5,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createTurnQueueAdmission,
   QueueFullError,
-} from '../../packages/ctxmill/src/orchestrator/turn-queue-admission.js';
-import { QueueCapExceededError } from '../../packages/ctxmill/src/database/repository.js';
-import { TurnSecretEnvelopeCodec } from '../../packages/ctxmill/src/orchestrator/turn-secret-envelope.js';
+} from '../../packages/stablehand/src/orchestrator/turn-queue-admission.js';
+import { QueueCapExceededError } from '../../packages/stablehand/src/database/repository.js';
+import { TurnSecretEnvelopeCodec } from '../../packages/stablehand/src/orchestrator/turn-secret-envelope.js';
 import { createTestDb, type TestDb } from '../utils/test-db.js';
 
 /**

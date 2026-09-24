@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
+import { InterruptManager } from '../../packages/stablehand/src/orchestrator/interrupt.js';
 import type {
   ExpectedSandboxCallbackDelivery,
   InterruptRow,
-} from '../../packages/ctxmill/src/database/repository.js';
-import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
+} from '../../packages/stablehand/src/database/repository.js';
+import { TypedEventBus } from '../../packages/stablehand/src/events/bus.js';
 
 type InterruptStore = NonNullable<ConstructorParameters<typeof InterruptManager>[1]>;
 type InterruptInsert = Parameters<InterruptStore['savePendingInterrupt']>[0];

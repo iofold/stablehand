@@ -8,13 +8,13 @@ import {
   SessionStateCollector,
   type SessionCheckpoint,
   type WorkspaceRef,
-} from '@ctxmill/sandbox-daemon';
+} from '@stablehand/sandbox-daemon';
 import {
   sessionCheckpointToProto,
   protoSessionCheckpointToInternal,
-} from '../../packages/ctxmill/src/sandbox/proto-convert.js';
-import type { ContainerManager } from '../../packages/ctxmill/src/sandbox/container-manager.js';
-import type { HarnessExportedState } from '@ctxmill/sandbox-daemon';
+} from '../../packages/stablehand/src/sandbox/proto-convert.js';
+import type { ContainerManager } from '../../packages/stablehand/src/sandbox/container-manager.js';
+import type { HarnessExportedState } from '@stablehand/sandbox-daemon';
 
 type StoredToolCall = {
   id: string;
@@ -530,7 +530,7 @@ describe('Checkpoint size limits', () => {
 describe('Workspace diff size limits', () => {
   it('rejects workspace diff > 100 MB with workspace_diff_too_large', async () => {
     const { WorkspaceDiffService } = await import(
-      '../../packages/ctxmill/src/sandbox/workspace-diff.js'
+      '../../packages/stablehand/src/sandbox/workspace-diff.js'
     );
     const fs = await import('node:fs/promises');
     const path = await import('node:path');
@@ -559,7 +559,7 @@ describe('Workspace diff size limits', () => {
 
   it('accepts workspace diff under 100 MB', async () => {
     const { WorkspaceDiffService } = await import(
-      '../../packages/ctxmill/src/sandbox/workspace-diff.js'
+      '../../packages/stablehand/src/sandbox/workspace-diff.js'
     );
     const fs = await import('node:fs/promises');
     const path = await import('node:path');

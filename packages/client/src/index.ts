@@ -1,29 +1,29 @@
 export {
-  CtxmillAgUiClient,
-  createCtxmillAgUiClient,
-  createCtxmillId,
+  StablehandAgUiClient,
+  createStablehandAgUiClient,
+  createStablehandId,
   createUserMessage,
   getA2UIBlock,
   getInterruptRequest,
   parseCanonicalStreamEvent,
-  type CtxmillA2UIBlock,
-  type CtxmillAgUiRunInput,
-  type CtxmillInterruptRequest,
+  type StablehandA2UIBlock,
+  type StablehandAgUiRunInput,
+  type StablehandInterruptRequest,
   type ResolveInterruptInput,
 } from './ag-ui-client.js';
 
 export {
-  CtxmillControlClient,
-  createCtxmillControlClient,
+  StablehandControlClient,
+  createStablehandControlClient,
   type AgentEventStreamInput,
   type AgentEventStreamItem,
 } from './control-client.js';
 
 export {
-  CtxmillApiError,
-  CtxmillContractError,
-  CtxmillTimeoutError,
-  type CtxmillContractDirection,
+  StablehandApiError,
+  StablehandContractError,
+  StablehandTimeoutError,
+  type StablehandContractDirection,
 } from './errors.js';
 
 export {
@@ -32,16 +32,16 @@ export {
 } from './sse.js';
 
 export type {
-  CtxmillClientOptions,
-  CtxmillHeadersProvider,
-  CtxmillRequestOptions,
-  CtxmillRetryOptions,
-  CtxmillTokenProvider,
+  StablehandClientOptions,
+  StablehandHeadersProvider,
+  StablehandRequestOptions,
+  StablehandRetryOptions,
+  StablehandTokenProvider,
 } from './transport.js';
 
 export type {
-  AgUiContextEntryInput as CtxmillContextEntry,
-  AgUiMessageInput as CtxmillMessage,
-  AgUiToolInput as CtxmillTool,
-  CanonicalStreamEvent as CtxmillStreamEvent,
-} from '@ctxmill/contracts';
+  AgUiContextEntryInput as StablehandContextEntry,
+  AgUiMessageInput as StablehandMessage,
+  AgUiToolInput as StablehandTool,
+  CanonicalStreamEvent as StablehandStreamEvent,
+} from '@stablehand/contracts';

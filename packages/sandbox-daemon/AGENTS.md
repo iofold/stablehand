@@ -41,7 +41,7 @@ src/
 Changes here require rebuilding harness images, not just the orchestrator:
 
 ```bash
-docker build --target harness-langgraph -t ctxmill/harness-langgraph -f Dockerfile.sandbox .
-docker build --target harness-claude-agents -t ctxmill/harness-claude-agents -f Dockerfile.sandbox .
-docker build --target harness-pi-agent -t ctxmill/harness-pi-agent -f Dockerfile.sandbox .
+docker build --target harness-langgraph -t stablehand/harness-langgraph -f Dockerfile.sandbox .
+docker build --target harness-claude-agents -t stablehand/harness-claude-agents -f Dockerfile.sandbox .
+docker build --target harness-pi-agent -t stablehand/harness-pi-agent -f Dockerfile.sandbox .
 ```

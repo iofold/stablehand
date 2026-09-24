@@ -13,7 +13,7 @@ import {
   fetchRecentConversations,
 } from '@/lib/api';
 import { makeAgentFixture } from '@/test/agent-fixture';
-import { ConversationSummarySchema } from '@ctxmill/contracts';
+import { ConversationSummarySchema } from '@stablehand/contracts';
 
 vi.mock('@/components/dashboard/Dashboard', () => ({
   Dashboard: ({ error }: { error?: string | null }) => (

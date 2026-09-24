@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseManifestString, validateManifest } from '@ctxmill/manifest';
+import { parseManifestString, validateManifest } from '@stablehand/manifest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentsDir = join(__dirname, '..', 'agents');
@@ -21,7 +21,7 @@ describe('manifest validation', () => {
         const parsed = parseManifestString(yamlContent);
         const manifest = validateManifest(parsed);
 
-        expect(manifest.apiVersion).toBe('ctxmill.io/v1');
+        expect(manifest.apiVersion).toBe('stablehand.io/v1');
         expect(manifest.kind).toBe('Agent');
         expect(manifest.metadata.name).toBe(expectedName);
         expect(manifest.spec.harness).toBe(expectedHarness);

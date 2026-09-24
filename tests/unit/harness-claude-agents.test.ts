@@ -32,7 +32,7 @@ import { ClaudeAgentsHarness } from '../../packages/sandbox-daemon/src/index.ts'
 import type { AgentEvent, AgentHarness, HarnessSessionConfig } from '../../packages/sandbox-daemon/src/index.ts';
 import type { ToolDefinition } from '../../packages/sandbox-daemon/src/index.ts';
 import type { Message } from '../../packages/sandbox-daemon/src/index.ts';
-import type { NativeToolPolicy } from '@ctxmill/contracts';
+import type { NativeToolPolicy } from '@stablehand/contracts';
 
 function makeMessage(
   role: Message['role'],
@@ -578,7 +578,7 @@ describe('ClaudeAgentsHarness', () => {
         claude_code_version: '2.1.195',
         cwd: '/workspace',
         tools: ['Read', 'Write'],
-        mcp_servers: [{ name: 'ctxmill', status: 'connected' }],
+        mcp_servers: [{ name: 'stablehand', status: 'connected' }],
         model: 'claude-sonnet-4-6',
         permissionMode: 'bypassPermissions',
         slash_commands: ['clear', 'goal'],
@@ -594,7 +594,7 @@ describe('ClaudeAgentsHarness', () => {
         type: 'custom_agui_event',
         event: {
           type: 'CUSTOM',
-          name: 'ctxmill.claude.runtime_capabilities',
+          name: 'stablehand.claude.runtime_capabilities',
           subtype: 'claude_runtime_capabilities',
           source: 'claude-agents',
           claudeCodeVersion: '2.1.195',
@@ -604,7 +604,7 @@ describe('ClaudeAgentsHarness', () => {
           slashCommands: ['clear', 'goal'],
           supportsGoal: true,
           tools: ['Read', 'Write'],
-          mcpServers: [{ name: 'ctxmill', status: 'connected' }],
+          mcpServers: [{ name: 'stablehand', status: 'connected' }],
         },
       });
     });
@@ -634,7 +634,7 @@ describe('ClaudeAgentsHarness', () => {
   });
 
   describe('openSession() and deliverTurn()', () => {
-    it('passes an explicit native-tool allow policy and the ctxmill MCP server into query()', async () => {
+    it('passes an explicit native-tool allow policy and the stablehand MCP server into query()', async () => {
       const harness = new ClaudeAgentsHarness();
       Reflect.set(harness, 'loadSdkModule', async () => ({
         query: mockQuery,
@@ -680,15 +680,15 @@ describe('ClaudeAgentsHarness', () => {
         { type: 'done', usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 } },
       ]);
       expect(createServerCall).toEqual({
-        name: 'ctxmill',
+        name: 'stablehand',
         tools: [expect.objectContaining({ name: 'ctx-tool' })],
       });
-      expect(queryCall?.options.allowedTools).toEqual(['native-read', 'mcp__ctxmill__*']);
+      expect(queryCall?.options.allowedTools).toEqual(['native-read', 'mcp__stablehand__*']);
       expect(queryCall?.options.disallowedTools).toEqual([]);
       expect(queryCall?.options.mcpServers).toEqual({
-        ctxmill: {
+        stablehand: {
           type: 'sdk',
-          name: 'ctxmill',
+          name: 'stablehand',
         },
       });
       expect(queryCall?.options.cwd).toBe('/tmp/workspace');
@@ -715,7 +715,7 @@ describe('ClaudeAgentsHarness', () => {
       {
         label: 'none',
         nativeToolPolicy: { policy: 'none' } as NativeToolPolicy,
-        allowedTools: ['mcp__ctxmill__*'],
+        allowedTools: ['mcp__stablehand__*'],
         disallowedTools: [],
       },
     ])('enforces the $label native-tool policy', async ({
@@ -763,7 +763,7 @@ describe('ClaudeAgentsHarness', () => {
           claude_code_version: '2.1.195',
           cwd: '/tmp/workspace',
           tools: ['Read'],
-          mcp_servers: [{ name: 'ctxmill', status: 'connected' }],
+          mcp_servers: [{ name: 'stablehand', status: 'connected' }],
           model: 'claude-sonnet-4-6',
           permissionMode: 'bypassPermissions',
           slash_commands: ['goal'],
@@ -859,7 +859,7 @@ describe('ClaudeAgentsHarness', () => {
       await session.close();
 
       const queryCall = mockQuery.mock.calls[0]?.[0];
-      expect(queryCall?.options.allowedTools).toEqual(['Skill', 'mcp__ctxmill__*']);
+      expect(queryCall?.options.allowedTools).toEqual(['Skill', 'mcp__stablehand__*']);
     });
 
     it('preserves subagent skills and allows Agent plus Skill tools', async () => {
@@ -903,7 +903,7 @@ describe('ClaudeAgentsHarness', () => {
       await session.close();
 
       const queryCall = mockQuery.mock.calls[0]?.[0];
-      expect(queryCall?.options.allowedTools).toEqual(['Agent', 'Skill', 'mcp__ctxmill__*']);
+      expect(queryCall?.options.allowedTools).toEqual(['Agent', 'Skill', 'mcp__stablehand__*']);
       expect(queryCall?.options.agents).toEqual({
         reviewer: {
           description: 'Reviews code',

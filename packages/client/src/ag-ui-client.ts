@@ -12,18 +12,18 @@ import {
   type AgUiMessageInput,
   type AgUiToolInput,
   type CanonicalStreamEvent,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 import { z } from 'zod';
 
-import { CtxmillContractError } from './errors.js';
+import { StablehandContractError } from './errors.js';
 import { parseServerSentEvents } from './sse.js';
 import {
-  CtxmillTransport,
-  type CtxmillClientOptions,
-  type CtxmillRequestOptions,
+  StablehandTransport,
+  type StablehandClientOptions,
+  type StablehandRequestOptions,
 } from './transport.js';
 
-export interface CtxmillAgUiRunInput extends CtxmillRequestOptions {
+export interface StablehandAgUiRunInput extends StablehandRequestOptions {
   agentId: string;
   threadId?: string;
   runId?: string;
@@ -34,7 +34,7 @@ export interface CtxmillAgUiRunInput extends CtxmillRequestOptions {
   forwardedProps?: unknown;
 }
 
-export interface CtxmillInterruptRequest {
+export interface StablehandInterruptRequest {
   interruptId: string;
   turnId: string;
   conversationId: string;
@@ -44,13 +44,13 @@ export interface CtxmillInterruptRequest {
   args: Record<string, unknown>;
 }
 
-export interface CtxmillA2UIBlock {
+export interface StablehandA2UIBlock {
   id: string;
   component: string;
   props: Record<string, unknown>;
 }
 
-export interface ResolveInterruptInput extends CtxmillRequestOptions {
+export interface ResolveInterruptInput extends StablehandRequestOptions {
   agentId: string;
   interruptId: string;
   // ctx-iqzy: 'submit' was removed server-side; approve/reject only.
@@ -71,7 +71,7 @@ const AgUiRunRequestSchema = z.strictObject({
 function segment(value: string, name: string): string {
   const parsed = z.string().trim().min(1).safeParse(value);
   if (!parsed.success) {
-    throw new CtxmillContractError({
+    throw new StablehandContractError({
       direction: 'request',
       method: 'PARAM',
       path: name,
@@ -81,7 +81,7 @@ function segment(value: string, name: string): string {
   return encodeURIComponent(parsed.data);
 }
 
-export function createCtxmillId(prefix: string): string {
+export function createStablehandId(prefix: string): string {
   const value = globalThis.crypto?.randomUUID
     ? globalThis.crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -90,7 +90,7 @@ export function createCtxmillId(prefix: string): string {
 
 export function createUserMessage(content: string): AgUiMessageInput {
   return AgUiMessageSchema.parse({
-    id: createCtxmillId('message'),
+    id: createStablehandId('message'),
     role: 'user',
     content,
   });
@@ -100,14 +100,14 @@ export function parseCanonicalStreamEvent(value: unknown): CanonicalStreamEvent 
   return CanonicalStreamEventSchema.parse(value);
 }
 
-export function getA2UIBlock(event: CanonicalStreamEvent): CtxmillA2UIBlock | null {
+export function getA2UIBlock(event: CanonicalStreamEvent): StablehandA2UIBlock | null {
   const parsed = A2UiRenderEventSchema.safeParse(event);
   return parsed.success ? parsed.data.block : null;
 }
 
 export function getInterruptRequest(
   event: CanonicalStreamEvent,
-): CtxmillInterruptRequest | null {
+): StablehandInterruptRequest | null {
   const parsed = InterruptRequestedEventSchema.safeParse(event);
   if (!parsed.success) return null;
   const request = parsed.data;
@@ -122,20 +122,20 @@ export function getInterruptRequest(
   };
 }
 
-export class CtxmillAgUiClient {
-  private readonly transport: CtxmillTransport;
+export class StablehandAgUiClient {
+  private readonly transport: StablehandTransport;
 
-  constructor(options: CtxmillClientOptions = {}) {
-    this.transport = new CtxmillTransport({
+  constructor(options: StablehandClientOptions = {}) {
+    this.transport = new StablehandTransport({
       ...options,
       retry: { maxAttempts: 1 },
     });
   }
 
   async *streamAgentRun(
-    input: CtxmillAgUiRunInput,
+    input: StablehandAgUiRunInput,
   ): AsyncGenerator<CanonicalStreamEvent> {
-    const runId = input.runId ?? createCtxmillId('turn');
+    const runId = input.runId ?? createStablehandId('turn');
     const stream = await this.transport.openStream({
       method: 'POST',
       path: `/ag-ui/${segment(input.agentId, 'agentId')}/run`,
@@ -160,7 +160,7 @@ export class CtxmillAgUiClient {
         try {
           raw = JSON.parse(frame.data) as unknown;
         } catch {
-          throw new CtxmillContractError({
+          throw new StablehandContractError({
             direction: 'stream',
             method: 'POST',
             path: `/ag-ui/${segment(input.agentId, 'agentId')}/run`,
@@ -174,7 +174,7 @@ export class CtxmillAgUiClient {
         }
         const parsed = CanonicalStreamEventSchema.safeParse(raw);
         if (!parsed.success) {
-          throw new CtxmillContractError({
+          throw new StablehandContractError({
             direction: 'stream',
             method: 'POST',
             path: `/ag-ui/${segment(input.agentId, 'agentId')}/run`,
@@ -211,7 +211,7 @@ export class CtxmillAgUiClient {
   cancelTurn(input: {
     agentId: string;
     turnId: string;
-  } & CtxmillRequestOptions) {
+  } & StablehandRequestOptions) {
     const {
       agentId,
       turnId,
@@ -226,8 +226,8 @@ export class CtxmillAgUiClient {
   }
 }
 
-export function createCtxmillAgUiClient(
-  options?: CtxmillClientOptions,
-): CtxmillAgUiClient {
-  return new CtxmillAgUiClient(options);
+export function createStablehandAgUiClient(
+  options?: StablehandClientOptions,
+): StablehandAgUiClient {
+  return new StablehandAgUiClient(options);
 }

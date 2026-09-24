@@ -16,7 +16,7 @@ import type {
   BudgetPolicy,
   BudgetSpendResponse,
   BudgetWindow,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 
 import { fetchBudgetSpend } from '@/lib/api';
 import { formatCompactNumber, formatTimestamp } from '@/lib/format';

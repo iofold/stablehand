@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { ToolContext } from '@ctxmill/sandbox-daemon';
+import type { ToolContext } from '@stablehand/sandbox-daemon';
 
 import readFileTool from '../../packages/examples/kitchen-sink/tools/read-file.js';
 import listDirectoryTool from '../../packages/examples/kitchen-sink/tools/list-directory.js';

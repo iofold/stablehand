@@ -8,7 +8,7 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import type {
   AgentHarness,
-  AgentEvent as CtxMillAgentEvent,
+  AgentEvent as StablehandAgentEvent,
   ApprovalCallback,
   HarnessSession,
   HarnessSessionConfig,
@@ -193,7 +193,7 @@ interface ConvertToolsContext {
   workspaceDir?: string;
   onApprovalNeeded?: ApprovalCallback;
   turnId?: string;
-  queuedEvents?: CtxMillAgentEvent[];
+  queuedEvents?: StablehandAgentEvent[];
 }
 
 export function convertTools(
@@ -379,7 +379,7 @@ export function _piUpdateUsage(
 export function _piMapAgentEvent(
   piEvent: Record<string, unknown>,
   usage: TokenUsage | undefined,
-): CtxMillAgentEvent | null {
+): StablehandAgentEvent | null {
   switch (piEvent.type) {
     case 'message_update': {
       const streamEvent = piEvent.assistantMessageEvent as { type?: string; delta?: string } | undefined;
@@ -751,7 +751,7 @@ class PiAgentSession implements HarnessSession {
     return base + index;
   }
 
-  async *deliverTurn(input: HarnessTurnInput, context: HarnessTurnContext): AsyncGenerator<CtxMillAgentEvent> {
+  async *deliverTurn(input: HarnessTurnInput, context: HarnessTurnContext): AsyncGenerator<StablehandAgentEvent> {
     this.transcript = [...input.messages];
     this.turnRef.onApprovalNeeded = context.onApprovalNeeded ?? this.config.onApprovalNeeded;
     this.turnRef.turnId = input.turnId;
@@ -762,7 +762,7 @@ class PiAgentSession implements HarnessSession {
       ? input.messages.slice(0, -1)
       : input.messages;
 
-    const eventQueue: CtxMillAgentEvent[] = [];
+    const eventQueue: StablehandAgentEvent[] = [];
     let done = false;
     let totalUsage: TokenUsage | undefined;
     let unsubscribe: (() => void) | undefined;

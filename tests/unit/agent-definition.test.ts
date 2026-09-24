@@ -1,14 +1,14 @@
 import { describe, expect, test } from 'vitest';
 
-import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
+import type { DatabaseRepository } from '../../packages/stablehand/src/database/repository.js';
 import {
   buildAgentDefinition,
   extractManifestRuntimeFields,
   parseStoredHarnessConfig,
   resolveAgentToolNames,
   resolveResourceLimits,
-} from '../../packages/ctxmill/src/orchestrator/agent-definition.js';
-import { toAgentResponse } from '../../packages/ctxmill/src/orchestrator/routes/agents/helpers.js';
+} from '../../packages/stablehand/src/orchestrator/agent-definition.js';
+import { toAgentResponse } from '../../packages/stablehand/src/orchestrator/routes/agents/helpers.js';
 
 type StoredAgent = NonNullable<Awaited<ReturnType<DatabaseRepository['getAgent']>>>;
 

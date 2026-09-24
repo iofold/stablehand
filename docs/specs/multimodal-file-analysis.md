@@ -11,7 +11,7 @@
 
 ## Executive Summary
 
-ctxmill is **entirely text-only today**. The `Message` type, proto schema, harness message builders, and tool handler signatures all use `string` for content. Meanwhile, all three underlying SDKs (LangChain, Claude Agent SDK, PI Agent SDK) already support multimodal content, and the model providers offer increasingly powerful native file analysis — Gemini can analyze 90-minute videos and 1000-page PDFs natively.
+stablehand is **entirely text-only today**. The `Message` type, proto schema, harness message builders, and tool handler signatures all use `string` for content. Meanwhile, all three underlying SDKs (LangChain, Claude Agent SDK, PI Agent SDK) already support multimodal content, and the model providers offer increasingly powerful native file analysis — Gemini can analyze 90-minute videos and 1000-page PDFs natively.
 
 Enabling multimodal requires changes at **5 layers**: Message type → Proto schema → Harness message builders → Tool handler signature → A new "analyze file" tool or message pathway.
 
@@ -49,7 +49,7 @@ interface ApiMessage {
 
 ### Proto Schema
 ```protobuf
-// packages/proto/ctxmill/sandbox/v1/sandbox.proto:173-180
+// packages/proto/stablehand/sandbox/v1/sandbox.proto:173-180
 message Message {
   string id = 1;
   string role = 2;

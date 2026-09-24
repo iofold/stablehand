@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import type { TypedEventBus, EventMap } from '../../packages/ctxmill/src/events/bus.js';
+import type { TypedEventBus, EventMap } from '../../packages/stablehand/src/events/bus.js';
 import {
   makeTurnStartedEvent,
   makeTurnCompletedEvent,

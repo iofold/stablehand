@@ -93,15 +93,15 @@ import {
   type Webhook,
   type WebhookCreateInput,
   type WebhookPatchInput,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 import { z } from 'zod';
 
-import { CtxmillContractError } from './errors.js';
+import { StablehandContractError } from './errors.js';
 import { parseServerSentEvents } from './sse.js';
 import {
-  CtxmillTransport,
-  type CtxmillClientOptions,
-  type CtxmillRequestOptions,
+  StablehandTransport,
+  type StablehandClientOptions,
+  type StablehandRequestOptions,
 } from './transport.js';
 
 const VoidResponseSchema = z.undefined();
@@ -109,7 +109,7 @@ const VoidResponseSchema = z.undefined();
 function segment(value: string, name: string): string {
   const parsed = z.string().trim().min(1).safeParse(value);
   if (!parsed.success) {
-    throw new CtxmillContractError({
+    throw new StablehandContractError({
       direction: 'request',
       method: 'PARAM',
       path: name,
@@ -135,7 +135,7 @@ function streamCursor(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const parsed = EventCursorSchema.safeParse(value);
   if (!parsed.success) {
-    throw new CtxmillContractError({
+    throw new StablehandContractError({
       direction: 'request',
       method: 'GET',
       path: 'cursor',
@@ -145,7 +145,7 @@ function streamCursor(value: string | undefined): string | undefined {
   return parsed.data;
 }
 
-export interface AgentEventStreamInput extends CtxmillRequestOptions {
+export interface AgentEventStreamInput extends StablehandRequestOptions {
   agentId: string;
   /** Initial replay boundary obtained from conversations.snapshot(). */
   cursor?: string;
@@ -157,8 +157,8 @@ export type AgentEventStreamItem =
   | { id: string | null; event: AgentStreamEvent }
   | { id: string | null; event: null; heartbeat: string };
 
-export class CtxmillControlClient {
-  private readonly transport: CtxmillTransport;
+export class StablehandControlClient {
+  private readonly transport: StablehandTransport;
 
   readonly health;
   readonly config;
@@ -178,11 +178,11 @@ export class CtxmillControlClient {
   readonly modelGateway;
   readonly agentEvents;
 
-  constructor(options: CtxmillClientOptions = {}) {
-    this.transport = new CtxmillTransport(options);
+  constructor(options: StablehandClientOptions = {}) {
+    this.transport = new StablehandTransport(options);
 
     this.health = {
-      get: (requestOptions: CtxmillRequestOptions = {}) =>
+      get: (requestOptions: StablehandRequestOptions = {}) =>
         this.transport.request({
           method: 'GET',
           path: '/health',
@@ -192,7 +192,7 @@ export class CtxmillControlClient {
     };
 
     this.config = {
-      get: (requestOptions: CtxmillRequestOptions = {}) =>
+      get: (requestOptions: StablehandRequestOptions = {}) =>
         this.transport.request({
           method: 'GET',
           path: '/config',
@@ -202,21 +202,21 @@ export class CtxmillControlClient {
     };
 
     this.agents = {
-      list: (requestOptions: CtxmillRequestOptions = {}): Promise<Agent[]> =>
+      list: (requestOptions: StablehandRequestOptions = {}): Promise<Agent[]> =>
         this.transport.request({
           method: 'GET',
           path: '/agents',
           responseSchema: AgentListResponseSchema,
           ...requestOptions,
         }),
-      get: (agentId: string, requestOptions: CtxmillRequestOptions = {}): Promise<Agent> =>
+      get: (agentId: string, requestOptions: StablehandRequestOptions = {}): Promise<Agent> =>
         this.transport.request({
           method: 'GET',
           path: `/agents/${segment(agentId, 'agentId')}`,
           responseSchema: AgentSchema,
           ...requestOptions,
         }),
-      create: (input: AgentCreateInput, requestOptions: CtxmillRequestOptions = {}): Promise<Agent> =>
+      create: (input: AgentCreateInput, requestOptions: StablehandRequestOptions = {}): Promise<Agent> =>
         this.transport.request({
           method: 'POST',
           path: '/agents',
@@ -228,7 +228,7 @@ export class CtxmillControlClient {
       update: (
         agentId: string,
         input: AgentPatchInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<Agent> =>
         this.transport.request({
           method: 'PATCH',
@@ -238,7 +238,7 @@ export class CtxmillControlClient {
           json: input,
           ...requestOptions,
         }),
-      delete: (agentId: string, requestOptions: CtxmillRequestOptions = {}): Promise<void> =>
+      delete: (agentId: string, requestOptions: StablehandRequestOptions = {}): Promise<void> =>
         this.transport.request({
           method: 'DELETE',
           path: `/agents/${segment(agentId, 'agentId')}`,
@@ -246,7 +246,7 @@ export class CtxmillControlClient {
           ...requestOptions,
         }),
       secrets: {
-        listKeys: (agentId: string, requestOptions: CtxmillRequestOptions = {}) =>
+        listKeys: (agentId: string, requestOptions: StablehandRequestOptions = {}) =>
           this.transport.request({
             method: 'GET',
             path: `/agents/${segment(agentId, 'agentId')}/secrets`,
@@ -256,7 +256,7 @@ export class CtxmillControlClient {
         put: (
           agentId: string,
           input: { key: string; value: string },
-          requestOptions: CtxmillRequestOptions = {},
+          requestOptions: StablehandRequestOptions = {},
         ) =>
           this.transport.request({
             method: 'POST',
@@ -269,7 +269,7 @@ export class CtxmillControlClient {
         delete: (
           agentId: string,
           key: string,
-          requestOptions: CtxmillRequestOptions = {},
+          requestOptions: StablehandRequestOptions = {},
         ): Promise<void> =>
           this.transport.request({
             method: 'DELETE',
@@ -284,7 +284,7 @@ export class CtxmillControlClient {
       startBackground: (
         agentId: string,
         input: BackgroundTurnStartInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) =>
         this.transport.request({
           method: 'POST',
@@ -297,7 +297,7 @@ export class CtxmillControlClient {
       startConversationTurn: (
         agentId: string,
         input: ConversationTurnStartInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) =>
         this.transport.request({
           method: 'POST',
@@ -309,7 +309,7 @@ export class CtxmillControlClient {
         }),
       list: (
         agentId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<{ turns: Turn[] }> =>
         this.transport.request({
           method: 'GET',
@@ -320,7 +320,7 @@ export class CtxmillControlClient {
       get: (
         agentId: string,
         turnId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<{ turn: Turn; messages: Message[] }> =>
         this.transport.request({
           method: 'GET',
@@ -331,7 +331,7 @@ export class CtxmillControlClient {
       cancel: (
         agentId: string,
         turnId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) =>
         this.transport.request({
           method: 'POST',
@@ -344,7 +344,7 @@ export class CtxmillControlClient {
     this.conversations = {
       list: (
         agentId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<Conversation[]> =>
         this.transport.request({
           method: 'GET',
@@ -354,7 +354,7 @@ export class CtxmillControlClient {
         }),
       summaries: (
         agentId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<{ conversations: ConversationSummary[] }> =>
         this.transport.request({
           method: 'GET',
@@ -365,7 +365,7 @@ export class CtxmillControlClient {
       snapshot: (
         agentId: string,
         conversationId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<ConversationSnapshot> =>
         this.transport.request({
           method: 'GET',
@@ -378,7 +378,7 @@ export class CtxmillControlClient {
     this.sandboxSessions = {
       list: (
         input: { status?: 'active' } = {},
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<SandboxSession[]> =>
         this.transport.request({
           method: 'GET',
@@ -389,7 +389,7 @@ export class CtxmillControlClient {
       suspend: (
         agentId: string,
         sandboxSessionId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) =>
         this.transport.request({
           method: 'POST',
@@ -400,7 +400,7 @@ export class CtxmillControlClient {
       restore: (
         agentId: string,
         sandboxSessionId: string,
-        requestOptions: CtxmillRequestOptions & { background?: boolean } = {},
+        requestOptions: StablehandRequestOptions & { background?: boolean } = {},
       ) => {
         const { background, ...rest } = requestOptions;
         return this.transport.request({
@@ -416,7 +416,7 @@ export class CtxmillControlClient {
       kill: (
         agentId: string,
         sandboxSessionId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<void> =>
         this.transport.request({
           method: 'POST',
@@ -427,7 +427,7 @@ export class CtxmillControlClient {
     };
 
     this.schedules = {
-      list: (requestOptions: CtxmillRequestOptions = {}): Promise<{ schedules: Schedule[] }> =>
+      list: (requestOptions: StablehandRequestOptions = {}): Promise<{ schedules: Schedule[] }> =>
         this.transport.request({
           method: 'GET',
           path: '/schedules',
@@ -436,7 +436,7 @@ export class CtxmillControlClient {
         }),
       get: (
         scheduleId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<Schedule> =>
         this.transport.request({
           method: 'GET',
@@ -446,7 +446,7 @@ export class CtxmillControlClient {
         }),
       create: (
         input: ScheduleCreateInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<Schedule> =>
         this.transport.request({
           method: 'POST',
@@ -459,7 +459,7 @@ export class CtxmillControlClient {
       update: (
         scheduleId: string,
         input: SchedulePatchInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<Schedule> =>
         this.transport.request({
           method: 'PATCH',
@@ -471,7 +471,7 @@ export class CtxmillControlClient {
         }),
       delete: (
         scheduleId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<void> =>
         this.transport.request({
           method: 'DELETE',
@@ -484,11 +484,11 @@ export class CtxmillControlClient {
     this.interrupts = {
       listAll: (
         input: InterruptRecordListInput = {},
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<{ interrupts: InterruptRecord[]; nextBefore?: number }> => {
         const parsed = InterruptRecordListInputSchema.safeParse(input);
         if (!parsed.success) {
-          throw new CtxmillContractError({
+          throw new StablehandContractError({
             direction: 'request',
             method: 'GET',
             path: '/interrupts',
@@ -510,7 +510,7 @@ export class CtxmillControlClient {
       list: (
         agentId: string,
         input: { includeResolved?: boolean } = {},
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<{ interrupts: Interrupt[] }> =>
         this.transport.request({
           method: 'GET',
@@ -524,7 +524,7 @@ export class CtxmillControlClient {
       resolve: (
         agentId: string,
         input: InterruptResolveInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) =>
         this.transport.request({
           method: 'POST',
@@ -539,11 +539,11 @@ export class CtxmillControlClient {
     this.events = {
       list: (
         input: EventListInput = {},
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<EventListResponse> => {
         const parsed = EventListInputSchema.safeParse(input);
         if (!parsed.success) {
-          throw new CtxmillContractError({
+          throw new StablehandContractError({
             direction: 'request',
             method: 'GET',
             path: '/events',
@@ -567,7 +567,7 @@ export class CtxmillControlClient {
       },
       emitCustom: (
         input: CustomEventEmitInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) => this.transport.request({
         method: 'POST',
         path: '/triggers/emit',
@@ -587,7 +587,7 @@ export class CtxmillControlClient {
           offset?: number;
           search?: string;
         } = {},
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<{ artifacts: Artifact[]; total?: number }> =>
         this.transport.request({
           method: 'GET',
@@ -603,7 +603,7 @@ export class CtxmillControlClient {
         }),
       get: (
         artifactId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<Artifact> =>
         this.transport.request({
           method: 'GET',
@@ -613,7 +613,7 @@ export class CtxmillControlClient {
         }),
       requestUploadUrl: (
         input: ArtifactUploadUrlInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) =>
         this.transport.request({
           method: 'POST',
@@ -626,7 +626,7 @@ export class CtxmillControlClient {
       downloadUrl: (
         artifactId: string,
         expiresInSec?: number,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) =>
         this.transport.request({
           method: 'GET',
@@ -639,7 +639,7 @@ export class CtxmillControlClient {
         }),
       delete: (
         artifactId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) =>
         this.transport.request({
           method: 'DELETE',
@@ -654,7 +654,7 @@ export class CtxmillControlClient {
       list: (
         agentId: string,
         input: { path?: string; conversationId?: string } = {},
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) =>
         this.transport.request({
           method: 'GET',
@@ -665,7 +665,7 @@ export class CtxmillControlClient {
       read: (
         agentId: string,
         input: { path: string; conversationId?: string },
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) =>
         this.transport.request({
           method: 'GET',
@@ -676,7 +676,7 @@ export class CtxmillControlClient {
       create: (
         agentId: string,
         input: FileWriteInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) => {
         const { conversationId, ...body } = input;
         return this.transport.request({
@@ -691,7 +691,7 @@ export class CtxmillControlClient {
       update: (
         agentId: string,
         input: FileWriteInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) => {
         const { conversationId, ...body } = input;
         return this.transport.request({
@@ -706,7 +706,7 @@ export class CtxmillControlClient {
       delete: (
         agentId: string,
         input: { path: string; conversationId?: string },
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<void> =>
         this.transport.request({
           method: 'DELETE',
@@ -720,7 +720,7 @@ export class CtxmillControlClient {
       replace: (
         agentId: string,
         tarGzip: BodyInit,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) =>
         this.transport.request({
           method: 'POST',
@@ -732,7 +732,7 @@ export class CtxmillControlClient {
         }),
       getRevision: (
         agentId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ) =>
         this.transport.request({
           method: 'GET',
@@ -745,7 +745,7 @@ export class CtxmillControlClient {
     this.webhooks = {
       list: (
         agentId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<Webhook[]> =>
         this.transport.request({
           method: 'GET',
@@ -756,7 +756,7 @@ export class CtxmillControlClient {
       create: (
         agentId: string,
         input: WebhookCreateInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<Webhook> =>
         this.transport.request({
           method: 'POST',
@@ -770,7 +770,7 @@ export class CtxmillControlClient {
         agentId: string,
         webhookId: string,
         input: WebhookPatchInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<Webhook> =>
         this.transport.request({
           method: 'PATCH',
@@ -783,7 +783,7 @@ export class CtxmillControlClient {
       delete: (
         agentId: string,
         webhookId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<void> =>
         this.transport.request({
           method: 'DELETE',
@@ -794,7 +794,7 @@ export class CtxmillControlClient {
     };
 
     this.budgets = {
-      list: (requestOptions: CtxmillRequestOptions = {}): Promise<{
+      list: (requestOptions: StablehandRequestOptions = {}): Promise<{
         policies: BudgetPolicy[];
       }> =>
         this.transport.request({
@@ -805,7 +805,7 @@ export class CtxmillControlClient {
         }),
       get: (
         policyId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<BudgetPolicy> =>
         this.transport.request({
           method: 'GET',
@@ -815,7 +815,7 @@ export class CtxmillControlClient {
         }),
       create: (
         input: BudgetPolicyCreateInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<BudgetPolicy> =>
         this.transport.request({
           method: 'POST',
@@ -828,7 +828,7 @@ export class CtxmillControlClient {
       update: (
         policyId: string,
         input: BudgetPolicyPatchInput,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<BudgetPolicy> =>
         this.transport.request({
           method: 'PATCH',
@@ -840,7 +840,7 @@ export class CtxmillControlClient {
         }),
       delete: (
         policyId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<void> =>
         this.transport.request({
           method: 'DELETE',
@@ -850,7 +850,7 @@ export class CtxmillControlClient {
         }),
       spend: (
         policyId: string,
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<BudgetSpendResponse> =>
         this.transport.request({
           method: 'GET',
@@ -858,7 +858,7 @@ export class CtxmillControlClient {
           responseSchema: BudgetSpendResponseSchema,
           ...requestOptions,
         }),
-      agentStatuses: (requestOptions: CtxmillRequestOptions = {}) =>
+      agentStatuses: (requestOptions: StablehandRequestOptions = {}) =>
         this.transport.request({
           method: 'GET',
           path: '/budgets/agents/status',
@@ -870,11 +870,11 @@ export class CtxmillControlClient {
     this.analytics = {
       overview: (
         input: { window?: AnalyticsWindow } = {},
-        requestOptions: CtxmillRequestOptions = {},
+        requestOptions: StablehandRequestOptions = {},
       ): Promise<AnalyticsOverview> => {
         const window = AnalyticsWindowSchema.safeParse(input.window);
         if (input.window !== undefined && !window.success) {
-          throw new CtxmillContractError({
+          throw new StablehandContractError({
             direction: 'request',
             method: 'GET',
             path: '/analytics/overview',
@@ -893,7 +893,7 @@ export class CtxmillControlClient {
     };
 
     this.modelGateway = {
-      status: (requestOptions: CtxmillRequestOptions = {}) =>
+      status: (requestOptions: StablehandRequestOptions = {}) =>
         this.transport.request({
           method: 'GET',
           path: '/model-gateway/status',
@@ -935,7 +935,7 @@ export class CtxmillControlClient {
         try {
           raw = JSON.parse(frame.data) as unknown;
         } catch {
-          throw new CtxmillContractError({
+          throw new StablehandContractError({
             direction: 'stream',
             method: 'GET',
             path: `/agents/${segment(input.agentId, 'agentId')}/stream`,
@@ -949,7 +949,7 @@ export class CtxmillControlClient {
         }
         const parsed = AgentStreamEventSchema.safeParse(raw);
         if (!parsed.success) {
-          throw new CtxmillContractError({
+          throw new StablehandContractError({
             direction: 'stream',
             method: 'GET',
             path: `/agents/${segment(input.agentId, 'agentId')}/stream`,
@@ -964,8 +964,8 @@ export class CtxmillControlClient {
   }
 }
 
-export function createCtxmillControlClient(
-  options?: CtxmillClientOptions,
-): CtxmillControlClient {
-  return new CtxmillControlClient(options);
+export function createStablehandControlClient(
+  options?: StablehandClientOptions,
+): StablehandControlClient {
+  return new StablehandControlClient(options);
 }

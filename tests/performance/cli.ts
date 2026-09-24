@@ -15,7 +15,7 @@ import {
 import { parseArgs } from 'node:util';
 
 import {
-  createCtxmillControlClient,
+  createStablehandControlClient,
 } from '../../packages/client/src/index.js';
 import {
   buildCapacityWaveProfile,
@@ -81,7 +81,7 @@ async function readText(path: string): Promise<string> {
 function installAbortFileMonitor(
   controller: AbortController,
 ): ReturnType<typeof setInterval> | undefined {
-  const abortFile = process.env.CTXMILL_PERF_ABORT_FILE;
+  const abortFile = process.env.STABLEHAND_PERF_ABORT_FILE;
   if (!abortFile) return undefined;
   const check = () => {
     if (!existsSync(abortFile) || controller.signal.aborted) return;
@@ -112,11 +112,11 @@ async function runCommand(values: Record<string, string | boolean | undefined>):
     }, null, 2)}\n`,
     { mode: 0o600 },
   );
-  const token = process.env.CTXMILL_API_TOKEN;
+  const token = process.env.STABLEHAND_API_TOKEN;
   if (!token) {
-    throw new Error('CTXMILL_API_TOKEN is required');
+    throw new Error('STABLEHAND_API_TOKEN is required');
   }
-  const runId = process.env.CTXMILL_PERF_RUN_ID ?? randomUUID();
+  const runId = process.env.STABLEHAND_PERF_RUN_ID ?? randomUUID();
   const controller = new AbortController();
   const onSignal = () => controller.abort(new Error('Load runner interrupted'));
   process.once('SIGINT', onSignal);
@@ -127,7 +127,7 @@ async function runCommand(values: Record<string, string | boolean | undefined>):
   await writeFile(turnsPath, '', { mode: 0o600 });
 
   try {
-    const client = createCtxmillControlClient({
+    const client = createStablehandControlClient({
       apiBase: profile.target.apiBase,
       token,
       timeoutMs: Math.max(...profile.stages.map((stage) => stage.timeoutMs)),
@@ -245,11 +245,11 @@ async function refreshCommand(
   const resultPath = typeof values.result === 'string' ? values.result : undefined;
   const output = typeof values.output === 'string' ? values.output : undefined;
   if (!resultPath || !output) usage();
-  const token = process.env.CTXMILL_API_TOKEN;
-  if (!token) throw new Error('CTXMILL_API_TOKEN is required');
+  const token = process.env.STABLEHAND_API_TOKEN;
+  if (!token) throw new Error('STABLEHAND_API_TOKEN is required');
 
   const result = await readJson(resultPath) as PerformanceRunResult;
-  const client = createCtxmillControlClient({
+  const client = createStablehandControlClient({
     apiBase: result.target.apiBase,
     token,
     timeoutMs: 60_000,
@@ -303,10 +303,10 @@ async function cleanupCommand(
     ? Number(values['timeout-ms'])
     : 60_000;
   if (!apiBase || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) usage();
-  const token = process.env.CTXMILL_API_TOKEN;
-  if (!token) throw new Error('CTXMILL_API_TOKEN is required');
+  const token = process.env.STABLEHAND_API_TOKEN;
+  if (!token) throw new Error('STABLEHAND_API_TOKEN is required');
 
-  const client = createCtxmillControlClient({
+  const client = createStablehandControlClient({
     apiBase,
     token,
     timeoutMs,

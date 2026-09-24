@@ -1,6 +1,6 @@
 # Overnight Analyst
 
-The flagship CTXMill example: a scheduled agent that browses your sources
+The flagship Stablehand example: a scheduled agent that browses your sources
 while you sleep, screenshots each one, and publishes a self-contained
 interactive HTML brief as an artifact — which the
 [artifact-gallery extension](../../../extensions/artifact-gallery) turns into
@@ -8,7 +8,7 @@ a public morning-brief page.
 
 ## What it wires up
 
-One agent, one schedule, one trigger — the pair CTXMill uses for cron work:
+One agent, one schedule, one trigger — the pair Stablehand uses for cron work:
 
 - **Agent** `overnight-analyst` (from `agents/overnight-analyst/agent.yaml`):
   langgraph + the built-in `browse`, `screenshot`, and `artifact_upload`
@@ -20,10 +20,10 @@ One agent, one schedule, one trigger — the pair CTXMill uses for cron work:
 
 ## Run
 
-Against a running CTXMill stack (the main repo `docker compose up`):
+Against a running Stablehand stack (the main repo `docker compose up`):
 
 ```bash
-export CTXMILL_API_TOKEN=...            # or leave unset if auth is disabled
+export STABLEHAND_API_TOKEN=...            # or leave unset if auth is disabled
 export ANALYST_SOURCES="https://news.ycombinator.com and https://www.theverge.com"
 export ANALYST_CRON="0 7 * * *"         # optional
 export ANALYST_TZ="Asia/Kolkata"        # optional, any IANA zone
@@ -35,7 +35,7 @@ Re-running is safe: anything that already exists by name is left alone.
 To watch a run without waiting for 07:00, temporarily switch the cadence:
 
 ```bash
-curl -X PATCH -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+curl -X PATCH -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
   -H 'Content-Type: application/json' \
   "$API_URL/api/schedules/<schedule-id>" -d '{"cronExpression": "*/4 * * * *", "timezone": "UTC"}'
 ```

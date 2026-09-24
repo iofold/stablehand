@@ -28,7 +28,7 @@ frames, the first frame carries the provenance. System/custom verbatim events
 also carry the fields on their single row.
 
 If a future known run-channel event has no projector mapping, the projector emits
-a provenance-only system frame with type `ctxmill.raw_event`, so the raw event is
+a provenance-only system frame with type `stablehand.raw_event`, so the raw event is
 still durable.
 
 The raw stream is reconstructable with:

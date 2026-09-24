@@ -7,15 +7,15 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
-      '@ctxmill/shared': resolve(__dirname, '../shared/src/index.ts'),
+      '@stablehand/shared': resolve(__dirname, '../shared/src/index.ts'),
     },
   },
   server: {
-    port: parseInt(process.env.CTXMILL_UI_PORT || '3200', 10),
+    port: parseInt(process.env.STABLEHAND_UI_PORT || '3200', 10),
     host: '0.0.0.0',
     proxy: {
       '/api': {
-        target: process.env.CTXMILL_API_ORIGIN || 'http://orchestrator:3001',
+        target: process.env.STABLEHAND_API_ORIGIN || 'http://orchestrator:3001',
         changeOrigin: true,
       },
     },

@@ -20,7 +20,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-describe('CtxmillControlClient', () => {
+describe('StablehandControlClient', () => {
   it('exposes canonical schedule CRUD without embedding scheduler logic', async () => {
     const schedule = {
       id: 'schedule-1',
@@ -42,8 +42,8 @@ describe('CtxmillControlClient', () => {
       .mockResolvedValueOnce(jsonResponse(schedule))
       .mockResolvedValueOnce(jsonResponse(schedule))
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -60,10 +60,10 @@ describe('CtxmillControlClient', () => {
     await expect(client.schedules.delete('schedule-1')).resolves.toBeUndefined();
 
     expect(fetchImpl.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
-      ['https://ctxmill.test/api/schedules', 'GET'],
-      ['https://ctxmill.test/api/schedules', 'POST'],
-      ['https://ctxmill.test/api/schedules/schedule-1', 'PATCH'],
-      ['https://ctxmill.test/api/schedules/schedule-1', 'DELETE'],
+      ['https://stablehand.test/api/schedules', 'GET'],
+      ['https://stablehand.test/api/schedules', 'POST'],
+      ['https://stablehand.test/api/schedules/schedule-1', 'PATCH'],
+      ['https://stablehand.test/api/schedules/schedule-1', 'DELETE'],
     ]);
   });
 
@@ -90,8 +90,8 @@ describe('CtxmillControlClient', () => {
       resourceLimits: null,
     };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(updatedAgent));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -100,7 +100,7 @@ describe('CtxmillControlClient', () => {
       description: 'Updated description',
     })).resolves.toMatchObject({ description: 'Updated description' });
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://ctxmill.test/api/agents/agent-1',
+      'https://stablehand.test/api/agents/agent-1',
       expect.objectContaining({
         method: 'PATCH',
         body: JSON.stringify({ description: 'Updated description' }),
@@ -110,14 +110,14 @@ describe('CtxmillControlClient', () => {
 
   it('rejects an empty agent patch before transport', async () => {
     const fetchImpl = vi.fn();
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
 
     await expect(client.agents.update('agent-1', {})).rejects.toMatchObject({
-      name: 'CtxmillContractError',
+      name: 'StablehandContractError',
       direction: 'request',
       method: 'PATCH',
       path: '/agents/agent-1',
@@ -142,8 +142,8 @@ describe('CtxmillControlClient', () => {
       }],
     };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(snapshot));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -153,7 +153,7 @@ describe('CtxmillControlClient', () => {
       'conversation-1',
     )).resolves.toEqual(snapshot);
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://ctxmill.test/api/agents/agent-1/conversations/conversation-1/snapshot',
+      'https://stablehand.test/api/agents/agent-1/conversations/conversation-1/snapshot',
       expect.objectContaining({ method: 'GET' }),
     );
     expect(Reflect.has(client.conversations, 'messages')).toBe(false);
@@ -163,8 +163,8 @@ describe('CtxmillControlClient', () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ error: 'temporarily unavailable' }, 503))
       .mockResolvedValueOnce(jsonResponse([]));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api/',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api/',
       token: async () => 'trusted-token',
       fetch: fetchImpl,
       retry: { maxAttempts: 2, baseDelayMs: 0 },
@@ -173,7 +173,7 @@ describe('CtxmillControlClient', () => {
     await expect(client.agents.list()).resolves.toEqual([]);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(fetchImpl).toHaveBeenLastCalledWith(
-      'https://ctxmill.test/api/agents',
+      'https://stablehand.test/api/agents',
       expect.objectContaining({
         method: 'GET',
         headers: expect.any(Headers),
@@ -187,8 +187,8 @@ describe('CtxmillControlClient', () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       jsonResponse({ code: 'unavailable', detail: 'try later' }, 503),
     );
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 3, baseDelayMs: 0 },
     });
@@ -197,7 +197,7 @@ describe('CtxmillControlClient', () => {
       task: 'close April',
       requestedTurnId: 'turn-request-1',
     }, { idempotencyKey: 'dispatch-attempt-1' })).rejects.toMatchObject({
-      name: 'CtxmillApiError',
+      name: 'StablehandApiError',
       status: 503,
       code: 'unavailable',
     });
@@ -209,8 +209,8 @@ describe('CtxmillControlClient', () => {
       turnId: 'turn-1',
       conversationId: 'conversation-1',
     }));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -223,7 +223,7 @@ describe('CtxmillControlClient', () => {
       conversationId: 'conversation-1',
     });
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://ctxmill.test/api/agents/agent-1/turns',
+      'https://stablehand.test/api/agents/agent-1/turns',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -248,8 +248,8 @@ describe('CtxmillControlClient', () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(jsonResponse(webhook))
       .mockResolvedValueOnce(jsonResponse(webhook));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -300,8 +300,8 @@ describe('CtxmillControlClient', () => {
         buckets: [],
       }))
       .mockResolvedValueOnce(jsonResponse({ statuses: [] }));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -313,9 +313,9 @@ describe('CtxmillControlClient', () => {
     await expect(client.budgets.agentStatuses()).resolves.toEqual({ statuses: [] });
 
     expect(fetchImpl.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
-      ['https://ctxmill.test/api/budgets', 'GET'],
-      ['https://ctxmill.test/api/budgets/policy-1/spend', 'GET'],
-      ['https://ctxmill.test/api/budgets/agents/status', 'GET'],
+      ['https://stablehand.test/api/budgets', 'GET'],
+      ['https://stablehand.test/api/budgets/policy-1/spend', 'GET'],
+      ['https://stablehand.test/api/budgets/agents/status', 'GET'],
     ]);
   });
 
@@ -338,15 +338,15 @@ describe('CtxmillControlClient', () => {
       oldestAwaitingAt: null,
     };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(status));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
 
     await expect(client.modelGateway.status()).resolves.toEqual(status);
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://ctxmill.test/api/model-gateway/status',
+      'https://stablehand.test/api/model-gateway/status',
       expect.objectContaining({ method: 'GET' }),
     );
   });
@@ -422,29 +422,29 @@ describe('CtxmillControlClient', () => {
       }],
     };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(overview));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
 
     await expect(client.analytics.overview({ window: '7d' })).resolves.toEqual(overview);
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://ctxmill.test/api/analytics/overview?window=7d',
+      'https://stablehand.test/api/analytics/overview?window=7d',
       expect.objectContaining({ method: 'GET' }),
     );
   });
 
   it('rejects an empty webhook patch before transport', async () => {
     const fetchImpl = vi.fn();
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
 
     await expect(client.webhooks.update('agent-1', 'webhook-1', {})).rejects.toMatchObject({
-      name: 'CtxmillContractError',
+      name: 'StablehandContractError',
       direction: 'request',
       method: 'PATCH',
       path: '/agents/agent-1/webhooks/webhook-1',
@@ -454,14 +454,14 @@ describe('CtxmillControlClient', () => {
 
   it('fails closed when a successful response violates its contract', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ agents: [] }));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
 
     await expect(client.agents.list()).rejects.toMatchObject({
-      name: 'CtxmillContractError',
+      name: 'StablehandContractError',
       direction: 'response',
       method: 'GET',
       path: '/agents',
@@ -475,14 +475,14 @@ describe('CtxmillControlClient', () => {
       token: 'never-print-this',
       nested: { apiKey: 'also-secret' },
     }, 400));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
 
     const error = await client.agents.list().catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(clientModule.CtxmillApiError);
+    expect(error).toBeInstanceOf(clientModule.StablehandApiError);
     expect(error).toMatchObject({
       status: 400,
       code: 'invalid_secret',
@@ -509,8 +509,8 @@ describe('CtxmillControlClient', () => {
       error: 'Forbidden',
       requiredCapability,
     }, 403));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -529,14 +529,14 @@ describe('CtxmillControlClient', () => {
       'data: {"type":"CONNECTED","agentId":"agent-1","latestSeq":41,"timestamp":1}',
       '',
       'id: 000000000042',
-      'data: {"type":"CUSTOM","name":"ctxmill.sandbox_session.snapshot","agentId":"agent-1","conversationId":"conversation-1","sandboxSessionId":"sandbox-1","activeTurnId":null,"status":"ACTIVE","harnessName":"claude-agents","containerName":"sandbox-1","timestamp":2}',
+      'data: {"type":"CUSTOM","name":"stablehand.sandbox_session.snapshot","agentId":"agent-1","conversationId":"conversation-1","sandboxSessionId":"sandbox-1","activeTurnId":null,"status":"ACTIVE","harnessName":"claude-agents","containerName":"sandbox-1","timestamp":2}',
       '',
     ].join('\n')), {
       status: 200,
       headers: { 'Content-Type': 'text/event-stream' },
     }));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -565,13 +565,13 @@ describe('CtxmillControlClient', () => {
         id: '000000000042',
         event: expect.objectContaining({
           type: 'CUSTOM',
-          name: 'ctxmill.sandbox_session.snapshot',
+          name: 'stablehand.sandbox_session.snapshot',
           sandboxSessionId: 'sandbox-1',
         }),
       },
     ]);
     expect(fetchImpl.mock.calls[0]?.[0]).toBe(
-      'https://ctxmill.test/api/agents/agent-1/stream?cursor=000000000039',
+      'https://stablehand.test/api/agents/agent-1/stream?cursor=000000000039',
     );
     const headers = fetchImpl.mock.calls[0]?.[1]?.headers as Headers;
     expect(headers.get('Last-Event-ID')).toBe('000000000040');
@@ -587,8 +587,8 @@ describe('CtxmillControlClient', () => {
         status: 200,
         headers: { 'Content-Type': 'text/event-stream' },
       }));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 2, baseDelayMs: 0 },
     });
@@ -615,8 +615,8 @@ describe('CtxmillControlClient', () => {
         headers: { 'Content-Type': 'text/event-stream' },
       }));
     });
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl as typeof fetch,
       retry: { maxAttempts: 1 },
     });
@@ -651,8 +651,8 @@ describe('CtxmillControlClient', () => {
       status: 200,
       headers: { 'Content-Type': 'text/event-stream' },
     }));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -660,7 +660,7 @@ describe('CtxmillControlClient', () => {
     try {
       const stream = client.agentEvents.stream({ agentId: 'agent-1' });
       await expect(stream.next()).rejects.toMatchObject({
-        name: 'CtxmillContractError',
+        name: 'StablehandContractError',
         direction: 'stream',
       });
       expect(cancel).toHaveBeenCalledTimes(1);
@@ -683,8 +683,8 @@ describe('CtxmillControlClient', () => {
           reject(init.signal?.reason);
         }, { once: true });
       }));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl as typeof fetch,
       timeoutMs: 60_000,
       retry: { maxAttempts: 1 },
@@ -706,8 +706,8 @@ describe('CtxmillControlClient', () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(jsonResponse(revision))
       .mockResolvedValueOnce(jsonResponse({ ...revision, revision: 4 }, 201));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -719,13 +719,13 @@ describe('CtxmillControlClient', () => {
     )).resolves.toMatchObject({ revision: 4 });
 
     expect(fetchImpl.mock.calls[0]?.[0])
-      .toBe('https://ctxmill.test/api/agents/agent-1/workspace');
+      .toBe('https://stablehand.test/api/agents/agent-1/workspace');
     expect(fetchImpl.mock.calls[1]?.[0])
-      .toBe('https://ctxmill.test/api/agents/agent-1/workspace');
+      .toBe('https://stablehand.test/api/agents/agent-1/workspace');
   });
 });
 
-describe('CtxmillAgUiClient', () => {
+describe('StablehandAgUiClient', () => {
   it('parses every server-emitted canonical fixture frame', () => {
     const fixture = JSON.parse(readFileSync(
       new URL('../../contracts/test-fixtures/canonical-stream-events.json', import.meta.url),
@@ -739,14 +739,14 @@ describe('CtxmillAgUiClient', () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response(streamFromText([
       'data: {"type":"RUN_STARTED","runId":"turn-1","threadId":"conversation-1","timestamp":1}',
       '',
-      'data: {"type":"CUSTOM","name":"ctxmill.interrupt.requested","agentId":"agent-1","turnId":"turn-1","conversationId":"conversation-1","interruptId":"interrupt-1","toolCallId":"tool-call-1","toolName":"request-approval","args":{"reason":"publish"},"timestamp":2}',
+      'data: {"type":"CUSTOM","name":"stablehand.interrupt.requested","agentId":"agent-1","turnId":"turn-1","conversationId":"conversation-1","interruptId":"interrupt-1","toolCallId":"tool-call-1","toolName":"request-approval","args":{"reason":"publish"},"timestamp":2}',
       '',
     ].join('\n')), {
       status: 200,
       headers: { 'Content-Type': 'text/event-stream' },
     }));
-    const client = new clientModule.CtxmillAgUiClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandAgUiClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
     });
 
@@ -775,8 +775,8 @@ describe('CtxmillAgUiClient', () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ resolved: true, action: 'approve' }))
       .mockResolvedValueOnce(jsonResponse({ cancelled: true, turnId: 'turn-1' }));
-    const client = new clientModule.CtxmillAgUiClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandAgUiClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
     });
 
@@ -787,8 +787,8 @@ describe('CtxmillAgUiClient', () => {
     });
     await client.cancelTurn({ agentId: 'agent-1', turnId: 'turn-1' });
 
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://ctxmill.test/api/agents/agent-1/interrupt');
-    expect(fetchImpl.mock.calls[1]?.[0]).toBe('https://ctxmill.test/api/agents/agent-1/turns/turn-1/cancel');
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://stablehand.test/api/agents/agent-1/interrupt');
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe('https://stablehand.test/api/agents/agent-1/turns/turn-1/cancel');
   });
 
   it('lists durable interrupts across agents through the control client', async () => {
@@ -810,8 +810,8 @@ describe('CtxmillAgUiClient', () => {
       nextBefore: 100,
     };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(response));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -823,7 +823,7 @@ describe('CtxmillAgUiClient', () => {
       before: 123,
     })).resolves.toEqual(response);
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://ctxmill.test/api/interrupts?status=resolved&agentId=agent-1&limit=25&before=123',
+      'https://stablehand.test/api/interrupts?status=resolved&agentId=agent-1&limit=25&before=123',
       expect.objectContaining({ method: 'GET' }),
     );
   });
@@ -856,8 +856,8 @@ describe('CtxmillAgUiClient', () => {
         expiresInSec: 3600,
       }))
       .mockResolvedValueOnce(jsonResponse(artifact));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -873,7 +873,7 @@ describe('CtxmillAgUiClient', () => {
     });
     await expect(client.artifacts.get('artifact-1')).resolves.toEqual(artifact);
 
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://ctxmill.test/api/artifacts/upload-url');
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://stablehand.test/api/artifacts/upload-url');
     expect(fetchImpl.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({
@@ -886,7 +886,7 @@ describe('CtxmillAgUiClient', () => {
         sha256,
       }),
     }));
-    expect(fetchImpl.mock.calls[1]?.[0]).toBe('https://ctxmill.test/api/artifacts/artifact-1');
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe('https://stablehand.test/api/artifacts/artifact-1');
   });
 
   it('lists persisted events through canonical correlation filters', async () => {
@@ -902,8 +902,8 @@ describe('CtxmillAgUiClient', () => {
       }],
       nextCursor: 11,
     }));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -916,7 +916,7 @@ describe('CtxmillAgUiClient', () => {
       events: [{ turnId: 'turn-1', conversationId: 'conversation-1' }],
     });
     expect(fetchImpl.mock.calls[0]?.[0]).toBe(
-      'https://ctxmill.test/api/events?limit=25&turnId=turn-1&conversationId=conversation-1',
+      'https://stablehand.test/api/events?limit=25&turnId=turn-1&conversationId=conversation-1',
     );
   });
 
@@ -925,8 +925,8 @@ describe('CtxmillAgUiClient', () => {
       ok: true,
       type: 'custom.eval.verdict',
     }));
-    const client = new clientModule.CtxmillControlClient({
-      apiBase: 'https://ctxmill.test/api',
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
       retry: { maxAttempts: 1 },
     });
@@ -936,7 +936,7 @@ describe('CtxmillAgUiClient', () => {
       agentId: 'agent-1',
       payload: { verdict: 'pass' },
     })).resolves.toEqual({ ok: true, type: 'custom.eval.verdict' });
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://ctxmill.test/api/triggers/emit');
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://stablehand.test/api/triggers/emit');
     expect(fetchImpl.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({
@@ -956,7 +956,7 @@ describe('CtxmillAgUiClient', () => {
   it('rejects legacy custom-event aliases instead of normalizing them', () => {
     expect(() => clientModule.parseCanonicalStreamEvent({
       type: 'CUSTOM',
-      name: 'ctxmill.hitl.requested',
+      name: 'stablehand.hitl.requested',
       subtype: 'hitl_pause',
       runId: 'turn-1',
       interruptId: 'interrupt-1',

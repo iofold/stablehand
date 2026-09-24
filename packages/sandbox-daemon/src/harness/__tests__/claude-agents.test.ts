@@ -465,9 +465,9 @@ describe('ClaudeAgentsHarness stream mapping fallbacks', () => {
         id: 'tool-call-1',
         name: 'search',
         args: expect.objectContaining({
-          __ctxmillDegraded: true,
-          __ctxmillError: expect.stringContaining('Failed to parse streamed Claude tool arguments'),
-          __ctxmillRawArgsPreview: '{"query":',
+          __stablehandDegraded: true,
+          __stablehandError: expect.stringContaining('Failed to parse streamed Claude tool arguments'),
+          __stablehandRawArgsPreview: '{"query":',
         }),
       }),
     ]);
@@ -548,7 +548,7 @@ describe('ClaudeAgentsHarness AgentEvent contract baseline', () => {
               type: 'tool_use',
               id: 'tool-claude-search',
               name: 'search',
-              input: { query: 'ctxmill' },
+              input: { query: 'stablehand' },
             },
           ],
         },
@@ -587,7 +587,7 @@ describe('ClaudeAgentsHarness AgentEvent contract baseline', () => {
         expectedTool: {
           id: 'tool-claude-search',
           name: 'search',
-          args: { query: 'ctxmill' },
+          args: { query: 'stablehand' },
           result: 'search result',
         },
       });
@@ -598,7 +598,7 @@ describe('ClaudeAgentsHarness AgentEvent contract baseline', () => {
 
   it('traces Claude normalized AgentEvents through the shared decorator without the SDK wrapper', async () => {
     process.env.LANGSMITH_TRACING = 'true';
-    process.env.LANGSMITH_PROJECT = 'ctxmill-test';
+    process.env.LANGSMITH_PROJECT = 'stablehand-test';
     mockLangSmith.FakeRunTree.runs = [];
     mockQuery.mockImplementation(() => sdkStream([
       {
@@ -610,7 +610,7 @@ describe('ClaudeAgentsHarness AgentEvent contract baseline', () => {
               type: 'tool_use',
               id: 'tool-claude-search',
               name: 'search',
-              input: { query: 'ctxmill' },
+              input: { query: 'stablehand' },
             },
           ],
         },
@@ -651,7 +651,7 @@ describe('ClaudeAgentsHarness AgentEvent contract baseline', () => {
     expect(root.config).toEqual(expect.objectContaining({
       name: 'claude-agents-agent-agent-1',
       run_type: 'chain',
-      project_name: 'ctxmill-test',
+      project_name: 'stablehand-test',
     }));
     const turn = root.children[0];
     expect(turn.config).toEqual(expect.objectContaining({
@@ -666,7 +666,7 @@ describe('ClaudeAgentsHarness AgentEvent contract baseline', () => {
     const tool = turn.children.find((child) => child.config.run_type === 'tool');
     expect(tool?.config).toEqual(expect.objectContaining({
       name: 'search',
-      inputs: { args: { query: 'ctxmill' }, toolCallId: 'tool-claude-search' },
+      inputs: { args: { query: 'stablehand' }, toolCallId: 'tool-claude-search' },
     }));
     expect(tool?.end).toHaveBeenCalledWith(expect.objectContaining({
       result: 'search result',
@@ -1131,13 +1131,13 @@ describe('Claude Agents model gateway connection', () => {
     });
     const config = makeConfig({
       harnessConfigJson: JSON.stringify({
-        model: 'ctxmill-anthropic',
+        model: 'stablehand-anthropic',
       }),
       secrets: {
-        CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
-        CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
-        CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
-        CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+        STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+        STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+        STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+        STABLEHAND_MODEL_GATEWAY_REVISION: 'dev1-1',
         ANTHROPIC_API_KEY: 'upstream-key-that-must-not-win',
       },
     });
@@ -1175,7 +1175,7 @@ describe('Claude Agents model gateway connection', () => {
     expect(capturedEnv.ANTHROPIC_CUSTOM_HEADERS).not.toContain(
       'customer@example.com',
     );
-    expect(capturedEnv).not.toHaveProperty('CTXMILL_MODEL_GATEWAY_RUNTIME_KEY');
+    expect(capturedEnv).not.toHaveProperty('STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY');
   });
 
   it('preserves an explicit direct endpoint and key', async () => {
@@ -1200,10 +1200,10 @@ describe('Claude Agents model gateway connection', () => {
       }),
       secrets: {
         DIRECT_ANTHROPIC_KEY: 'direct-key',
-        CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
-        CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
-        CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
-        CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+        STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+        STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+        STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+        STABLEHAND_MODEL_GATEWAY_REVISION: 'dev1-1',
       },
     }));
 
@@ -1236,7 +1236,7 @@ describe('toSdkSessionId (ctx-0u1b: SDK requires UUID sessionId)', () => {
   });
 
   it('extracts the UUID embedded in AG-UI thread ids', () => {
-    // createCtxmillId("thread") produces thread-<uuid>; the SDK rejects the
+    // createStablehandId("thread") produces thread-<uuid>; the SDK rejects the
     // prefixed form and crashes the child process.
     expect(toSdkSessionId('thread-fb20a343-0206-4ba0-8eb5-3c9d0dcc9ebe'))
       .toBe('fb20a343-0206-4ba0-8eb5-3c9d0dcc9ebe');

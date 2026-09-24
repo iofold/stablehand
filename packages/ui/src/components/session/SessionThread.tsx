@@ -11,7 +11,7 @@ import {
   Info,
   Wrench,
 } from 'lucide-react';
-import type { Turn } from '@ctxmill/contracts';
+import type { Turn } from '@stablehand/contracts';
 import { MessageBubble } from './MessageBubble';
 import { ToolCallCard } from './ToolCallCard';
 import { ErrorDisplay } from './ErrorDisplay';

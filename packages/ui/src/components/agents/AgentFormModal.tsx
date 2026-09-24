@@ -6,19 +6,19 @@ import { fetchCatalogTools, type CatalogTool } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { ToolPickerModal } from './ToolPickerModal';
 import {
-  CTXMILL_HARNESS_NAMES,
+  STABLEHAND_HARNESS_NAMES,
   HARNESS_CONFIG_SCHEMAS,
   type AgentCreateInput,
   type AgentPatchInput,
   type BuiltinToolPolicy,
   type NativeToolPolicy,
-} from '@ctxmill/contracts';
+} from '@stablehand/contracts';
 import {
   manifestToAgentPatchInput,
   parseManifestString,
   serializeManifestYAML,
   validateManifest,
-} from '@ctxmill/manifest';
+} from '@stablehand/manifest';
 import { harnessLabel } from '@/lib/harness';
 
 interface AgentFormModalProps {
@@ -200,7 +200,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
   const validate = (): boolean => {
     const errs: Record<string, string> = {};
     if (!name.trim()) errs.name = 'Name is required';
-    const canonicalHarness = CTXMILL_HARNESS_NAMES.find((name) => name === harness);
+    const canonicalHarness = STABLEHAND_HARNESS_NAMES.find((name) => name === harness);
     if (!canonicalHarness) errs.harness = 'Select a supported harness';
     if (!systemPrompt.trim()) errs.systemPrompt = 'System prompt is required';
     if (
@@ -385,7 +385,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
                   </p>
                 </div>
                 <span className="shrink-0 rounded border border-accent-500/20 bg-accent-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-accent-300">
-                  ctxmill.io/v1
+                  stablehand.io/v1
                 </span>
               </div>
               <textarea
@@ -439,7 +439,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
               }}
               className={cn('input-base mt-1.5', errors.harness && 'border-red-500/60')}
             >
-              {CTXMILL_HARNESS_NAMES.map((option) => (
+              {STABLEHAND_HARNESS_NAMES.map((option) => (
                 <option key={option} value={option}>
                   {harnessLabel(option)}
                 </option>

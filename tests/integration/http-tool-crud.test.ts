@@ -58,7 +58,7 @@ describe('HTTP tool CRUD via agent API', () => {
 
   beforeAll(async () => {
     testApp = await createTestApp({
-      dirPrefix: 'ctxmill-http-tool-crud-',
+      dirPrefix: 'stablehand-http-tool-crud-',
     });
     app = testApp.app;
   });

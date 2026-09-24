@@ -12,10 +12,10 @@ integration boundary for the deferred intra-turn work in
 
 ## Decision
 
-CTXMILL will support a self-hosted LiteLLM Proxy as an optional,
+STABLEHAND will support a self-hosted LiteLLM Proxy as an optional,
 deployment-scoped model gateway for governed and evaluation workloads.
 Harnesses retain their native model configuration and SDK/API semantics;
-LiteLLM credentials remain deployment infrastructure rather than CTXMILL
+LiteLLM credentials remain deployment infrastructure rather than STABLEHAND
 policy, agent, or run data.
 
 - LiteLLM owns upstream provider credentials, stable model aliases, routing,
@@ -26,26 +26,26 @@ policy, agent, or run data.
 - Each harness owns its model selection, native protocol/client, generation
   controls, subagent model overrides, and any direct provider connection
   fields already defined by that harness.
-- CTXMILL does not add a public model-route resource, a universal model-client
+- STABLEHAND does not add a public model-route resource, a universal model-client
   abstraction, or a mandatory `llm` block to `harnessConfig`.
 - Direct-only deployments and explicitly direct/custom harness connections
   remain first-class. A disabled gateway creates no startup, health, network,
   or credential dependency.
-- CTXMILL owns budget policy documents, selector and bucket semantics, turn
+- STABLEHAND owns budget policy documents, selector and bucket semantics, turn
   admission, model-call-to-turn attribution, typed product errors, durable read
   projections, and UI state.
-- No CTXMILL policy, bucket, agent, conversation, turn, or evaluation row
+- No STABLEHAND policy, bucket, agent, conversation, turn, or evaluation row
   references a LiteLLM key.
-- CTXMILL does not select or create a LiteLLM key per run.
-- CTXMILL does not synchronize policies into LiteLLM tag budgets, users, teams,
+- STABLEHAND does not select or create a LiteLLM key per run.
+- STABLEHAND does not synchronize policies into LiteLLM tag budgets, users, teams,
   or virtual keys.
-- CTXMILL does not build a model-pricing catalog or normalize model names
+- STABLEHAND does not build a model-pricing catalog or normalize model names
   across harnesses.
-- CTXMILL does not query or share LiteLLM database tables. It integrates
+- STABLEHAND does not query or share LiteLLM database tables. It integrates
   through the gateway protocol and documented spend APIs.
 - Initial cost-policy enforcement remains at the turn-admission boundary.
   An optional environment-level LiteLLM key budget is an operations-owned
-  runaway ceiling, not a projection of CTXMILL policies.
+  runaway ceiling, not a projection of STABLEHAND policies.
 - A small local model-call ledger and turn/budget read projection provide
   idempotency, attribution, product availability, and honest coverage state.
 - The first implementation uses spend-log reconciliation only. A callback is
@@ -54,7 +54,7 @@ policy, agent, or run data.
   so future per-call allowances and mid-turn stops can be added without
   changing the credential, harness-configuration, or policy contracts.
 - OpenMeter and Portkey are not added in this phase. OpenMeter becomes relevant
-  if CTXMILL later needs customer billing, credits, invoices, or non-LLM usage
+  if STABLEHAND later needs customer billing, credits, invoices, or non-LLM usage
   metering. Portkey would duplicate the selected gateway role.
 
 This keeps LiteLLM useful for what it already centralizes while avoiding both
@@ -72,22 +72,22 @@ The current runtime stores one aggregate usage object at turn completion:
   monetary cost.
 - `NULL`, real zero, and partial reporting are collapsed in budget aggregates
   and several UI projections.
-- Budget contracts are duplicated outside `@ctxmill/contracts`.
+- Budget contracts are duplicated outside `@stablehand/contracts`.
 - A crossed `block` can be bypassed when a higher-threshold `warn` is selected
   first.
 - Admission-only enforcement cannot stop the next call in a long tool loop.
 
 A local price catalog would fix only some of this and duplicate model aliases,
 provider pricing, cache rates, and routing metadata already maintained by a
-gateway. Coupling LiteLLM keys to CTXMILL policies would replace that catalog
+gateway. Coupling LiteLLM keys to STABLEHAND policies would replace that catalog
 with a more difficult distributed synchronization problem.
 
 ## Ownership boundary
 
-| Concern | Canonical owner | CTXMILL responsibility |
+| Concern | Canonical owner | STABLEHAND responsibility |
 |---|---|---|
 | Gateway upstream provider API keys | LiteLLM deployment | None |
-| Direct provider API keys | Existing CTXMILL secret provider or deployment environment | Resolve only for explicitly direct/native harness access |
+| Direct provider API keys | Existing STABLEHAND secret provider or deployment environment | Resolve only for explicitly direct/native harness access |
 | LiteLLM runtime credential | Docker/Kubernetes deployment secret | Make it available to sandbox model clients without persisting it |
 | LiteLLM metering/admin credential | Docker/Kubernetes deployment secret | Use only inside the orchestrator-side LiteLLM adapter |
 | Model selection and generation controls | Harness schema and native SDK | Preserve harness-native semantics; do not translate into a universal route contract |
@@ -96,20 +96,20 @@ with a more difficult distributed synchronization problem.
 | Call token/cost calculation | LiteLLM | Validate and ingest the result |
 | Direct-call usage/cost | Native harness SDK when available | Normalize an honest observation; otherwise mark unavailable |
 | Gateway call spend history | LiteLLM | Reconcile it into a local read projection |
-| Call-to-turn identity | CTXMILL | Attach and persist an opaque correlation identity |
-| Budget policy | CTXMILL | Validate, persist, evaluate, and expose |
-| Selector and `groupBy` semantics | CTXMILL | Resolve a turn to every matching policy bucket |
-| Precise cost-policy block | CTXMILL | Enforce at turn admission from local projections |
+| Call-to-turn identity | STABLEHAND | Attach and persist an opaque correlation identity |
+| Budget policy | STABLEHAND | Validate, persist, evaluate, and expose |
+| Selector and `groupBy` semantics | STABLEHAND | Resolve a turn to every matching policy bucket |
+| Precise cost-policy block | STABLEHAND | Enforce at turn admission from local projections |
 | Environment runaway ceiling | LiteLLM deployment, optional | Map a gateway rejection to a typed operational error |
-| Token and turn limits | CTXMILL | Admission enforcement; optional mid-turn allowance later |
-| Product errors and UI | CTXMILL | Expose canonical policy and coverage state |
+| Token and turn limits | STABLEHAND | Admission enforcement; optional mid-turn allowance later |
+| Product errors and UI | STABLEHAND | Expose canonical policy and coverage state |
 | Provider invoice truth | Provider admin APIs, later | Explicitly out of scope |
 
 ## Runtime architecture
 
 ```mermaid
 flowchart LR
-  A[Turn admission] --> B[CTXMILL policy evaluator]
+  A[Turn admission] --> B[STABLEHAND policy evaluator]
   B --> C[Turn + matched bucket attribution]
   C --> D[Sandbox delivery]
   D --> M[Harness turn enforcer]
@@ -121,14 +121,14 @@ flowchart LR
   F --> G
   F --> H[LiteLLM spend log]
   E -. harness usage observation .-> J
-  H -->|periodic documented API read| I[CTXMILL reconciler]
+  H -->|periodic documented API read| I[STABLEHAND reconciler]
   I --> J[Model-call ledger]
   J --> K[Turn + budget projections]
   K --> L[REST and UI]
 ```
 
 Every gateway-enabled model call traverses LiteLLM, but no model call
-synchronously traverses the CTXMILL API after sandbox delivery. Policy
+synchronously traverses the STABLEHAND API after sandbox delivery. Policy
 evaluation and spend ingestion remain local/asynchronous respectively.
 
 There are three independent concerns:
@@ -138,8 +138,8 @@ There are three independent concerns:
    controls.
 2. **Optional gateway access:** deployment endpoint and credential → the
    harness's native client → LiteLLM alias/upstream routing.
-3. **Policy/accounting:** turn tags → CTXMILL policies; call correlation →
-   LiteLLM spend log → CTXMILL ledger.
+3. **Policy/accounting:** turn tags → STABLEHAND policies; call correlation →
+   LiteLLM spend log → STABLEHAND ledger.
 
 The credential is not an attribution key, and the model name is not a policy
 identity.
@@ -155,7 +155,7 @@ When enabled, the initial deployment has one `default` LiteLLM profile:
 
 Both credentials are deployment secrets:
 
-- They are configured in Compose/Kubernetes, not created by CTXMILL APIs.
+- They are configured in Compose/Kubernetes, not created by STABLEHAND APIs.
 - They do not appear in agent manifests, budget documents, database rows,
   events, callback payloads, or browser responses.
 - The runtime credential is made available to model clients through sandbox
@@ -172,7 +172,7 @@ Both credentials are deployment secrets:
   that require them. They cannot shadow gateway access values, and a
   gateway-only certification case proves that no upstream provider credential
   enters that sandbox.
-- It is never persisted in a checkpoint. CTXMILL does not currently refresh
+- It is never persisted in a checkpoint. STABLEHAND does not currently refresh
   stable secrets inside a warm sandbox, so a restored or recreated container
   receives current deployment secrets while an incompatible warm container is
   drained and replaced.
@@ -190,7 +190,7 @@ one agent. The simple shared environment key is retained deliberately, but it
 must be least-privilege: model/alias and inference-route access only, no spend
 or administrative endpoints, an operations-owned rate/budget ceiling,
 internal-only gateway reachability, orphan-call alerts, and tested rotation
-with session drain. CTXMILL does not claim that the credential is inaccessible
+with session drain. STABLEHAND does not claim that the credential is inaccessible
 to code executing inside the sandbox.
 
 Normal runs, background runs, evaluations, retries, subagents, queued turns,
@@ -224,13 +224,13 @@ retain native harness cost coverage, which may be partial or unpriced.
 
 If the deployment later provides network identity, mTLS, or a trusted
 authentication proxy, it may replace the runtime key without changing any
-CTXMILL contract. An unauthenticated internal LiteLLM endpoint is forbidden
+STABLEHAND contract. An unauthenticated internal LiteLLM endpoint is forbidden
 until real network isolation is present.
 
 An operations-owned `max_budget` on the environment credential may provide a
 coarse emergency ceiling. Exhausting it affects the whole credential scope and
 must surface as `model_gateway_budget_exceeded`; it must never be misreported
-as a particular CTXMILL policy or bucket.
+as a particular STABLEHAND policy or bucket.
 
 ## Preserve harness-owned model configuration
 
@@ -255,7 +255,7 @@ strictly validates its contents. The built-in harnesses currently use:
 
 Rules:
 
-- There is no CTXMILL route resource, route ID, model catalog, or mandatory
+- There is no STABLEHAND route resource, route ID, model catalog, or mandatory
   `llm` block.
 - One-model, multi-model, subagent, and dynamic model-selection semantics
   remain native to each harness.
@@ -304,7 +304,7 @@ those schemas directly.
 
 ### Window semantics
 
-LiteLLM does not define CTXMILL policy windows. Preserve the existing
+LiteLLM does not define STABLEHAND policy windows. Preserve the existing
 semantically explicit windows:
 
 | Value | Exact semantics |
@@ -316,7 +316,7 @@ semantically explicit windows:
 | `month-to-date` | UTC first-of-month 00:00 through now |
 
 No window is changed to fit a LiteLLM key/tag duration. A future mid-turn
-allowance is calculated from the same CTXMILL window semantics.
+allowance is calculated from the same STABLEHAND window semantics.
 
 All turn, token, and eventual cost usage is attributed to the owning
 `turn.startedAt`, preserving the shipped repository semantics. Model-call
@@ -347,7 +347,7 @@ tag, or Enterprise-only spend metadata.
 For gateway-enabled calls, each harness adapter must provide a stable
 relationship among:
 
-- CTXMILL `turnId`;
+- STABLEHAND `turnId`;
 - a unique logical call ID for each parent or nested client invocation;
 - every gateway transaction ID that LiteLLM records for that invocation.
 
@@ -358,7 +358,7 @@ The selected pinned LiteLLM version determines the exact transport:
 2. Otherwise attach an opaque turn correlation field and capture LiteLLM's
    generated call ID from the response/stream.
 3. If a native client cannot expose either reliably, that harness/protocol row
-   fails Phase 0; CTXMILL does not fall back to route identity, key identity,
+   fails Phase 0; STABLEHAND does not fall back to route identity, key identity,
    timing guesses, or raw business tags.
 
 Correlation values contain opaque IDs only. They do not include user email,
@@ -370,7 +370,7 @@ available, the requested model string when safely observable, usage, and
 completion state. It does not expose provider credentials or a universal
 model-client interface. Gateway observations join the spend record back to the
 turn; direct observations may supply exact harness usage without a gateway.
-The turn's persisted tags then attribute the result to all matching CTXMILL
+The turn's persisted tags then attribute the result to all matching STABLEHAND
 policy buckets.
 
 Separate harness client invocations receive distinct logical call IDs.
@@ -442,7 +442,7 @@ unpersisted invalid transaction permanently invisible.
 
 Add `model_call_usage` with the minimum sanitized fields:
 
-- CTXMILL logical call ID and observation kind (`call` or `turn_aggregate`);
+- STABLEHAND logical call ID and observation kind (`call` or `turn_aggregate`);
 - gateway profile/revision and reconciliation state when applicable;
 - turn ID (nullable only for quarantined orphan calls) and success/failure
   status;
@@ -536,7 +536,7 @@ interface TurnUsage {
 }
 ```
 
-`TurnUsageSchema` lives in `@ctxmill/contracts` and is reused by REST, terminal
+`TurnUsageSchema` lives in `@stablehand/contracts` and is reused by REST, terminal
 events, webhooks, the client, and React bindings. Each usage-bearing container
 contract has a required `usage: TurnUsage | null` field. `null` means no
 trustworthy usage observation exists; omission and fabricated all-zero usage
@@ -614,7 +614,7 @@ use the updated durable aggregate.
 
 ### At turn admission
 
-CTXMILL:
+STABLEHAND:
 
 1. Resolves all matching policy buckets from the turn's tags.
 2. Rejects unprovisioned `groupBy` values.
@@ -642,11 +642,11 @@ Initially:
 - direct calls retain their harness-native authentication path;
 - the harness adapter applies its configured execution limits such as
   `maxTurns`, output-token ceilings, deadlines, or recursion limits;
-- no CTXMILL policy lookup or key selection occurs;
+- no STABLEHAND policy lookup or key selection occurs;
 - no synchronous call to the orchestrator occurs.
 
-If the environment credential ceiling is crossed, CTXMILL maps the gateway
-error to `model_gateway_budget_exceeded`. It does not name a CTXMILL policy
+If the environment credential ceiling is crossed, STABLEHAND maps the gateway
+error to `model_gateway_budget_exceeded`. It does not name a STABLEHAND policy
 and has no effect on direct calls.
 
 ## Extensible harness-side mid-turn enforcement
@@ -695,7 +695,7 @@ Rules:
 ### Future allowance contract
 
 When mid-turn enforcement is activated, admission may derive a non-secret,
-bounded `TurnAllowance` from all matched CTXMILL policy buckets:
+bounded `TurnAllowance` from all matched STABLEHAND policy buckets:
 
 ```ts
 interface TurnAllowance {
@@ -760,7 +760,7 @@ The budget and usage API remains product-shaped; LiteLLM APIs and credentials
 are never exposed to the browser.
 
 - Strict budget create, patch, list, detail, spend, status, and typed-error
-  schemas live in `@ctxmill/contracts`.
+  schemas live in `@stablehand/contracts`.
 - The currently partial `PUT /api/budgets/:id` is replaced by
   `PATCH /api/budgets/:id`; the semantically incorrect `PUT` route is removed
   in the same hard-cut release.
@@ -782,7 +782,7 @@ Required UI:
 - Conversation detail: total token/cost usage and coverage.
 - Settings > Budgets: policy state, bucket meters, exact window, and
   reconciliation freshness.
-- Typed denial: policy and bucket in primary text for CTXMILL admission blocks.
+- Typed denial: policy and bucket in primary text for STABLEHAND admission blocks.
 - Gateway operational errors never masquerade as a policy block.
 
 The UI renders:
@@ -802,21 +802,21 @@ not the absence of an optional component.
 ## LiteLLM deployment
 
 LiteLLM is an optional separate service with its own database/schema and
-credentials. It may share a PostgreSQL server, but not CTXMILL's database or
+credentials. It may share a PostgreSQL server, but not STABLEHAND's database or
 tables.
 
 Gateway-enabled dev1/dev2:
 
 - one pinned LiteLLM replica;
 - separate LiteLLM database;
-- deployment opt-in rather than an unconditional CTXMILL startup dependency;
+- deployment opt-in rather than an unconditional STABLEHAND startup dependency;
 - protocol-native endpoints consumed by existing harness adapters;
 - one runtime credential and one metering/admin credential per environment;
 - UTC timezone;
 - message/response logging disabled;
 - spend-log reconciliation enabled;
 - no callback;
-- no CTXMILL policy synchronization.
+- no STABLEHAND policy synchronization.
 
 Direct-only dev1/dev2:
 
@@ -829,7 +829,7 @@ Production:
 
 - the same application contract as dev1/dev2;
 - replica count and Redis are LiteLLM availability/scale decisions, not
-  CTXMILL budget semantics;
+  STABLEHAND budget semantics;
 - readiness, disruption, backup, credential-rotation, and rollback controls
   appropriate to an always-on model gateway;
 - fail-closed credential-level budget verification only if proven in the
@@ -846,7 +846,7 @@ features exercised against the actual pinned image.
 
 Harness configuration continues to own the model strings used by native SDKs.
 In a gateway-enabled deployment, LiteLLM config may map those same strings to
-stable aliases and upstream deployments. CTXMILL does not create a second
+stable aliases and upstream deployments. STABLEHAND does not create a second
 route catalog. Defining aliases equal to existing model strings allows an
 upstream deployment to change without editing every agent.
 
@@ -893,7 +893,7 @@ The matrix additionally proves:
 Capability tests separately record which harnesses expose before-call,
 after-call, abort, and soft-stop boundaries for future mid-turn enforcement.
 
-CTXMILL does not currently ship a separate evaluation runner. External
+STABLEHAND does not currently ship a separate evaluation runner. External
 evaluation tooling invokes the normal turn path. Gateway-enabled evaluation
 turns therefore use the same deployment credential injection as normal turns;
 direct evaluation turns retain the existing explicit provider-secret path.
@@ -931,7 +931,7 @@ repeatable integration harness.
 
 ### Phase 1 — canonical contracts and existing correctness bugs
 
-- Add strict budget schemas to `@ctxmill/contracts`.
+- Add strict budget schemas to `@stablehand/contracts`.
 - Ship a read-only preflight that scans every stored policy through the strict
   schema before cutover. Invalid, ambiguous, duplicate, reversed, fractional,
   or unknown values block migration with policy IDs for operator repair; no
@@ -1024,7 +1024,7 @@ advance a watermark past an uncommitted page.
   meters, reconciliation freshness, and typed admission/gateway errors.
 - Use REST refetch/polling for late cost in the initial release.
 - Update Pilot's package pin, validators, database projection, Agents Monitor,
-  and pending-usage refresh through `CtxmillControlClient.turns.get()` in the
+  and pending-usage refresh through `StablehandControlClient.turns.get()` in the
   same milestone.
 
 Gate: create policy → warn → block next admission → reload → raise limit →
@@ -1078,7 +1078,7 @@ assumptions must be removed before implementation:
 | `ctx-avf3.3` | Do first: canonical budget contracts and block-order fix |
 | `ctx-c9h9` | Keep: LangGraph per-call aggregation and identity |
 | `ctx-avf3.1` | Keep, narrowed: unknown PI cost must be absent; LiteLLM is the price source only for calls that traverse it |
-| `ctx-avf3.2` | Rewrite: replace CTXMILL price catalog with spend-log ledger, provenance, reconciliation, and orphan metrics |
+| `ctx-avf3.2` | Rewrite: replace STABLEHAND price catalog with spend-log ledger, provenance, reconciliation, and orphan metrics |
 | `ctx-avf3.4` | Keep and extend with cost coverage and reconciliation freshness; remove tag-sync UI |
 | `ctx-avf3.5` | Defer: harness enforcer activation and non-secret mid-turn allowance |
 
@@ -1112,14 +1112,14 @@ budgets are not part of this architecture.
 | Surface | Planned change | Compatibility and primary risk | Required gate |
 |---|---|---|---|
 | Harness configuration and manifests | No gateway-driven schema change; preserve current strict per-harness schemas | Accidental `ModelRoute` migration or silent override would break every stored agent, scaffold, example, and Pilot manifest | Existing manifests parse unchanged and CRUD readback preserves their configuration semantics |
-| Budget contracts and routes | Move policy CRUD/spend/status schemas to `@ctxmill/contracts`, validate stored documents strictly, replace partial `PUT` with `PATCH` | Invalid persisted policies and external callers of the old route fail at the Phase 1 clean break | Policy preflight, external-consumer inventory, atomic bundled-client update, and contract fixtures |
+| Budget contracts and routes | Move policy CRUD/spend/status schemas to `@stablehand/contracts`, validate stored documents strictly, replace partial `PUT` with `PATCH` | Invalid persisted policies and external callers of the old route fail at the Phase 1 clean break | Policy preflight, external-consumer inventory, atomic bundled-client update, and contract fixtures |
 | Usage contracts and event/webhook payloads | Replace optional `costUsd` with canonical coverage-aware usage | Intentional Phase 4 hard break for SDK, webhook, replay, and external consumers; no legacy reader means no mixed-version rollout or binary-only rollback | Consumer inventory, drained cutover, atomic package adoption, database backup, stored-event/outbox migration, and contract fixtures |
 | Sandbox proto and daemon types | Carry only internal `HarnessTurnUsageObservation`/`model_call_observed`; public `TurnUsage` is orchestrator-materialized | Orchestrator/daemon image skew can reject or lose observations; secrets could leak through proto/checkpoints | Duplicate/replay/cancel observation tests, checkpoint inspection, and lockstep harness-image rollout |
 | Sandbox session lifecycle | Persist an effective runtime-definition/connection fingerprint and replace incompatible warm sessions after relevant edits | Current warm reuse validates ownership but not the new agent definition, so an agent can keep the old model, endpoint, or credential path | Direct-to-gateway and gateway-to-direct edit tests across active, warm, checkpointed, restored, and cross-replica sessions |
 | Harness adapters | Accumulate every call, preserve native SDK behavior, inject optional gateway access/correlation, never fabricate cost | Hidden/nested calls, double-counted tokens, false zero, lost usage on abort, native-client regression | Per-harness direct and gateway multi-call tests with spend/turn equality |
 | Database and repository | Add call ledger, coverage/provenance fields, watermark, overlap reconciliation, and coverage-aware aggregates | Legacy zero is ambiguous; current SQL `coalesce(sum(cost), 0)` lies about unknown data; replay and pending callback rows may contain old payloads | Conservative backfill, idempotent migration, event/outbox validation, no unknown-to-zero conversion |
 | Cost-control/orchestrator | Pure policy domain plus optional LiteLLM adapter/reconciler and local projections | Reconciler lag or vendor outage must not enter admission/UI hot paths; duplicate attribution can overcharge buckets | Fault injection, idempotency, lag metrics, direct-only boot with no reconciler |
-| Shared/client/react/UI | Consume one canonical usage/budget contract and render pending/partial/unpriced states | Pilot and other bundled consumers will fail validation or render incorrectly if packages advance non-atomically | Consumer contract tests and a coordinated CTXMILL/Pilot source-pin update |
+| Shared/client/react/UI | Consume one canonical usage/budget contract and render pending/partial/unpriced states | Pilot and other bundled consumers will fail validation or render incorrectly if packages advance non-atomically | Consumer contract tests and a coordinated STABLEHAND/Pilot source-pin update |
 | Deployment and sandbox secret assembly | Optional pinned LiteLLM service, database, credentials, readiness, internal gateway access, and operations controls | Making it unconditional breaks direct installations; current secret assembly permits same-named agent values to override environment values; sandbox compromise can use the shared runtime key for uncorrelated calls within its scope | Disabled-mode boot, connection-mode preflight, reserved-secret precedence tests, alias/route/key ceilings, orphan alerts, least-secret sandbox inspection, credential/checkpoint scans, rotation drain, and dev1/dev2 rollback |
 | External evaluations, examples, and scaffold | Keep native harness YAML; evaluation clients use normal turns and gateway-enabled turns use deployment access | Inventing a separate eval credential path or rewriting examples around gateway aliases would make the optional component appear mandatory | Fresh scaffold direct turn plus external-client gateway matrix |
 
@@ -1129,21 +1129,21 @@ Phase 4. Neither retains a deprecated route or legacy reader. The gateway
 itself does not require an agent-manifest migration.
 
 Pilot currently carries native `provider`/`model`/`apiKeyRef` harness
-configuration and a vendored CTXMILL usage contract with optional `costUsd`.
+configuration and a vendored STABLEHAND usage contract with optional `costUsd`.
 Its manifests remain valid. Its vendor pin, API validators, cost UI, fixtures,
 and any webhook consumers must advance atomically with the usage-contract
 milestone. Its current `turn.completed` webhook projection stores cost once,
 so it would otherwise retain `pending` forever. When the new webhook reports
 pending coverage, Pilot must enqueue a bounded usage refresh, call the
-canonical bundled `CtxmillControlClient.turns.get()` method, and idempotently
+canonical bundled `StablehandControlClient.turns.get()` method, and idempotently
 replace its local usage when coverage becomes terminal. It does not call
-LiteLLM, duplicate CTXMILL pricing, or hand-roll HTTP. Pending refresh expiry
+LiteLLM, duplicate STABLEHAND pricing, or hand-roll HTTP. Pending refresh expiry
 remains visibly stale rather than becoming zero.
 
 Pilot file leads are
-`apps/api/src/ctxmill/drizzle-webhook-store.ts`,
-`apps/api/src/ctxmill/turn-coordinator.ts`,
-`apps/api/src/ctxmill/conversation-access.ts`, its `agent_turns` schema and
+`apps/api/src/stablehand/drizzle-webhook-store.ts`,
+`apps/api/src/stablehand/turn-coordinator.ts`,
+`apps/api/src/stablehand/conversation-access.ts`, its `agent_turns` schema and
 migration, and the Agents Monitor API/UI fixtures.
 
 ## File leads
@@ -1151,34 +1151,34 @@ migration, and the Agents Monitor API/UI fixtures.
 | Work | Primary files |
 |---|---|
 | Budget and usage contracts | new `packages/contracts/src/budgets.ts`, existing `packages/contracts/src/index.ts`, `api.ts`, `events.ts`, `webhooks.ts`; remove duplicate budget/usage shapes from `packages/shared/src/api.ts` |
-| Budget routes/admission | `packages/ctxmill/src/orchestrator/routes/budgets.ts`, `budget-enforcer.ts`, `turn-startup-service.ts` |
-| Harness configuration non-regression | `packages/contracts/src/harness.ts`, `packages/manifest/src/validate.ts`, `packages/ctxmill/src/orchestrator/routes/agents/helpers.ts` — verification targets, not a gateway schema rewrite |
-| Optional gateway configuration | `packages/ctxmill/src/config/container.ts`, `packages/ctxmill/src/cli/runtime-startup.ts`, `packages/ctxmill/src/orchestrator/session-manager/session-runtime-factory.ts`, `session-recovery-coordinator.ts` |
-| Warm-session compatibility after agent/secret edits | `packages/ctxmill/src/orchestrator/sandbox-session-manager.ts`, `session-manager/session-lifecycle-service.ts`, `session-state-store.ts`, `session-turn-orchestrator.ts`, `packages/ctxmill/src/orchestrator/routes/agents/crud.ts`, `secrets.ts`, `packages/ctxmill/src/database/schema-pg.ts`, `repository.ts` |
-| Sandbox credential/access and observation transport | mandatory updates to `packages/proto/ctxmill/sandbox/v1/sandbox.proto`, generated proto and `packages/sandbox-daemon/src/sandbox/proto-convert.ts`; reserved stable sandbox environment plus `packages/sandbox-daemon/src/sandbox/daemon.ts` and `runner.ts` |
+| Budget routes/admission | `packages/stablehand/src/orchestrator/routes/budgets.ts`, `budget-enforcer.ts`, `turn-startup-service.ts` |
+| Harness configuration non-regression | `packages/contracts/src/harness.ts`, `packages/manifest/src/validate.ts`, `packages/stablehand/src/orchestrator/routes/agents/helpers.ts` — verification targets, not a gateway schema rewrite |
+| Optional gateway configuration | `packages/stablehand/src/config/container.ts`, `packages/stablehand/src/cli/runtime-startup.ts`, `packages/stablehand/src/orchestrator/session-manager/session-runtime-factory.ts`, `session-recovery-coordinator.ts` |
+| Warm-session compatibility after agent/secret edits | `packages/stablehand/src/orchestrator/sandbox-session-manager.ts`, `session-manager/session-lifecycle-service.ts`, `session-state-store.ts`, `session-turn-orchestrator.ts`, `packages/stablehand/src/orchestrator/routes/agents/crud.ts`, `secrets.ts`, `packages/stablehand/src/database/schema-pg.ts`, `repository.ts` |
+| Sandbox credential/access and observation transport | mandatory updates to `packages/proto/stablehand/sandbox/v1/sandbox.proto`, generated proto and `packages/sandbox-daemon/src/sandbox/proto-convert.ts`; reserved stable sandbox environment plus `packages/sandbox-daemon/src/sandbox/daemon.ts` and `runner.ts` |
 | Harness observation/correlation | `packages/sandbox-daemon/src/harness/claude-agents.ts`, `langgraph.ts`, `pi-agent.ts`, `harness/types.ts`, `harness/kit/usage.ts`, and shared accumulator/lifecycle helpers |
 | Harness enforcer seam | new `packages/sandbox-daemon/src/harness/enforcement/` plus adapter integration |
-| Metering schema/repository and historical replay | `packages/ctxmill/src/database/schema-pg.ts`, `migrations.ts`, `repository.ts`, `canonical-event-data-migration.ts`, callback-outbox migration fixtures |
-| LiteLLM spend adapter | new `packages/ctxmill/src/cost-control/litellm/` |
-| Turn/event/proto projection | `packages/ctxmill/src/orchestrator/turn-finalizer.ts`, `turn-terminal-publisher.ts`, `agent-turn-service.ts`, `routes/agents/helpers.ts`, `routes/agents/crud.ts`, `webhook-relay.ts`, `canonical/frames.ts`, `packages/ctxmill/src/events/bus.ts`, `packages/sandbox-daemon/src/sandbox/proto-convert.ts`, generated proto |
+| Metering schema/repository and historical replay | `packages/stablehand/src/database/schema-pg.ts`, `migrations.ts`, `repository.ts`, `canonical-event-data-migration.ts`, callback-outbox migration fixtures |
+| LiteLLM spend adapter | new `packages/stablehand/src/cost-control/litellm/` |
+| Turn/event/proto projection | `packages/stablehand/src/orchestrator/turn-finalizer.ts`, `turn-terminal-publisher.ts`, `agent-turn-service.ts`, `routes/agents/helpers.ts`, `routes/agents/crud.ts`, `webhook-relay.ts`, `canonical/frames.ts`, `packages/stablehand/src/events/bus.ts`, `packages/sandbox-daemon/src/sandbox/proto-convert.ts`, generated proto |
 | Client and UI | `packages/client`, `packages/react`, `packages/ui/src/lib/api.ts`, `components/settings/BudgetsSection.tsx`, `components/dashboard/AgentCard.tsx`, `components/agent/AgentOverviewTab.tsx`, `AgentTurnsTab.tsx` |
-| Pilot atomic consumer update | `../pilot-app/apps/api/src/ctxmill/drizzle-webhook-store.ts`, `webhook-inbox.ts`, `turn-coordinator.ts`, `conversation-access.ts`, `apps/api/src/routes/agents.ts`, `apps/api/src/db/schema.ts`, `apps/web/src/api/client.ts`, `apps/web/src/pages/AgentsMonitor.tsx` |
-| Examples and external evaluation certification | `packages/examples/kitchen-sink/agents/`, `packages/create-ctxmill/src/scaffold.ts`, `tests/integration/scaffold.test.ts`, new harness-matrix certification fixtures |
+| Pilot atomic consumer update | `../pilot-app/apps/api/src/stablehand/drizzle-webhook-store.ts`, `webhook-inbox.ts`, `turn-coordinator.ts`, `conversation-access.ts`, `apps/api/src/routes/agents.ts`, `apps/api/src/db/schema.ts`, `apps/web/src/api/client.ts`, `apps/web/src/pages/AgentsMonitor.tsx` |
+| Examples and external evaluation certification | `packages/examples/kitchen-sink/agents/`, `packages/create-stablehand/src/scaffold.ts`, `tests/integration/scaffold.test.ts`, new harness-matrix certification fixtures |
 | Dev1/dev2 and harness images | `docker-compose.yml`, `Dockerfile.sandbox`, `deploy/k3s/dev2/manifests.yaml`, `deploy/k3s/dev2/deploy-dev2.sh`, `docs/environment-variables.md` |
 
 Keep the new LiteLLM adapter, call-ledger projection, and reconciliation loop
-under `packages/ctxmill/src/cost-control/`. Do not relocate the currently
+under `packages/stablehand/src/cost-control/`. Do not relocate the currently
 shipped `orchestrator/budgets.ts` and `budget-enforcer.ts` merely to create a
 new folder; move pure policy logic only when an actual dependency boundary
-requires it. Do not create a separate CTXMILL budget service.
+requires it. Do not create a separate STABLEHAND budget service.
 
 The harness enforcer belongs in the sandbox daemon because it must observe and
 control harness execution locally. Its inputs remain transportable,
-non-secret, and independent of CTXMILL persistence so it could later consume
+non-secret, and independent of STABLEHAND persistence so it could later consume
 an allowance from another authorizer without changing adapters.
 
 Service extraction becomes justified only when metering volume needs
-independent scaling, multiple CTXMILL control planes share one meter,
+independent scaling, multiple STABLEHAND control planes share one meter,
 retention/compliance ownership differs, or metering materially affects
 orchestrator latency.
 
@@ -1192,7 +1192,7 @@ Initial production scope, excluding tests:
 | Optional gateway access, native-client integration, correlation transport, and session compatibility | 500–800 |
 | Spend adapter, logical/attempt ledger, reconciler, threshold path, and projections | 550–900 |
 | Harness enforcer seam and capability wiring | 100–200 |
-| CTXMILL usage API/client/UI cutover | 350–550 |
+| STABLEHAND usage API/client/UI cutover | 350–550 |
 | Deployment/configuration | 150–250 |
 | Pilot schema, refresh worker, API/UI, and fixtures | 200–350 |
 | **Initial cross-repository total** | **2,200–3,600** |
@@ -1203,7 +1203,7 @@ on harness capabilities and whether cost allowances require a gateway lookup.
 The initial design has:
 
 - when enabled, one gateway service and its database;
-- one CTXMILL reconciliation loop;
+- one STABLEHAND reconciliation loop;
 - one logical model-call ledger and an attempt child only if Phase 0 proves
   LiteLLM emits 1:N billable records;
 - two deployment credential values;
@@ -1211,8 +1211,8 @@ The initial design has:
 - no callback ingress;
 - no policy/key or policy/tag binding table;
 - no policy synchronizer;
-- no key lifecycle in CTXMILL;
-- no Redis requirement derived from CTXMILL policy semantics.
+- no key lifecycle in STABLEHAND;
+- no Redis requirement derived from STABLEHAND policy semantics.
 
 Test and live-certification work remains material because every harness must
 prove correlation and coverage, but it is substantially smaller than a
@@ -1220,7 +1220,7 @@ cross-system inline-policy implementation.
 
 ## Rejected alternatives
 
-- **Full CTXMILL pricing catalog:** duplicates LiteLLM and remains difficult to
+- **Full STABLEHAND pricing catalog:** duplicates LiteLLM and remains difficult to
   keep current.
 - **Mandatory canonical `ModelRouteSchema`:** couples unrelated native harness
   APIs, forces every stored agent and consumer to migrate, and does not improve
@@ -1228,16 +1228,16 @@ cross-system inline-policy implementation.
   observations instead.
 - **Public named route registry:** duplicates LiteLLM aliases and harness-native
   subagent/model selection while adding policy ambiguity for dynamic calls.
-- **Universal CTXMILL model client:** native SDKs expose materially different
+- **Universal STABLEHAND model client:** native SDKs expose materially different
   streaming, tool, subagent, resume, and cancellation semantics; a common
   client would be a leaky abstraction.
-- **Map a LiteLLM key to every CTXMILL policy/bucket:** one call can match
+- **Map a LiteLLM key to every STABLEHAND policy/bucket:** one call can match
   several independent policies but authenticate with one key; key churn and
   synchronization would still not represent arbitrary overlapping policies.
 - **Create one virtual key per run:** puts LiteLLM administration on the hot
   path, creates key churn, and does not atomically reserve concurrent policy
   spend.
-- **Synchronize CTXMILL policies to LiteLLM tag budgets:** couples product
+- **Synchronize STABLEHAND policies to LiteLLM tag budgets:** couples product
   semantics to edition-specific and version-sensitive gateway state.
 - **Use a key as call attribution:** credential rotation and shared-key traffic
   make the mapping incorrect.
@@ -1245,7 +1245,7 @@ cross-system inline-policy implementation.
   correctness path; add callback latency optimization only if measured.
 - **Query LiteLLM on every admission or UI render:** adds synchronous
   availability and latency dependencies.
-- **Read LiteLLM's database directly:** couples CTXMILL to vendor internals.
+- **Read LiteLLM's database directly:** couples STABLEHAND to vendor internals.
 - **Pass raw business tags to LiteLLM:** leaks policy/customer information.
 - **Unauthenticated internal gateway without network isolation:** turns network
   reachability into provider credential authority.

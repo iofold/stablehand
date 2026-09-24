@@ -8,42 +8,42 @@ OUTPUT_DIR="${2:-$ROOT_DIR/.tmp/performance/$RUN_SLUG}"
 BUN="${BUN:-bun}"
 
 export KUBECONFIG="${KUBECONFIG:-/path/to/workspace/infra/.k3s-kubeconfig.yaml}"
-export CTXMILL_PERF_NAMESPACE="$(
+export STABLEHAND_PERF_NAMESPACE="$(
   jq -r '.target.kubernetesNamespace' "$PROFILE_PATH"
 )"
-export CTXMILL_PERF_MAX_NODE_CPU_PERCENT="$(
+export STABLEHAND_PERF_MAX_NODE_CPU_PERCENT="$(
   jq -r '.safety.maxNodeCpuPercent' "$PROFILE_PATH"
 )"
-export CTXMILL_PERF_MAX_NODE_MEMORY_PERCENT="$(
+export STABLEHAND_PERF_MAX_NODE_MEMORY_PERCENT="$(
   jq -r '.safety.maxNodeMemoryPercent' "$PROFILE_PATH"
 )"
-export CTXMILL_PERF_ABORT_FILE="$OUTPUT_DIR/ABORT"
+export STABLEHAND_PERF_ABORT_FILE="$OUTPUT_DIR/ABORT"
 API_BASE="$(jq -r '.target.apiBase' "$PROFILE_PATH")"
-export CTXMILL_PERF_API_BASE="$API_BASE"
+export STABLEHAND_PERF_API_BASE="$API_BASE"
 MIN_GLOBAL_CONTAINERS="$(
   jq -r '.requirements.minGlobalContainers // 0' "$PROFILE_PATH"
 )"
-if [[ -n "${CTXMILL_PERF_RAMP_PATH:-}" ]]; then
-  export CTXMILL_PERF_PENDING_POD_GRACE_SECONDS="$(
-    jq -r '.pendingPodGraceSeconds' "$CTXMILL_PERF_RAMP_PATH"
+if [[ -n "${STABLEHAND_PERF_RAMP_PATH:-}" ]]; then
+  export STABLEHAND_PERF_PENDING_POD_GRACE_SECONDS="$(
+    jq -r '.pendingPodGraceSeconds' "$STABLEHAND_PERF_RAMP_PATH"
   )"
-  export CTXMILL_PERF_MAX_PENDING_SANDBOX_PODS=0
+  export STABLEHAND_PERF_MAX_PENDING_SANDBOX_PODS=0
 fi
 
 umask 077
 mkdir -p "$OUTPUT_DIR"
-rm -f "$CTXMILL_PERF_ABORT_FILE"
+rm -f "$STABLEHAND_PERF_ABORT_FILE"
 
-if [[ -z "${CTXMILL_API_TOKEN:-}" ]]; then
+if [[ -z "${STABLEHAND_API_TOKEN:-}" ]]; then
   token_base64="$(
-    kubectl -n "$CTXMILL_PERF_NAMESPACE" get secret ctxmill-core-secrets \
-      -o jsonpath='{.data.CTXMILL_API_TOKEN}'
+    kubectl -n "$STABLEHAND_PERF_NAMESPACE" get secret stablehand-core-secrets \
+      -o jsonpath='{.data.STABLEHAND_API_TOKEN}'
   )"
   if [[ -z "$token_base64" ]]; then
-    printf 'CTXMILL_API_TOKEN is absent from ctxmill-core-secrets\n' >&2
+    printf 'STABLEHAND_API_TOKEN is absent from stablehand-core-secrets\n' >&2
     exit 1
   fi
-  export CTXMILL_API_TOKEN="$(printf '%s' "$token_base64" | base64 -d)"
+  export STABLEHAND_API_TOKEN="$(printf '%s' "$token_base64" | base64 -d)"
 fi
 
 RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
@@ -53,7 +53,7 @@ RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
 if (( MIN_GLOBAL_CONTAINERS > 0 )); then
   configured_global_containers="$(
     curl -fsS "$API_BASE/sandbox/metrics" \
-      -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+      -H "Authorization: Bearer $STABLEHAND_API_TOKEN" \
       | jq -r '.limits.max_global_containers'
   )"
   if ! [[ "$configured_global_containers" =~ ^[0-9]+$ ]]; then
@@ -74,7 +74,7 @@ cleanup() {
     kill "$sampler_pid" 2>/dev/null || true
     wait "$sampler_pid" 2>/dev/null || true
   fi
-  unset CTXMILL_API_TOKEN token_base64
+  unset STABLEHAND_API_TOKEN token_base64
 }
 trap cleanup EXIT INT TERM
 
@@ -118,9 +118,9 @@ fi
 settle_deadline=$((SECONDS + 45))
 while (( SECONDS < settle_deadline )); do
   active_jobs="$(
-    kubectl -n "$CTXMILL_PERF_NAMESPACE" get jobs -o json \
+    kubectl -n "$STABLEHAND_PERF_NAMESPACE" get jobs -o json \
       | jq '[.items[] | select(
-        .metadata.labels["ctxmill.sandbox-session-id"] != null
+        .metadata.labels["stablehand.sandbox-session-id"] != null
         and ((.status.active // 0) > 0)
       )] | length'
   )"
@@ -142,7 +142,7 @@ wave_completed_at_ms="$(date -u -d "$wave_completed_at" +%s%3N)"
 while (( SECONDS < gateway_deadline )); do
   gateway_status="$(
     curl -fsS "$API_BASE/model-gateway/status" \
-      -H "Authorization: Bearer $CTXMILL_API_TOKEN" || \
+      -H "Authorization: Bearer $STABLEHAND_API_TOKEN" || \
       printf '{"state":"unavailable","pendingCalls":-1}'
   )"
   jq -c --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
@@ -179,10 +179,10 @@ fi
   "$OUTPUT_DIR/traces.jsonl"
 
 evaluation_status=0
-if [[ -n "${CTXMILL_PERF_RAMP_PATH:-}" ]]; then
+if [[ -n "${STABLEHAND_PERF_RAMP_PATH:-}" ]]; then
   set +e
   "$BUN" "$ROOT_DIR/tests/performance/cli.ts" evaluate \
-    --ramp "$CTXMILL_PERF_RAMP_PATH" \
+    --ramp "$STABLEHAND_PERF_RAMP_PATH" \
     --output "$OUTPUT_DIR"
   evaluation_status=$?
   set -e

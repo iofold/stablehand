@@ -11,7 +11,7 @@ The customer-shape question shapes whether dev2 must pass release gates and how 
 
 ## Decision
 
-CTXMill targets two customer modes simultaneously:
+Stablehand targets two customer modes simultaneously:
 
 1. **DIY self-hosted** — customer runs their own docker-compose stack from the repo. Required gate: dev1 docker-compose `@smoke`.
 2. **Hosted demo on dev2** — we operate dev2 for design partners. Required gate: dev2 `kubectl apply` deploy + `@smoke` against the demo domain.

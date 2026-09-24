@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ArtifactStore } from '../../../packages/ctxmill/src/artifact/artifact-store.js';
+import { ArtifactStore } from '../../../packages/stablehand/src/artifact/artifact-store.js';
 
 describe('ArtifactStore', () => {
   beforeEach(() => {

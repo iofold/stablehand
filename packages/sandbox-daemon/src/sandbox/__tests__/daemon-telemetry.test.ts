@@ -1,5 +1,5 @@
 import { create } from '@bufbuild/protobuf';
-import { KillSessionRequestSchema } from '@ctxmill/proto/sandbox/v1';
+import { KillSessionRequestSchema } from '@stablehand/proto/sandbox/v1';
 import { describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({

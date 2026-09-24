@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import { Code, ConnectError } from '@connectrpc/connect';
-import type { TurnDeliveryCapability } from '@ctxmill/proto/sandbox/v1';
+import type { TurnDeliveryCapability } from '@stablehand/proto/sandbox/v1';
 
 import {
   cloneTurnDeliveryCapability,

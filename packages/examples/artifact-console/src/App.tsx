@@ -1,22 +1,22 @@
 import {
-  CtxmillComposer,
-  CtxmillHITL,
-  CtxmillProvider,
-  CtxmillThread,
-  useCtxmillChat,
-  type CtxmillA2UIComponents,
-  type CtxmillRunPhase,
-} from '@ctxmill/react';
-import { AgentListResponseSchema, type Agent } from '@ctxmill/contracts';
+  StablehandComposer,
+  StablehandHITL,
+  StablehandProvider,
+  StablehandThread,
+  useStablehandChat,
+  type StablehandA2UIComponents,
+  type StablehandRunPhase,
+} from '@stablehand/react';
+import { AgentListResponseSchema, type Agent } from '@stablehand/contracts';
 import { KeyRound, LogOut, MessageSquarePlus, Plug, Square } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { chartComponents } from './charts';
 
-const STORAGE_KEY = 'ctxmill-console-connection';
+const STORAGE_KEY = 'stablehand-console-connection';
 const DEFAULT_API_BASE = 'https://stablehand.staging.example.com/api';
 
-const PHASE_CHIP_LABELS: Partial<Record<CtxmillRunPhase, string>> = {
+const PHASE_CHIP_LABELS: Partial<Record<StablehandRunPhase, string>> = {
   submitted: 'Sending',
   provisioning: 'Starting sandbox',
   thinking: 'Thinking',
@@ -101,8 +101,8 @@ function TokenGate({ onConnect }: { onConnect: (connection: Connection, agents: 
             <KeyRound className="h-5 w-5 text-accent-300" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold text-surface-100">CTXMill Console</h1>
-            <p className="text-xs text-surface-400">Connect to a CTXMill deployment to chat with its agents.</p>
+            <h1 className="text-lg font-semibold text-surface-100">Stablehand Console</h1>
+            <p className="text-xs text-surface-400">Connect to a Stablehand deployment to chat with its agents.</p>
           </div>
         </div>
 
@@ -122,7 +122,7 @@ function TokenGate({ onConnect }: { onConnect: (connection: Connection, agents: 
             type="password"
             value={token}
             onChange={(event) => setToken(event.currentTarget.value)}
-            placeholder="CTXMILL_API_TOKEN"
+            placeholder="STABLEHAND_API_TOKEN"
             className="w-full rounded-lg border border-surface-600/40 bg-surface-900 px-3 py-2 font-mono text-sm text-surface-200 focus:outline-none focus:border-accent-500/60"
           />
         </label>
@@ -154,7 +154,7 @@ function ChatSurface({
 }: {
   agent: Agent;
   connection: Connection;
-  components: CtxmillA2UIComponents;
+  components: StablehandA2UIComponents;
 }) {
   // Remounting on threadKey gives a fresh conversation without a reload.
   const [threadKey, setThreadKey] = useState(0);
@@ -177,10 +177,10 @@ function ChatSurfaceInner({
 }: {
   agent: Agent;
   connection: Connection;
-  components: CtxmillA2UIComponents;
+  components: StablehandA2UIComponents;
   onNewConversation: () => void;
 }) {
-  const chat = useCtxmillChat({
+  const chat = useStablehandChat({
     agentId: agent.id,
     apiBase: connection.apiBase,
     headers: () => ({ Authorization: `Bearer ${connection.token}` }),
@@ -248,7 +248,7 @@ function ChatSurfaceInner({
             ))}
           </div>
         ) : (
-          <CtxmillThread
+          <StablehandThread
             messages={chat.messages}
             components={components}
             isRunning={chat.isRunning}
@@ -260,7 +260,7 @@ function ChatSurfaceInner({
 
       {chat.pendingHitl ? (
         <div className="px-5 pb-2">
-          <CtxmillHITL request={chat.pendingHitl} onResolve={chat.resolveHitl} />
+          <StablehandHITL request={chat.pendingHitl} onResolve={chat.resolveHitl} />
         </div>
       ) : null}
 
@@ -271,7 +271,7 @@ function ChatSurfaceInner({
       ) : null}
 
       <div className="border-t border-surface-700 px-5 py-3">
-        <CtxmillComposer
+        <StablehandComposer
           onSend={chat.sendMessage}
           disabled={chat.isRunning || Boolean(chat.pendingHitl)}
           placeholder="Ask for a chart, a table, or an approval step…"
@@ -307,7 +307,7 @@ export function App() {
   const selected = agents.find((agent) => agent.id === selectedId) ?? null;
 
   return (
-    <CtxmillProvider
+    <StablehandProvider
       apiBase={connection.apiBase}
       headers={() => ({ Authorization: `Bearer ${connection.token}` })}
       components={components}
@@ -316,7 +316,7 @@ export function App() {
         <aside className="flex w-64 flex-shrink-0 flex-col border-r border-surface-700">
           <div className="flex items-center justify-between border-b border-surface-700 px-4 py-3">
             <div>
-              <p className="text-[10px] uppercase tracking-wider text-surface-500">CTXMill</p>
+              <p className="text-[10px] uppercase tracking-wider text-surface-500">Stablehand</p>
               <h1 className="text-sm font-semibold text-surface-100">Console</h1>
             </div>
             <button
@@ -362,6 +362,6 @@ export function App() {
           </section>
         )}
       </main>
-    </CtxmillProvider>
+    </StablehandProvider>
   );
 }

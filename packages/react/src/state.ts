@@ -1,19 +1,19 @@
 import {
-  createCtxmillId,
+  createStablehandId,
   getA2UIBlock,
   getInterruptRequest,
-  type CtxmillA2UIBlock,
-  type CtxmillInterruptRequest,
-  type CtxmillMessage,
-  type CtxmillStreamEvent,
-} from '@ctxmill/client';
+  type StablehandA2UIBlock,
+  type StablehandInterruptRequest,
+  type StablehandMessage,
+  type StablehandStreamEvent,
+} from '@stablehand/client';
 
-export interface CtxmillTextPart {
+export interface StablehandTextPart {
   type: 'text';
   content: string;
 }
 
-export interface CtxmillToolCallPart {
+export interface StablehandToolCallPart {
   type: 'tool_call';
   id: string;
   name: string;
@@ -23,18 +23,18 @@ export interface CtxmillToolCallPart {
   status: 'running' | 'complete' | 'error';
 }
 
-export interface CtxmillA2UIPart {
+export interface StablehandA2UIPart {
   type: 'a2ui';
-  block: CtxmillA2UIBlock;
+  block: StablehandA2UIBlock;
 }
 
-export type CtxmillChatPart = CtxmillTextPart | CtxmillToolCallPart | CtxmillA2UIPart;
+export type StablehandChatPart = StablehandTextPart | StablehandToolCallPart | StablehandA2UIPart;
 
-export interface CtxmillChatMessage {
+export interface StablehandChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
-  parts: CtxmillChatPart[];
+  parts: StablehandChatPart[];
   toolCallId?: string;
   createdAt: string;
 }
@@ -45,31 +45,31 @@ export interface CtxmillChatMessage {
  * thinking (model working, no visible text yet) → streaming (text flowing)
  * with tool (a tool call is executing) interleaved. 'idle' when no run.
  */
-export type CtxmillRunPhase = 'idle' | 'submitted' | 'provisioning' | 'thinking' | 'tool' | 'streaming';
+export type StablehandRunPhase = 'idle' | 'submitted' | 'provisioning' | 'thinking' | 'tool' | 'streaming';
 
-export interface CtxmillChatState {
+export interface StablehandChatState {
   threadId: string;
-  messages: CtxmillChatMessage[];
+  messages: StablehandChatMessage[];
   isRunning: boolean;
-  runPhase: CtxmillRunPhase;
+  runPhase: StablehandRunPhase;
   error: string | null;
-  pendingHitl: CtxmillInterruptRequest | null;
+  pendingHitl: StablehandInterruptRequest | null;
   activeAssistantMessageId: string | null;
   messageRevisions: Map<string, number>;
   optimisticUserMessageIds: string[];
   reconciledUserMessageIds: string[];
 }
 
-export type CtxmillPersistedMessage = Omit<CtxmillMessage, 'createdAt'> & {
+export type StablehandPersistedMessage = Omit<StablehandMessage, 'createdAt'> & {
   messageRevision: number;
   createdAt?: number | string;
 };
 
-export type CtxmillChatAction =
-  | { type: 'load_messages'; messages: CtxmillPersistedMessage[]; threadId?: string }
-  | { type: 'append_user_message'; message: CtxmillMessage }
+export type StablehandChatAction =
+  | { type: 'load_messages'; messages: StablehandPersistedMessage[]; threadId?: string }
+  | { type: 'append_user_message'; message: StablehandMessage }
   | { type: 'discard_optimistic_user_message'; messageId: string }
-  | { type: 'stream_event'; event: CtxmillStreamEvent }
+  | { type: 'stream_event'; event: StablehandStreamEvent }
   | { type: 'hitl_resolved'; interruptId?: string }
   | { type: 'set_error'; error: string | null }
   | { type: 'run_settled' }
@@ -85,9 +85,9 @@ function canonicalCreatedAt(value: number | string | undefined): string {
   return Number.isNaN(parsed.getTime()) ? nowIso() : parsed.toISOString();
 }
 
-export function createInitialChatState(threadId?: string): CtxmillChatState {
+export function createInitialChatState(threadId?: string): StablehandChatState {
   return {
-    threadId: threadId ?? createCtxmillId('thread'),
+    threadId: threadId ?? createStablehandId('thread'),
     messages: [],
     isRunning: false,
     runPhase: 'idle',
@@ -100,7 +100,7 @@ export function createInitialChatState(threadId?: string): CtxmillChatState {
   };
 }
 
-export function toCtxmillMessages(messages: CtxmillChatMessage[]): CtxmillMessage[] {
+export function toStablehandMessages(messages: StablehandChatMessage[]): StablehandMessage[] {
   return messages
     .filter((message) => message.role === 'user' || message.role === 'assistant' || message.role === 'system' || message.role === 'tool')
     .map((message) => ({
@@ -114,17 +114,17 @@ export function toCtxmillMessages(messages: CtxmillChatMessage[]): CtxmillMessag
 
 function normalizeToolStatus(
   status: 'pending' | 'running' | 'complete' | 'error',
-): CtxmillToolCallPart['status'] {
+): StablehandToolCallPart['status'] {
   return status === 'pending' ? 'running' : status;
 }
 
 function normalizeMessage(
-  message: Omit<CtxmillMessage, 'createdAt'> & {
+  message: Omit<StablehandMessage, 'createdAt'> & {
     createdAt?: number | string;
   },
-): CtxmillChatMessage {
+): StablehandChatMessage {
   const content = message.content ?? '';
-  const parts: CtxmillChatPart[] = [];
+  const parts: StablehandChatPart[] = [];
   const partToolCallIds = new Set<string>();
   if (message.parts && message.parts.length > 0) {
     for (const part of message.parts) {
@@ -185,34 +185,34 @@ function revisionBaselines(
   }));
 }
 
-type CtxmillCustomEvent = Extract<CtxmillStreamEvent, { type: 'CUSTOM' }>;
+type StablehandCustomEvent = Extract<StablehandStreamEvent, { type: 'CUSTOM' }>;
 type MessageCommittedCustomEvent = Extract<
-  CtxmillCustomEvent,
-  { name: 'ctxmill.message.committed' }
+  StablehandCustomEvent,
+  { name: 'stablehand.message.committed' }
 >;
 type MessageUpdatedCustomEvent = Extract<
-  CtxmillCustomEvent,
-  { name: 'ctxmill.message.updated' }
+  StablehandCustomEvent,
+  { name: 'stablehand.message.updated' }
 >;
 
 function isMessageCommittedEvent(
-  event: CtxmillCustomEvent,
+  event: StablehandCustomEvent,
 ): event is MessageCommittedCustomEvent {
-  return event.name === 'ctxmill.message.committed' && 'messageId' in event;
+  return event.name === 'stablehand.message.committed' && 'messageId' in event;
 }
 
 function isMessageUpdatedEvent(
-  event: CtxmillCustomEvent,
+  event: StablehandCustomEvent,
 ): event is MessageUpdatedCustomEvent {
-  return event.name === 'ctxmill.message.updated'
+  return event.name === 'stablehand.message.updated'
     && 'messageId' in event
     && 'messageRevision' in event;
 }
 
 function canonicalMessageFromEvent(
-  event: CtxmillCustomEvent,
-  existing: CtxmillChatMessage | undefined,
-): CtxmillChatMessage | null {
+  event: StablehandCustomEvent,
+  existing: StablehandChatMessage | undefined,
+): StablehandChatMessage | null {
   if (
     !('messageId' in event)
     || typeof event.messageId !== 'string'
@@ -238,7 +238,7 @@ function canonicalMessageFromEvent(
   };
 }
 
-function canonicalToolCallIds(event: CtxmillCustomEvent): Set<string> {
+function canonicalToolCallIds(event: StablehandCustomEvent): Set<string> {
   const ids = new Set<string>();
   if ('parts' in event && Array.isArray(event.parts)) {
     for (const part of event.parts) {
@@ -252,7 +252,7 @@ function canonicalToolCallIds(event: CtxmillCustomEvent): Set<string> {
 }
 
 function messageContainsAnyToolCall(
-  message: CtxmillChatMessage,
+  message: StablehandChatMessage,
   toolCallIds: ReadonlySet<string>,
 ): boolean {
   return message.parts.some((part) =>
@@ -261,11 +261,11 @@ function messageContainsAnyToolCall(
 }
 
 function upsertCanonicalMessage(
-  messages: CtxmillChatMessage[],
-  message: CtxmillChatMessage,
+  messages: StablehandChatMessage[],
+  message: StablehandChatMessage,
   transientMessageId: string | null,
   toolCallIds: ReadonlySet<string>,
-): CtxmillChatMessage[] {
+): StablehandChatMessage[] {
   const retained = messages.filter((candidate) => {
     if (candidate.id === message.id) return true;
     if (transientMessageId && candidate.id === transientMessageId) return false;
@@ -274,23 +274,23 @@ function upsertCanonicalMessage(
   return updateMessage(retained, message.id, () => message, message.role);
 }
 
-function assistantIdFor(event: CtxmillStreamEvent): string {
+function assistantIdFor(event: StablehandStreamEvent): string {
   if ('messageId' in event && typeof event.messageId === 'string') {
     return event.messageId;
   }
   if ('runId' in event && typeof event.runId === 'string') {
     return `assistant-${event.runId}`;
   }
-  return createCtxmillId('assistant');
+  return createStablehandId('assistant');
 }
 
 function updateMessage(
-  messages: CtxmillChatMessage[],
+  messages: StablehandChatMessage[],
   id: string,
-  update: (message: CtxmillChatMessage) => CtxmillChatMessage,
-  role: CtxmillChatMessage['role'] = 'assistant',
+  update: (message: StablehandChatMessage) => StablehandChatMessage,
+  role: StablehandChatMessage['role'] = 'assistant',
   createdAt = nowIso(),
-): CtxmillChatMessage[] {
+): StablehandChatMessage[] {
   let found = false;
   const next = messages.map((message) => {
     if (message.id !== id) return message;
@@ -310,7 +310,7 @@ function updateMessage(
   ];
 }
 
-function appendText(message: CtxmillChatMessage, delta: string): CtxmillChatMessage {
+function appendText(message: StablehandChatMessage, delta: string): StablehandChatMessage {
   const parts = [...message.parts];
   const last = parts[parts.length - 1];
   if (last?.type === 'text') {
@@ -326,10 +326,10 @@ function appendText(message: CtxmillChatMessage, delta: string): CtxmillChatMess
 }
 
 function updateToolPart(
-  message: CtxmillChatMessage,
+  message: StablehandChatMessage,
   toolCallId: string,
-  update: (part: CtxmillToolCallPart) => CtxmillToolCallPart,
-): CtxmillChatMessage {
+  update: (part: StablehandToolCallPart) => StablehandToolCallPart,
+): StablehandChatMessage {
   let found = false;
   const parts = message.parts.map((part) => {
     if (part.type !== 'tool_call' || part.id !== toolCallId) return part;
@@ -348,17 +348,17 @@ function updateToolPart(
   return { ...message, parts };
 }
 
-function appendA2UIBlock(message: CtxmillChatMessage, block: CtxmillA2UIBlock): CtxmillChatMessage {
+function appendA2UIBlock(message: StablehandChatMessage, block: StablehandA2UIBlock): StablehandChatMessage {
   return {
     ...message,
     parts: [...message.parts, { type: 'a2ui', block }],
   };
 }
 
-export function reduceCtxmillChatState(
-  state: CtxmillChatState,
-  action: CtxmillChatAction,
-): CtxmillChatState {
+export function reduceStablehandChatState(
+  state: StablehandChatState,
+  action: StablehandChatAction,
+): StablehandChatState {
   switch (action.type) {
     case 'load_messages': {
       const messages = action.messages.map(normalizeMessage);
@@ -596,7 +596,7 @@ export function reduceCtxmillChatState(
         };
       }
       if (event.type === 'CUSTOM') {
-        if (event.name === 'ctxmill.turn.pending') {
+        if (event.name === 'stablehand.turn.pending') {
           // Persisted during run preparation and replayed to fresh
           // subscribers: the turn is queued and the sandbox is spinning up.
           return state.runPhase === 'submitted' || state.runPhase === 'idle'
@@ -651,7 +651,7 @@ export function reduceCtxmillChatState(
         if (interruptRequest) {
           return { ...state, pendingHitl: interruptRequest };
         }
-        if (event.name === 'ctxmill.interrupt.resolved' && 'interruptId' in event) {
+        if (event.name === 'stablehand.interrupt.resolved' && 'interruptId' in event) {
           return event.interruptId === state.pendingHitl?.interruptId
             ? { ...state, pendingHitl: null }
             : state;

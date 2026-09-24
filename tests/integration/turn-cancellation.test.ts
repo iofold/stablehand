@@ -8,12 +8,12 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
-import { AgentTurnService } from '../../packages/ctxmill/src/orchestrator/agent-turn-service.js';
-import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
-import type { SandboxSessionManager } from '../../packages/ctxmill/src/orchestrator/sandbox-session-manager.js';
-import type { SessionTurnExecutor } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
-import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
+import { TypedEventBus } from '../../packages/stablehand/src/events/bus.js';
+import { AgentTurnService } from '../../packages/stablehand/src/orchestrator/agent-turn-service.js';
+import type { DatabaseRepository } from '../../packages/stablehand/src/database/repository.js';
+import type { SandboxSessionManager } from '../../packages/stablehand/src/orchestrator/sandbox-session-manager.js';
+import type { SessionTurnExecutor } from '../../packages/stablehand/src/orchestrator/session-turn-service.js';
+import type { AgentDefinition, Message } from '@stablehand/sandbox-daemon';
 import {
   createTestBus,
   collectEvents,

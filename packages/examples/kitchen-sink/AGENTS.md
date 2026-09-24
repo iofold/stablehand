@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-3 agents (LangGraph, Claude, PI) chained via events, 11 shared tools, HITL approval patterns. Canonical example for building multi-agent workflows in ctxmill.
+3 agents (LangGraph, Claude, PI) chained via events, 11 shared tools, HITL approval patterns. Canonical example for building multi-agent workflows in stablehand.
 
 ## STRUCTURE
 
@@ -57,7 +57,7 @@ Cascade protection: `MAX_TRIGGER_DEPTH=5` prevents infinite loops.
 ## AGENT MANIFEST PATTERN
 
 ```yaml
-apiVersion: ctxmill.io/v1
+apiVersion: stablehand.io/v1
 kind: Agent
 metadata:
   name: agent-id
@@ -86,7 +86,7 @@ spec:
 ## TOOL DEFINITION PATTERN
 
 ```typescript
-import { defineTool } from 'ctxmill';
+import { defineTool } from 'stablehand';
 import { z } from 'zod';
 
 export default defineTool({

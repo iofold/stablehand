@@ -1,6 +1,6 @@
 ---
 name: smoke-test
-description: Quick stress-test smoke validation for ctxmill — verifies each harness and model works
+description: Quick stress-test smoke validation for stablehand — verifies each harness and model works
 ---
 
 # Stress smoke test

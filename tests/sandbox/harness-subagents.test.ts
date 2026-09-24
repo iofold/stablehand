@@ -16,13 +16,13 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { agentEventToSessionEvent } from '../../packages/ctxmill/src/sandbox/proto-convert.js';
-import { ContainerManager } from '../../packages/ctxmill/src/sandbox/container-manager.js';
+import { agentEventToSessionEvent } from '../../packages/stablehand/src/sandbox/proto-convert.js';
+import { ContainerManager } from '../../packages/stablehand/src/sandbox/container-manager.js';
 import {
   createMockContainer,
   createMockDocker,
 } from '../utils/event-bus-test-helpers.js';
-import type { AgentEvent, AgentHarness } from '@ctxmill/sandbox-daemon';
+import type { AgentEvent, AgentHarness } from '@stablehand/sandbox-daemon';
 
 type MockHarnessRunConfig = {
   harnessConfig: Record<string, unknown>;
@@ -426,9 +426,9 @@ describe('Harness-Native Sub-Agents', () => {
   describe('each harness can be instantiated without orchestrator deps', () => {
     async function constructHarness(name: 'pi-agent' | 'langgraph' | 'claude-agents'): Promise<AgentHarness> {
       const constructors = {
-        'pi-agent': async () => new (await import('@ctxmill/sandbox-daemon')).PIAgentHarness(),
-        langgraph: async () => new (await import('@ctxmill/sandbox-daemon')).LangGraphHarness(),
-        'claude-agents': async () => new (await import('@ctxmill/sandbox-daemon')).ClaudeAgentsHarness(),
+        'pi-agent': async () => new (await import('@stablehand/sandbox-daemon')).PIAgentHarness(),
+        langgraph: async () => new (await import('@stablehand/sandbox-daemon')).LangGraphHarness(),
+        'claude-agents': async () => new (await import('@stablehand/sandbox-daemon')).ClaudeAgentsHarness(),
       };
       return constructors[name]();
     }

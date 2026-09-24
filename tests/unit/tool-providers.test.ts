@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { z } from 'zod';
-import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
-import { LocalToolProvider } from '../../packages/ctxmill/src/tool/providers/local.js';
-import { MCPToolProvider } from '../../packages/ctxmill/src/tool/providers/mcp.js';
-import { ComposioToolProvider } from '../../packages/ctxmill/src/tool/providers/composio.js';
-import type { ToolDefinition, ToolContext } from '@ctxmill/sandbox-daemon';
+import { LocalFunctionExecutor } from '../../packages/stablehand/src/tool/executor.js';
+import { LocalToolProvider } from '../../packages/stablehand/src/tool/providers/local.js';
+import { MCPToolProvider } from '../../packages/stablehand/src/tool/providers/mcp.js';
+import { ComposioToolProvider } from '../../packages/stablehand/src/tool/providers/composio.js';
+import type { ToolDefinition, ToolContext } from '@stablehand/sandbox-daemon';
 
 const mockCtx: ToolContext = {
   agentId: 'test-agent',

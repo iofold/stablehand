@@ -1,5 +1,5 @@
 {
-  "name": "@ctxmill/example-kitchen-sink",
+  "name": "@stablehand/example-kitchen-sink",
   "version": "0.1.0",
   "license": "MIT",
   "private": true,
@@ -10,8 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ctxmill/manifest": "workspace:*",
-    "ctxmill": "workspace:*",
+    "@stablehand/manifest": "workspace:*",
+    "stablehand": "workspace:*",
     "zod": "^4.3.6"
   },
   "devDependencies": {

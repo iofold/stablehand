@@ -4,7 +4,7 @@ import { SystemMessage } from '@langchain/core/messages';
 import type { AgentEvent, HarnessSessionConfig } from '../types.js';
 import type { Message } from '../../types.js';
 import type { ToolDefinition } from '../../tool/types.js';
-import type { NativeToolPolicy } from '@ctxmill/contracts';
+import type { NativeToolPolicy } from '@stablehand/contracts';
 import {
   assertAbortContract,
   assertApprovalFlowContract,
@@ -185,7 +185,7 @@ describe('LangGraphHarness message history', () => {
       readFileBlocked: true,
       executeBlocked: true,
     },
-  ])('enforces the $label native-tool policy without blocking ctxmill tools', async ({
+  ])('enforces the $label native-tool policy without blocking stablehand tools', async ({
     nativeToolPolicy,
     readFileBlocked,
     executeBlocked,
@@ -195,8 +195,8 @@ describe('LangGraphHarness message history', () => {
       data: { chunk: { content: 'Done.' } },
     }]));
     const customTool: ToolDefinition = {
-      name: 'ctxmill_search',
-      description: 'Search ctxmill data',
+      name: 'stablehand_search',
+      description: 'Search stablehand data',
       input: z.object({ query: z.string() }),
       handler: async () => 'result',
     };
@@ -216,7 +216,7 @@ describe('LangGraphHarness message history', () => {
         }>;
       } | undefined;
       const middleware = params?.middleware?.find((candidate) =>
-        candidate.name === 'ctxmill-native-tool-policy',
+        candidate.name === 'stablehand-native-tool-policy',
       );
 
       expect(middleware?.beforeToolCall?.({ name: 'read_file' })).toEqual(expect.objectContaining({
@@ -225,7 +225,7 @@ describe('LangGraphHarness message history', () => {
       expect(middleware?.beforeToolCall?.({ name: 'execute' })).toEqual(expect.objectContaining({
         blocked: executeBlocked,
       }));
-      expect(middleware?.beforeToolCall?.({ name: 'ctxmill_search' })).toEqual({ blocked: false });
+      expect(middleware?.beforeToolCall?.({ name: 'stablehand_search' })).toEqual({ blocked: false });
     } finally {
       await session.close();
     }
@@ -252,7 +252,7 @@ describe('LangGraphHarness message history', () => {
         middleware?: Array<{ name?: string }>;
       } | undefined;
       expect(params?.middleware).not.toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: 'ctxmill-native-tool-policy' }),
+        expect.objectContaining({ name: 'stablehand-native-tool-policy' }),
       ]));
     } finally {
       await session.close();
@@ -283,7 +283,7 @@ describe('LangGraphHarness message history', () => {
         }>;
       } | undefined;
       const middleware = params?.middleware?.find((candidate) =>
-        candidate.name === 'ctxmill-system-message-compatibility',
+        candidate.name === 'stablehand-system-message-compatibility',
       );
       const handler = vi.fn(async (request: Record<string, unknown>) => request);
 
@@ -463,7 +463,7 @@ describe('LangGraphHarness message history', () => {
         event: 'on_tool_start',
         name: 'search',
         run_id: 'run-langgraph-search',
-        data: { input: { query: 'ctxmill' } },
+        data: { input: { query: 'stablehand' } },
       },
       {
         event: 'on_tool_end',
@@ -493,7 +493,7 @@ describe('LangGraphHarness message history', () => {
         expectedTool: {
           id: 'tool-langgraph-search',
           name: 'search',
-          args: { query: 'ctxmill' },
+          args: { query: 'stablehand' },
           result: 'langgraph search result',
         },
       });
@@ -504,7 +504,7 @@ describe('LangGraphHarness message history', () => {
 
   it('traces LangGraph normalized AgentEvents through the shared decorator', async () => {
     process.env.LANGSMITH_TRACING = 'true';
-    process.env.LANGSMITH_PROJECT = 'ctxmill-test';
+    process.env.LANGSMITH_PROJECT = 'stablehand-test';
     mockStreamEvents.mockImplementation(() => langGraphStream([
       {
         event: 'on_chat_model_stream',
@@ -530,7 +530,7 @@ describe('LangGraphHarness message history', () => {
     expect(root.config).toEqual(expect.objectContaining({
       name: 'langgraph-agent-agent-1',
       run_type: 'chain',
-      project_name: 'ctxmill-test',
+      project_name: 'stablehand-test',
     }));
     const turn = root.children[0];
     expect(turn.config).toEqual(expect.objectContaining({

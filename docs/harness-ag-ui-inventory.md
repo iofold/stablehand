@@ -1,8 +1,8 @@
-# CTXMILL HARNESS AG-UI INVENTORY
+# STABLEHAND HARNESS AG-UI INVENTORY
 ## Historical Snapshot of Harness/Event Support
 
 Generated: 2026-03-25  
-Scope: `packages/ctxmill/src/harness/` + `packages/proto/` + `packages/examples/kitchen-sink/`
+Scope: `packages/stablehand/src/harness/` + `packages/proto/` + `packages/examples/kitchen-sink/`
 
 > Historical inventory. This file preserves the 2026-03-25 snapshot and uses
 > "current" to mean current at that time. Harness package boundaries and event
@@ -14,8 +14,8 @@ Scope: `packages/ctxmill/src/harness/` + `packages/proto/` + `packages/examples/
 
 ## HARNESS REGISTRY & SELECTION
 
-**File**: `packages/ctxmill/src/harness/registry.ts`  
-**DI Container**: `packages/ctxmill/src/config/container.ts`
+**File**: `packages/stablehand/src/harness/registry.ts`  
+**DI Container**: `packages/stablehand/src/config/container.ts`
 
 ### Historically Registered Harnesses (3/5)
 ```
@@ -31,7 +31,7 @@ harnessRegistry.register(new PIAgentHarness());
 
 ## 1. LANGGRAPH HARNESS
 
-**File**: `packages/ctxmill/src/harness/langgraph.ts` (411 lines)  
+**File**: `packages/stablehand/src/harness/langgraph.ts` (411 lines)  
 **Export**: `LangGraphHarness`, `LangGraphConfigSchema`  
 **Name ID**: `'langgraph'`
 
@@ -67,7 +67,7 @@ harnessRegistry.register(new PIAgentHarness());
 - **Native Tool Policy**: `nativeToolPolicy` applies the common `all`/`allow`/`deny`/`none` contract through middleware
 - **Knowledge Context**: Stub (no real knowledge lookup)
 - **Transcript**: Maintains full history, passes to SDK each turn
-- **Skills**: Historical claim; current CTXMill does not auto-seed `.ctxmill/skills`
+- **Skills**: Historical claim; current Stablehand does not auto-seed `.stablehand/skills`
 - **Stateless**: Creates fresh agent per turn (no session state)
 
 ### Tool Execution Flow
@@ -100,7 +100,7 @@ nativeToolPolicy:
 
 ## 2. CLAUDE AGENTS HARNESS
 
-**File**: `packages/ctxmill/src/harness/claude-agents.ts` (864 lines)  
+**File**: `packages/stablehand/src/harness/claude-agents.ts` (864 lines)  
 **Export**: `ClaudeAgentsHarness`, `ClaudeAgentsConfigSchema`  
 **Name ID**: `'claude-agents'`
 
@@ -162,7 +162,7 @@ nativeToolPolicy:
 
 ## 3. PI AGENT HARNESS
 
-**File**: `packages/ctxmill/src/harness/pi-agent.ts` (588 lines)  
+**File**: `packages/stablehand/src/harness/pi-agent.ts` (588 lines)  
 **Export**: `PIAgentHarness`, `PIAgentConfigSchema`  
 **Name ID**: `'pi-agent'`
 
@@ -222,7 +222,7 @@ nativeToolPolicy:
 
 ## PROTO AG-UI EVENT DEFINITIONS
 
-**File**: `packages/proto/ctxmill/sandbox/v1/sandbox.proto`
+**File**: `packages/proto/stablehand/sandbox/v1/sandbox.proto`
 
 ### SessionEvent Message Types (Carrier)
 ```protobuf
@@ -301,7 +301,7 @@ SSE event → React UI
 ## SHARED AG-UI TYPES
 
 **File**: `packages/shared/src/events.ts`  
-**Re-exported**: `packages/ctxmill/src/events/types.ts`
+**Re-exported**: `packages/stablehand/src/events/types.ts`
 
 ### AG-UI Event Contract (All Harnesses)
 ```typescript
@@ -344,7 +344,7 @@ interface TokenUsage {
 ## TOOL INTEGRATION PATTERNS
 
 ### Common to All 3 Harnesses
-1. **Tool Definition Interface** (`packages/ctxmill/src/tool/types.ts`):
+1. **Tool Definition Interface** (`packages/stablehand/src/tool/types.ts`):
    ```typescript
    interface ToolDefinition {
      name: string;
@@ -361,7 +361,7 @@ interface TokenUsage {
    - Orchestrator pauses, awaits user response via UI
    - Harness continues on approval callback
 
-3. **Execution Context** (`packages/ctxmill/src/tool/types.ts`):
+3. **Execution Context** (`packages/stablehand/src/tool/types.ts`):
    ```typescript
    interface ToolContext {
      agentId: string;
@@ -420,13 +420,13 @@ interface TokenUsage {
 **Likely Cause**: Immediate error  
 **Debug**:
 1. Check container logs: `docker logs <container-id>`
-2. Verify secrets injected: `CTXMILL_LOG_SECRETS=1`
+2. Verify secrets injected: `STABLEHAND_LOG_SECRETS=1`
 3. Check `message_committed` — should always be present
 
 ### If AG-UI Events Not Appearing
 **Likely Cause**: Proto conversion failure  
 **Check**:
-1. `packages/ctxmill/src/sandbox/proto-convert.ts convertAgentEvent()` coverage
+1. `packages/stablehand/src/sandbox/proto-convert.ts convertAgentEvent()` coverage
 2. Proto generation: `pnpm -C packages/proto build`
 3. SSE streaming: `/api/agents/:id/stream` endpoint
 
@@ -441,15 +441,15 @@ interface TokenUsage {
 
 | Purpose | Path |
 |---|---|
-| Harness Interface | `packages/ctxmill/src/harness/types.ts` |
-| LangGraph Implementation | `packages/ctxmill/src/harness/langgraph.ts` |
-| Claude Agents Implementation | `packages/ctxmill/src/harness/claude-agents.ts` |
-| PI Agent Implementation | `packages/ctxmill/src/harness/pi-agent.ts` |
-| Harness Registry | `packages/ctxmill/src/harness/registry.ts` |
-| Shared Utilities | `packages/ctxmill/src/harness/shared.ts` |
-| Proto Definitions | `packages/proto/ctxmill/sandbox/v1/sandbox.proto` |
-| Proto Conversion | `packages/ctxmill/src/sandbox/proto-convert.ts` |
+| Harness Interface | `packages/stablehand/src/harness/types.ts` |
+| LangGraph Implementation | `packages/stablehand/src/harness/langgraph.ts` |
+| Claude Agents Implementation | `packages/stablehand/src/harness/claude-agents.ts` |
+| PI Agent Implementation | `packages/stablehand/src/harness/pi-agent.ts` |
+| Harness Registry | `packages/stablehand/src/harness/registry.ts` |
+| Shared Utilities | `packages/stablehand/src/harness/shared.ts` |
+| Proto Definitions | `packages/proto/stablehand/sandbox/v1/sandbox.proto` |
+| Proto Conversion | `packages/stablehand/src/sandbox/proto-convert.ts` |
 | Event Types (shared) | `packages/shared/src/events.ts` |
-| Tool Types | `packages/ctxmill/src/tool/types.ts` |
+| Tool Types | `packages/stablehand/src/tool/types.ts` |
 | Kitchen Sink Agents | `packages/examples/kitchen-sink/agents/` |
 | Kitchen Sink Tools | `packages/examples/kitchen-sink/tools/` |

@@ -49,6 +49,6 @@ gateway state degraded forever.
 - Reconciler robustness debt is tracked separately (ctx-wpln: backoff,
   10k-row stall, poison-pill watermark, request timeouts).
 
-Relevant code: `packages/ctxmill/src/cost-control/model-gateway-reconciler.ts`,
-`packages/ctxmill/src/orchestrator/routes/model-gateway.ts`,
-`packages/ctxmill/src/database/repository.ts` (`settleAbandonedGatewayTurns`).
+Relevant code: `packages/stablehand/src/cost-control/model-gateway-reconciler.ts`,
+`packages/stablehand/src/orchestrator/routes/model-gateway.ts`,
+`packages/stablehand/src/database/repository.ts` (`settleAbandonedGatewayTurns`).
