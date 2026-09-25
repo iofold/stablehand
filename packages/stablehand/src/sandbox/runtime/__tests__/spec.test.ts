@@ -4,6 +4,8 @@ import {
   buildDockerContainerSpec,
   buildKubernetesJobSpec,
   buildSandboxOtelEnv,
+  buildSandboxEgressEnv,
+  SANDBOX_EGRESS_DEFAULT_NO_PROXY,
   resolveSandboxRuntimeDefaults,
   runtimeLabelsToContainerInfo,
   sanitizeKubernetesName,
@@ -138,6 +140,68 @@ describe('sandbox runtime spec builders', () => {
         'OPENAI_API_KEY=sk-test',
       ],
     });
+  });
+
+  it('routes sandbox egress through the proxy and mounts its CA when configured', () => {
+    const previous = {
+      url: process.env.STABLEHAND_SANDBOX_EGRESS_PROXY_URL,
+      noProxy: process.env.STABLEHAND_SANDBOX_NO_PROXY,
+    };
+    process.env.STABLEHAND_SANDBOX_EGRESS_PROXY_URL = 'http://egress:8080';
+    delete process.env.STABLEHAND_SANDBOX_NO_PROXY;
+    try {
+      const spec = buildDockerContainerSpec({
+        options: createOptions,
+        imagePrefix: 'stablehand/harness',
+        scopeId: 'scope-1',
+        networkName: 'stablehand-agents',
+        defaults,
+        startupGraceMs: 90_000,
+        startedAtIso: '2026-07-08T15:00:00.000Z',
+        orchestratorUrl: 'http://orchestrator:3001',
+        sandboxOtelEnv: [],
+        egressCaVolume: 'stablehand_egress-ca-public',
+      });
+
+      expect(spec.createOptions.Env).toEqual([
+        `NODE_OPTIONS=--max-old-space-size=${Math.floor(2048 * 0.9)}`,
+        'SANDBOX_PORT=50051',
+        'STABLEHAND_HARNESS=claude-agents',
+        'ORCHESTRATOR_URL=http://orchestrator:3001',
+        'HTTP_PROXY=http://egress:8080',
+        'HTTPS_PROXY=http://egress:8080',
+        'http_proxy=http://egress:8080',
+        'https_proxy=http://egress:8080',
+        `NO_PROXY=${SANDBOX_EGRESS_DEFAULT_NO_PROXY}`,
+        `no_proxy=${SANDBOX_EGRESS_DEFAULT_NO_PROXY}`,
+        'NODE_USE_ENV_PROXY=1',
+        'STABLEHAND_EGRESS_CA=/etc/stablehand/egress-ca/egress-ca.pem',
+        'NODE_EXTRA_CA_CERTS=/etc/stablehand/egress-ca/egress-ca.pem',
+        'SSL_CERT_FILE=/etc/stablehand/egress-ca/egress-ca.pem',
+        'REQUESTS_CA_BUNDLE=/etc/stablehand/egress-ca/egress-ca.pem',
+        'CURL_CA_BUNDLE=/etc/stablehand/egress-ca/egress-ca.pem',
+        'GIT_SSL_CAINFO=/etc/stablehand/egress-ca/egress-ca.pem',
+        'OPENAI_API_KEY=sk-test',
+      ]);
+      expect(spec.createOptions.HostConfig.Mounts).toEqual([
+        {
+          Type: 'volume',
+          Source: 'stablehand_egress-ca-public',
+          Target: '/etc/stablehand/egress-ca',
+          ReadOnly: true,
+        },
+      ]);
+      expect(spec.createOptions.HostConfig.DnsOptions).toEqual(['timeout:2', 'attempts:1']);
+    } finally {
+      if (previous.url === undefined) delete process.env.STABLEHAND_SANDBOX_EGRESS_PROXY_URL;
+      else process.env.STABLEHAND_SANDBOX_EGRESS_PROXY_URL = previous.url;
+      if (previous.noProxy !== undefined) process.env.STABLEHAND_SANDBOX_NO_PROXY = previous.noProxy;
+    }
+  });
+
+  it('leaves sandbox egress untouched when no proxy is configured', () => {
+    expect(buildSandboxEgressEnv({})).toEqual([]);
+    expect(buildSandboxEgressEnv({ STABLEHAND_SANDBOX_EGRESS_PROXY_URL: '   ' })).toEqual([]);
   });
 
   it('builds the Kubernetes Job manifest from shared runtime inputs', () => {

@@ -45,3 +45,4 @@ docs/plans/private/
 
 # Local compose overrides (operator-specific, never committed)
 docker-compose.override.yml
+__pycache__/

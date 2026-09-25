@@ -75,7 +75,7 @@ pnpm test
 | UI | http://localhost:3200 |
 | API | http://localhost:3002 |
 | PostgreSQL | localhost:5433 |
-| Egress proxy (sandbox profile) | localhost:3128 |
+| Sandbox egress proxy (internal agents network only) | egress:8080 |
 | PgAdmin (debug profile) | http://localhost:5050 |
 
 ## Project Structure

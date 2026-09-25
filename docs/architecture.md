@@ -164,6 +164,17 @@ Relevant code:
 - [sandbox/checkpoint.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/checkpoint.ts)
 - [sandbox/proto-convert.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/proto-convert.ts)
 
+### 8a. Sandbox Egress Boundary
+
+Sandboxes run on an internal Docker network with no route to the internet. The `egress` service (mitmproxy plus the Stablehand policy addon in `packages/egress-proxy`) is the only dual-homed member and therefore the only way out. Each sandbox receives `HTTP(S)_PROXY`, `NO_PROXY` and the deployment CA through its environment plus a read-only mount of the public CA; the orchestrator, MinIO and the model gateway stay direct on the internal network. Policy is a default-deny allowlist by method, host, port and path glob; private and cloud-metadata destinations are refused unconditionally. Denied requests return `403` with `X-Stablehand-Egress: denied`. Secrets still enter the sandbox environment today; the secretless credential injection that removes them is tracked in [docs/plans/proposals/2026-09-25-sandbox-credential-injection.md](plans/proposals/2026-09-25-sandbox-credential-injection.md). Kubernetes deployments do not yet get the boundary (no NetworkPolicy or CA projection).
+
+Relevant code:
+
+- [packages/egress-proxy/addon/policy.py](/path/to/stablehand/packages/egress-proxy/addon/policy.py)
+- [packages/egress-proxy/addon/stablehand_egress.py](/path/to/stablehand/packages/egress-proxy/addon/stablehand_egress.py)
+- [runtime/spec.ts `buildSandboxEgressEnv`](/path/to/stablehand/packages/stablehand/src/sandbox/runtime/spec.ts)
+- [sandbox-daemon browser-handler.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/browser-handler.ts)
+
 ### 9. A2UI Rendering
 
 Structured A2UI blocks are produced through the intrinsic `a2ui-render` tool and rendered in the frontend from tool-call results rather than being parsed out of free-form assistant text.

@@ -56,7 +56,7 @@ RUN pnpm --filter @stablehand/sandbox-daemon deploy --prod --legacy /app/deploy/
 FROM node:22-alpine AS harness-base
 
 RUN apk add --no-cache git curl tini bash unzip jq \
-    chromium nss freetype harfbuzz ca-certificates ttf-freefont \
+    chromium nss nss-tools freetype harfbuzz ca-certificates ttf-freefont \
     python3
 
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser

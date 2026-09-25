@@ -95,6 +95,7 @@ export class DockerContainerDriver {
       startedAtIso: new Date().toISOString(),
       orchestratorUrl: process.env.ORCHESTRATOR_CALLBACK_URL || 'http://orchestrator:3001',
       dataVolume: this.dataVolume,
+      egressCaVolume: process.env.STABLEHAND_SANDBOX_EGRESS_CA_VOLUME || undefined,
     });
 
     console.debug(

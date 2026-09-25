@@ -1,0 +1,22 @@
+# Stablehand sandbox egress: server defaults.
+# Grammar: <METHOD|*> <host-glob>[:<port>][/<path-glob>] [!internal]
+# Everything not listed here (or in the agent's own egress list) is denied.
+
+# Package registries agents install from
+* registry.npmjs.org/**
+* registry.yarnpkg.com/**
+* pypi.org/**
+* files.pythonhosted.org/**
+
+# Public git hosting
+* github.com/**
+* api.github.com/**
+* codeload.github.com/**
+* *.githubusercontent.com/**
+
+# Model providers (direct-provider mode). Real keys leave the sandbox once ctx-2yek lands.
+* api.openai.com/**
+* api.anthropic.com/**
+* generativelanguage.googleapis.com/**
+* gateway.ai.cloudflare.com/**
+* openrouter.ai/**

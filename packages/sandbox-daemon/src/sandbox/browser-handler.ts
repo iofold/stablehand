@@ -62,16 +62,70 @@ function deadline(ms: number, message: string): { promise: Promise<never>; cance
   return { promise, cancel: () => clearTimeout(timer) };
 }
 
+/**
+ * Sandbox egress runs through the Stablehand proxy (ctx-2ctd). Chromium ignores the
+ * HTTP(S)_PROXY environment and keeps its own trust store, so the proxy and the
+ * deployment CA are wired in explicitly: the CA is imported once per process into the
+ * NSS database Chromium reads, and every launch carries the proxy server and bypass list.
+ */
+function egressProxyServer(): string | undefined {
+  return process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || undefined;
+}
+
+let egressCaTrust: Promise<void> | undefined;
+
+async function ensureEgressCaTrusted(): Promise<void> {
+  const caPath = process.env.STABLEHAND_EGRESS_CA;
+  if (!caPath) return;
+  egressCaTrust ??= (async () => {
+    const [{ execFile }, { promisify }, os, path, fs] = await Promise.all([
+      import('node:child_process'),
+      import('node:util'),
+      import('node:os'),
+      import('node:path'),
+      import('node:fs/promises'),
+    ]);
+    const run = promisify(execFile);
+    await fs.access(caPath);
+    const dbDir = path.join(os.homedir(), '.pki', 'nssdb');
+    await fs.mkdir(dbDir, { recursive: true });
+    const db = `sql:${dbDir}`;
+    try {
+      await fs.access(path.join(dbDir, 'cert9.db'));
+    } catch {
+      await run('certutil', ['-d', db, '-N', '--empty-password']);
+    }
+    const listed = await run('certutil', ['-d', db, '-L']).catch(() => ({ stdout: '' }));
+    if (!listed.stdout.includes('stablehand-egress')) {
+      await run('certutil', ['-d', db, '-A', '-t', 'C,,', '-n', 'stablehand-egress', '-i', caPath]);
+    }
+  })();
+  try {
+    await egressCaTrust;
+  } catch (err) {
+    egressCaTrust = undefined;
+    throw new Error(
+      `Cannot trust the sandbox egress CA at ${caPath} for the browser: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+}
+
 async function withPage<T>(
   run: (page: import('playwright').Page) => Promise<T>,
   timeouts: { hardCallTimeoutMs: number; closeTimeoutMs: number },
 ): Promise<T> {
   const { chromium } = await import('playwright');
+  const proxyServer = egressProxyServer();
+  if (proxyServer) await ensureEgressCaTrusted();
   const browser = await chromium.launch({
     ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
       ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
       : {}),
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
+    ...(proxyServer
+      ? { proxy: { server: proxyServer, bypass: process.env.NO_PROXY || process.env.no_proxy || undefined } }
+      : {}),
   });
   const hardDeadline = deadline(
     timeouts.hardCallTimeoutMs,

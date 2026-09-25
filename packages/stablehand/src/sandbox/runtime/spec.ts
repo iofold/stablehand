@@ -86,6 +86,8 @@ export interface DockerContainerSpecInput {
   dataVolume?: string;
   dataRoot?: string;
   sandboxOtelEnv?: string[];
+  /** Volume holding the egress proxy's public CA; mounted read-only into every sandbox. */
+  egressCaVolume?: string;
 }
 
 export interface DockerContainerSpec {
@@ -313,6 +315,40 @@ function runtimeAnnotations(
   };
 }
 
+/** Where the egress proxy's public CA is mounted inside a sandbox. */
+export const SANDBOX_EGRESS_CA_DIR = '/etc/stablehand/egress-ca';
+export const SANDBOX_EGRESS_CA_PATH = `${SANDBOX_EGRESS_CA_DIR}/egress-ca.pem`;
+/** Hosts a sandbox reaches directly on the internal agents network, never via the proxy. */
+export const SANDBOX_EGRESS_DEFAULT_NO_PROXY = 'localhost,127.0.0.1,::1,orchestrator,minio,litellm,host.docker.internal';
+
+/**
+ * Sandbox egress environment (ctx-2ctd). When `STABLEHAND_SANDBOX_EGRESS_PROXY_URL` is set
+ * the sandbox's only route out is the egress proxy: every HTTP client family reads the
+ * proxy and the deployment CA from these variables (Node fetch and undici via
+ * NODE_USE_ENV_PROXY, grpc-js via https_proxy/no_proxy, curl, git, Python requests).
+ * The browse tool wires Chromium separately from `STABLEHAND_EGRESS_CA`.
+ */
+export function buildSandboxEgressEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+  const proxyUrl = env.STABLEHAND_SANDBOX_EGRESS_PROXY_URL?.trim();
+  if (!proxyUrl) return [];
+  const noProxy = env.STABLEHAND_SANDBOX_NO_PROXY?.trim() || SANDBOX_EGRESS_DEFAULT_NO_PROXY;
+  return [
+    `HTTP_PROXY=${proxyUrl}`,
+    `HTTPS_PROXY=${proxyUrl}`,
+    `http_proxy=${proxyUrl}`,
+    `https_proxy=${proxyUrl}`,
+    `NO_PROXY=${noProxy}`,
+    `no_proxy=${noProxy}`,
+    'NODE_USE_ENV_PROXY=1',
+    `STABLEHAND_EGRESS_CA=${SANDBOX_EGRESS_CA_PATH}`,
+    `NODE_EXTRA_CA_CERTS=${SANDBOX_EGRESS_CA_PATH}`,
+    `SSL_CERT_FILE=${SANDBOX_EGRESS_CA_PATH}`,
+    `REQUESTS_CA_BUNDLE=${SANDBOX_EGRESS_CA_PATH}`,
+    `CURL_CA_BUNDLE=${SANDBOX_EGRESS_CA_PATH}`,
+    `GIT_SSL_CAINFO=${SANDBOX_EGRESS_CA_PATH}`,
+  ];
+}
+
 function sandboxEnv(
   options: SandboxRuntimeCreateOptions,
   resources: SandboxRuntimeResources,
@@ -330,6 +366,7 @@ function sandboxEnv(
     'SANDBOX_PORT=50051',
     `STABLEHAND_HARNESS=${options.harnessName}`,
     `ORCHESTRATOR_URL=${orchestratorUrl}`,
+    ...buildSandboxEgressEnv(),
     ...(includeSecrets
       ? Object.entries(options.secrets ?? {}).map(([key, value]) => `${key}=${value}`)
       : []),
@@ -366,6 +403,19 @@ export function buildDockerContainerSpec(input: DockerContainerSpecInput): Docke
     binds.push(`${input.options.workspaceDir}:${WORKSPACE_ROOT}:rw`);
   }
 
+  if (input.egressCaVolume) {
+    volumeMounts.push({
+      Type: 'volume',
+      Source: input.egressCaVolume,
+      Target: SANDBOX_EGRESS_CA_DIR,
+      ReadOnly: true,
+    });
+  }
+  // On the internal agents network the embedded DNS cannot forward to the internet, so a
+  // client that resolves names itself instead of using the proxy would otherwise hang for
+  // minutes before failing. Fail fast; proxied clients never resolve remote names locally.
+  const egressDnsOptions = buildSandboxEgressEnv().length > 0 ? ['timeout:2', 'attempts:1'] : undefined;
+
   return {
     containerName,
     resources,
@@ -395,6 +445,7 @@ export function buildDockerContainerSpec(input: DockerContainerSpecInput): Docke
         },
         Binds: binds.length > 0 ? binds : undefined,
         Mounts: volumeMounts.length > 0 ? volumeMounts : undefined,
+        ...(egressDnsOptions ? { DnsOptions: egressDnsOptions } : {}),
       },
       Env: sandboxEnv(input.options, resources, input.orchestratorUrl, input.sandboxOtelEnv),
     },

@@ -38,6 +38,11 @@ services:
       STABLEHAND_AUTH_DISABLED: ${STABLEHAND_AUTH_DISABLED:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://platform.dev.example.com,http://localhost:3200}
       STABLEHAND_DATA_VOLUME: ${COMPOSE_PROJECT_NAME:-stablehand}_stablehand-data
+      # Sandboxes live on the internal agents network; the egress proxy is their only route out.
+      # Set STABLEHAND_SANDBOX_EGRESS_PROXY_URL to an empty string to run sandboxes without a proxy
+      # (they then have no internet at all, since the agents network is internal).
+      STABLEHAND_SANDBOX_EGRESS_PROXY_URL: ${STABLEHAND_SANDBOX_EGRESS_PROXY_URL-http://egress:8080}
+      STABLEHAND_SANDBOX_EGRESS_CA_VOLUME: ${COMPOSE_PROJECT_NAME:-stablehand}_egress-ca-public
       STABLEHAND_TURN_TIMEOUT_MS: ${STABLEHAND_TURN_TIMEOUT_MS:-}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
@@ -74,7 +79,26 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      egress:
+        condition: service_healthy
     restart: unless-stopped
+
+  # Sandbox egress broker (ctx-2ctd): mitmproxy with the Stablehand policy addon. Dual-homed so it
+  # can reach the internet on behalf of sandboxes that cannot. Rules: packages/egress-proxy.
+  egress:
+    build:
+      context: packages/egress-proxy
+    image: stablehand/egress:latest
+    restart: unless-stopped
+    environment:
+      STABLEHAND_EGRESS_EXTRA_ALLOW: ${STABLEHAND_EGRESS_EXTRA_ALLOW:-}
+      STABLEHAND_EGRESS_LOG_ALLOWED: ${STABLEHAND_EGRESS_LOG_ALLOWED:-0}
+    volumes:
+      - egress-ca:/home/mitmproxy/.mitmproxy
+      - egress-ca-public:/srv/egress-ca
+    networks:
+      - default
+      - stablehand-agents
 
   ui:
     build:
@@ -166,11 +190,15 @@ volumes:
   pgdata:
   stablehand-data:
   minio-data:
+  egress-ca:
+  egress-ca-public:
 
 networks:
   web:
     name: web
     external: true
+  # Internal: sandboxes get no route to the internet except through the egress service.
   stablehand-agents:
     driver: bridge
     name: stablehand-agents
+    internal: true
