@@ -1,4 +1,8 @@
 model_list:
+  - model_name: gpt-6-sol
+    litellm_params:
+      model: openai/gpt-6-sol
+      api_key: os.environ/OPENAI_API_KEY
   - model_name: gpt-6-astra
     litellm_params:
       model: openai/gpt-6-astra
@@ -27,6 +31,10 @@ model_list:
     litellm_params:
       model: anthropic/claude-opus-5
       api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: gemini-3.8-flash
+    litellm_params:
+      model: gemini/gemini-3.8-flash
+      api_key: os.environ/GOOGLE_API_KEY
   - model_name: gemini-3.6-flash
     litellm_params:
       model: gemini/gemini-3.6-flash
