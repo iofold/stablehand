@@ -20,10 +20,26 @@ The narrow fix is not a general hard-budget certification. An independently
 reproduced expired-counter/late-settlement defect remains in the pinned release.
 See [the verification and pending rollout plan](../../../docs/verification/2026-09-28-litellm-budget-reseed-backport.md).
 
-For the exact local legacy image reviewed against the current dev2 source,
+For the exact live-image base verified against dev2's full OCI configuration
+and all 27 root filesystem layers,
 `Dockerfile.budget-backport` builds only this correction; it neither rebuilds
 the application stack nor runs the bootstrap/key-update script. The checked-in
 base digest is a locally available image, not a promise of a public registry tag.
+The local alias is created from the unchanged `ctxmill/litellm` image object:
+
+```bash
+docker image tag \
+  ctxmill/litellm@sha256:5d7947208781a17105b056a86fc98316f78ccc9b1097e35241329beea77b0899 \
+  ctxmill-litellm-live-base:20260928-5d794720
+DOCKER_BUILDKIT=0 docker build --network=none --pull=false \
+  -t ctxmill-litellm-budget-fix:20260928-live-base-review \
+  -f deploy/compose/model-gateway/Dockerfile.budget-backport .
+```
+
+The legacy builder resolves this imported local OCI index by its pinned digest;
+BuildKit attempted an unavailable registry lookup. Verify the resulting image's
+full runtime Config and base-layer prefix before using it. The initial
+`20260928-upstream-review` candidate used a nonidentical base and is superseded.
 
 Run the offline regressions inside the candidate image with no network:
 
@@ -34,7 +50,7 @@ docker run --rm -i --network=none --read-only \
   --tmpfs /tmp:rw,nosuid,nodev,size=67108864 \
   --env LITELLM_LOCAL_MODEL_COST_MAP=True --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint=/app/.venv/bin/python \
-  ctxmill-litellm-budget-fix:20260928-upstream-review -I -B - SpendReseedTests \
+  ctxmill-litellm-budget-fix:20260928-live-base-review -I -B - SpendReseedTests \
   < deploy/compose/model-gateway/test_spend_reseed.py
 ```
 

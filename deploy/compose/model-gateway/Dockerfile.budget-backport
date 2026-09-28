@@ -1,4 +1,4 @@
-FROM ctxmill-litellm@sha256:8ae8b66f9f356d568820ac47ace6b9927df3cf6f515e48542d92779ec58e8f2b
+FROM ctxmill-litellm-live-base@sha256:5d7947208781a17105b056a86fc98316f78ccc9b1097e35241329beea77b0899
 USER root
 COPY deploy/compose/model-gateway/patch_spend_reseed.py /opt/gateway-patches/patch_spend_reseed.py
 RUN /app/.venv/bin/python /opt/gateway-patches/patch_spend_reseed.py > /opt/gateway-patches/spend-reseed-patch.json
