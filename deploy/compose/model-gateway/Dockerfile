@@ -18,4 +18,7 @@ COPY --from=patched-python-package \
 COPY --from=patched-python-package \
   /patched-python-package/pyasn1-0.6.4.dist-info \
   /app/.venv/lib/python3.13/site-packages/pyasn1-0.6.4.dist-info
+COPY deploy/compose/model-gateway/patch_spend_reseed.py /opt/gateway-patches/patch_spend_reseed.py
+RUN /app/.venv/bin/python /opt/gateway-patches/patch_spend_reseed.py \
+  > /opt/gateway-patches/spend-reseed-patch.json
 USER 65534

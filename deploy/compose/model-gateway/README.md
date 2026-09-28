@@ -8,6 +8,41 @@ The image is LiteLLM 1.93.0, pinned by digest. The derived image replaces
 `pyasn1` 0.6.3 with 0.6.4; the pinned base image and patch must be reviewed
 together during upgrades.
 
+The image also carries a source-hash-guarded backport of LiteLLM commits
+[`8b965880`](https://github.com/BerriAI/litellm/commit/8b965880efd8e28321c1db74850fbb2b6f59242c)
+and [`a39c3587`](https://github.com/BerriAI/litellm/commit/a39c35878569f74c50de3295320457dd7bd6adb2).
+It prevents the in-memory cold-reseed path from adding an already populated
+database balance twice and serializes signed spend deltas with that reseed.
+Source drift fails the image build before either file is written. This does
+not change spend rows, limits, TTL settings or settlement/reset policy.
+
+The narrow fix is not a general hard-budget certification. An independently
+reproduced expired-counter/late-settlement defect remains in the pinned release.
+See [the verification and pending rollout plan](../../../docs/verification/2026-09-28-litellm-budget-reseed-backport.md).
+
+For the exact local legacy image reviewed against the current dev2 source,
+`Dockerfile.budget-backport` builds only this correction; it neither rebuilds
+the application stack nor runs the bootstrap/key-update script. The checked-in
+base digest is a locally available image, not a promise of a public registry tag.
+
+Run the offline regressions inside the candidate image with no network:
+
+```bash
+docker run --rm -i --network=none --read-only \
+  --cap-drop=ALL --security-opt=no-new-privileges:true \
+  --cpus=2 --memory=1g --pids-limit=128 \
+  --tmpfs /tmp:rw,nosuid,nodev,size=67108864 \
+  --env LITELLM_LOCAL_MODEL_COST_MAP=True --env PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint=/app/.venv/bin/python \
+  ctxmill-litellm-budget-fix:20260928-upstream-review -I -B - SpendReseedTests \
+  < deploy/compose/model-gateway/test_spend_reseed.py
+```
+
+`ExistingAccountingGap` selects the separate diagnostic. It intentionally
+fails on both the baseline and this candidate; it is not silently skipped or
+counted as a passing regression. Running the script without a class selector
+includes that diagnostic and therefore returns a nonzero status.
+
 ## Credentials
 
 Provide these through the deployment secret store:
