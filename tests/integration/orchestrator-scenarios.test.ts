@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { liveApiHeaders } from './live-api-auth.js';
+import { LIVE_API_URL, liveApiHeaders } from './live-api-auth.js';
 
-const API = 'http://localhost:3002';
+const API = LIVE_API_URL ?? '';
 const TURN_TIMEOUT_MS = 180_000;
 const TEST_TIMEOUT_MS = 300_000;
 const DIRECT_OPENAI_HARNESS_CONFIG = {
@@ -228,11 +228,13 @@ async function openSseStream(agentId: string) {
 }
 
 beforeAll(async () => {
+  if (!LIVE_API_URL) return;
   const r = await api('GET', '/api/agents');
   expect(r.status).toBe(200);
 }, 30_000);
 
 afterAll(async () => {
+  if (!LIVE_API_URL) return;
   for (const triggerId of cleanup.triggers) {
     await api('DELETE', `/api/triggers/${triggerId}`).catch(() => {});
   }
@@ -241,7 +243,7 @@ afterAll(async () => {
   }
 }, 30_000);
 
-describe('Scenario Group 1: Agent Registration & CRUD', () => {
+describe.skipIf(!LIVE_API_URL)('Scenario Group 1: Agent Registration & CRUD', () => {
   it('S1a: full CRUD lifecycle works', async () => {
     const created = await createAgent();
 
@@ -362,7 +364,7 @@ describe('Scenario Group 1: Agent Registration & CRUD', () => {
   }, TEST_TIMEOUT_MS);
 });
 
-describe('Scenario Group 2: Real Agent Execution', () => {
+describe.skipIf(!LIVE_API_URL)('Scenario Group 2: Real Agent Execution', () => {
   it('S2a: LangGraph agent executes and completes', async () => {
     const created = await createAgent();
     const started = await startTurn(created.agentId, 'What is 2+2? Reply with just the number.');
@@ -429,7 +431,7 @@ describe('Scenario Group 2: Real Agent Execution', () => {
   }, TEST_TIMEOUT_MS);
 });
 
-describe('Scenario Group 3: Event System & Triggers', () => {
+describe.skipIf(!LIVE_API_URL)('Scenario Group 3: Event System & Triggers', () => {
   it('S3a: emits and persists a custom event', async () => {
     const emitted = await api('POST', '/api/triggers/emit', {
       type: 'custom.e2e.test.ping',
@@ -537,7 +539,7 @@ describe('Scenario Group 3: Event System & Triggers', () => {
   }, TEST_TIMEOUT_MS);
 });
 
-describe('Scenario Group 4: Filesystem Access', () => {
+describe.skipIf(!LIVE_API_URL)('Scenario Group 4: Filesystem Access', () => {
   it('S4a: external file writes are visible in the agent workspace', async () => {
     const created = await createAgent();
 
@@ -604,7 +606,7 @@ describe('Scenario Group 4: Filesystem Access', () => {
 
 });
 
-describe('Scenario Group 5: Turn Lifecycle', () => {
+describe.skipIf(!LIVE_API_URL)('Scenario Group 5: Turn Lifecycle', () => {
   it('S5a: background turns can be cancelled', async () => {
     const created = await createAgent({
       systemPrompt: 'When asked to request approval, immediately call request-approval with reason "Scenario cancellation approval". Do not answer normally before calling the tool.',
@@ -669,7 +671,7 @@ describe('Scenario Group 5: Turn Lifecycle', () => {
   }, TEST_TIMEOUT_MS);
 });
 
-describe('Scenario Group 6: Webhook & Callback', () => {
+describe.skipIf(!LIVE_API_URL)('Scenario Group 6: Webhook & Callback', () => {
   it('S6a: webhook CRUD works and rejects invalid event types', async () => {
     const created = await createAgent();
 

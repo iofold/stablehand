@@ -1,6 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+/**
+ * Base URL of a running Stablehand stack for the suites that drive one over HTTP
+ * (orchestrator-scenarios, artifact-rest). Unset, those suites skip: they create and
+ * delete real agents, turns, and artifacts, so a plain `pnpm test` must not aim them at
+ * whatever happens to be listening on localhost:3002 (on dev1 that is the live stack).
+ */
+export const LIVE_API_URL = process.env.STABLEHAND_LIVE_API_URL?.trim().replace(/\/+$/, '') || undefined;
+
 let cachedToken: string | undefined;
 let tokenLoaded = false;
 

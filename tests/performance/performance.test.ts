@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -859,6 +860,8 @@ describe('performance profile', () => {
   });
 
   it('correlates failed-run sandbox traces from persisted turn samples', () => {
+    // .tmp/ is gitignored, so a fresh checkout (CI) does not have it yet.
+    mkdirSync(join(process.cwd(), '.tmp'), { recursive: true });
     const tempDir = mkdtempSync(join(process.cwd(), '.tmp/performance-trace-test-'));
     const runPath = join(tempDir, 'trace-window.json');
     const turnIdsPath = join(tempDir, 'turn-ids.txt');

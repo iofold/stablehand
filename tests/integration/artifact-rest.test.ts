@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
-import { liveApiFetch } from './live-api-auth.js';
+import { LIVE_API_URL, liveApiFetch } from './live-api-auth.js';
 
-const API_BASE = process.env.API_URL ?? 'http://localhost:3002';
+const API_BASE = LIVE_API_URL ?? '';
 const AGENTS_BASE = `${API_BASE}/api/agents`;
 const ARTIFACTS_BASE = `${API_BASE}/api/artifacts`;
 
@@ -83,7 +83,7 @@ async function deleteArtifact(artifactId: string) {
   }
 }
 
-describe('Artifact REST API Integration', () => {
+describe.skipIf(!LIVE_API_URL)('Artifact REST API Integration', () => {
   let testAgentId = '';
   let emptyAgentId = '';
 

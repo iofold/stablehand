@@ -115,7 +115,15 @@ async function ensureStressTrigger(
   }
 }
 
+// These tests make real model calls. Without provider keys (e.g. CI before the repo
+// secrets exist) they skip with a reason instead of failing the smoke gate.
+const HAS_OPENAI_KEY = !!process.env.OPENAI_API_KEY;
+const HAS_ANTHROPIC_KEY = !!process.env.ANTHROPIC_API_KEY;
+const NO_OPENAI_KEY = 'OPENAI_API_KEY not set: this test makes real OpenAI calls';
+const NO_ANTHROPIC_KEY = 'ANTHROPIC_API_KEY not set: this test makes real Anthropic calls';
+
 test.describe('Stress Test — Multi-Model Multi-Harness', () => {
+  test.skip(!HAS_OPENAI_KEY && !HAS_ANTHROPIC_KEY, 'No provider keys set: every test here makes real model calls');
   const agents: Record<string, TestAgent> = {};
 
   test.beforeAll(async ({ request }) => {
@@ -152,6 +160,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
   });
 
   test('LangGraph + GPT-5.4: required-matrix stress.tools.complete @smoke', async ({ request }) => {
+    test.skip(!HAS_OPENAI_KEY, NO_OPENAI_KEY);
     test.setTimeout(120_000);
 
     const agent = agents['stress-lg-openai'];
@@ -230,6 +239,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
   });
 
   test('PI Agent + GPT-5.4: required-matrix stress.pi.complete @smoke', async ({ request }) => {
+    test.skip(!HAS_OPENAI_KEY, NO_OPENAI_KEY);
     test.setTimeout(120_000);
 
     const agent = agents['stress-pi-openai'];
@@ -308,6 +318,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
   });
 
   test('Claude Agents + Sonnet: required-matrix stress.claude.complete @smoke', async ({ request }) => {
+    test.skip(!HAS_ANTHROPIC_KEY, NO_ANTHROPIC_KEY);
     test.setTimeout(180_000);
 
     const agent = agents['stress-claude-sonnet'];
@@ -413,6 +424,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
   });
 
   test('HITL: approve flow emits stress.hitl.complete deterministically @smoke @extended', async ({ request }) => {
+    test.skip(!HAS_OPENAI_KEY, NO_OPENAI_KEY);
     test.setTimeout(180_000);
 
     const agent = agents['stress-hitl'];

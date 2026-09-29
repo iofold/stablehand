@@ -13,15 +13,41 @@ jobs:
     strategy:
       matrix:
         node-version: [22, 24]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: stablehand
+          POSTGRES_PASSWORD: stablehand
+          POSTGRES_DB: stablehand_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stablehand -d stablehand_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # DB-backed suites drop and recreate tables and refuse to run without this.
+      TEST_DATABASE_URL: postgres://stablehand:stablehand@localhost:5432/stablehand_test
+      # artifact-storage.test.ts runs against a real MinIO (started below).
+      S3_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY: stablehand
+      S3_SECRET_KEY: stablehand-dev
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
+      # The operational CLI (.codex/skills/stablehand-cli) is a Bun script; ops.test.ts runs it.
+      - uses: oven-sh/setup-bun@v2
+      # Service containers cannot pass `server /data`, so MinIO starts here.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER="$S3_ACCESS_KEY" -e MINIO_ROOT_PASSWORD="$S3_SECRET_KEY" \
+            minio/minio server /data
+          timeout 60 bash -c 'until curl -sf http://localhost:9000/minio/health/live; do sleep 1; done'
       - run: pnpm install
       - name: Build
         run: pnpm -r build
@@ -44,8 +70,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -58,11 +82,18 @@ jobs:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
     needs: test
+    # Job-level so both `docker compose up` (the orchestrator reads them) and the
+    # Playwright step see them. Unset secrets resolve to empty strings; the smoke tests
+    # that make real model calls then skip instead of failing.
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -75,6 +106,8 @@ jobs:
       - name: Start Docker stack
         run: |
           docker compose down -v || true
+          # docker-compose.yml attaches the UI to dev1's external Traefik network.
+          docker network create web 2>/dev/null || true
           cp .env.example .env
           echo "SECRET_MASTER_KEY=$(openssl rand -hex 32)" >> .env
           STABLEHAND_API_TOKEN="$(openssl rand -hex 32)"
@@ -88,11 +121,6 @@ jobs:
       - name: Run required E2E smoke gate
         run: pnpm test:e2e -- --project=chromium --grep @smoke
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           PLAYWRIGHT_BASE_URL: http://localhost:3200
           PLAYWRIGHT_API_BASE_URL: http://localhost:3002
       - name: Upload Playwright report
@@ -139,13 +167,11 @@ jobs:
     #   - secrets.OPENAI_API_KEY / ANTHROPIC_API_KEY — provider keys for the
     #     three live-harness smoke cases
     # Operators run deploy/k3s/dev2/deploy-dev2.sh manually until then (see
-    # docs/verification/release-gates.md).
+    # docs/release-gates.md).
     if: ${{ vars.DEV2_DEPLOY_ENABLED == 'true' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22

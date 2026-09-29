@@ -29,6 +29,8 @@ TEST_DATABASE_URL=postgres://stablehand:stablehand@localhost:5433/stablehand_tes
 
 The dev1 runtime DB (`postgres://stablehand:stablehand@localhost:5433/stablehand`) is refused unless `STABLEHAND_TEST_ALLOW_RUNTIME_DB=1`.
 
+`integration/orchestrator-scenarios.test.ts` and `integration/artifact-rest.test.ts` drive a running stack over HTTP and create/delete real agents, turns, and artifacts. They skip unless `STABLEHAND_LIVE_API_URL` points at a stack you mean to exercise (for example `STABLEHAND_LIVE_API_URL=http://localhost:3002`); `STABLEHAND_API_TOKEN` or `.env` supplies auth. `integration/artifact-storage.test.ts` needs MinIO (`S3_ENDPOINT`, default `http://localhost:9000`), and `ops.test.ts` needs `bun` on `PATH`.
+
 ## Where To Look
 
 | Task | File(s) | Notes |
