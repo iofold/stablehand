@@ -28,7 +28,7 @@ jobs:
     env:
       # DB-backed suites drop and recreate tables and refuse to run without this.
       TEST_DATABASE_URL: postgres://stablehand:stablehand@localhost:5432/stablehand_test
-      # artifact-storage.test.ts runs against a real MinIO (started below).
+      # artifact-storage.test.ts runs against a real S3-compatible store (started below).
       S3_ENDPOINT: http://localhost:9000
       S3_ACCESS_KEY: stablehand
       S3_SECRET_KEY: stablehand-dev
@@ -41,13 +41,13 @@ jobs:
           cache: pnpm
       # The operational CLI (.codex/skills/stablehand-cli) is a Bun script; ops.test.ts runs it.
       - uses: oven-sh/setup-bun@v2
-      # Service containers cannot pass `server /data`, so MinIO starts here.
-      - name: Start MinIO
+      # Same image as the compose `minio` service (MinIO no longer publishes pullable images).
+      - name: Start S3 store (RustFS)
         run: |
-          docker run -d --name minio -p 9000:9000 \
-            -e MINIO_ROOT_USER="$S3_ACCESS_KEY" -e MINIO_ROOT_PASSWORD="$S3_SECRET_KEY" \
-            minio/minio server /data
-          timeout 60 bash -c 'until curl -sf http://localhost:9000/minio/health/live; do sleep 1; done'
+          docker run -d --name s3 -p 9000:9000 \
+            -e RUSTFS_ACCESS_KEY="$S3_ACCESS_KEY" -e RUSTFS_SECRET_KEY="$S3_SECRET_KEY" \
+            rustfs/rustfs:1.0.0
+          timeout 60 bash -c 'until curl -sf http://localhost:9000/health; do sleep 1; done'
       - run: pnpm install
       - name: Build
         run: pnpm -r build

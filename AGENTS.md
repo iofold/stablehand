@@ -148,7 +148,7 @@ docker build --target harness-pi-agent -t stablehand/harness-pi-agent -f Dockerf
 - **Container concurrency** — Semaphore limits concurrent sandbox containers (default 20). FIFO queue with 60s timeout.
 - **Tool providers** — 5 types: Local (in-process), MCP (stdio/HTTP), HTTP (REST endpoints), Composio (500+ SaaS), Artifact (daemon-handled S3/MinIO upload/download).
 - **Agent manifests** — YAML format (`apiVersion: stablehand.io/v1`). Supports `{{knowledge}}` placeholder in instructions, `$secret:KEY_NAME` for secrets.
-- **Artifact storage** — S3/MinIO-backed file persistence. Tools (artifact_upload, artifact_download) run at daemon location, bypassing gRPC byte-proxying. Requires S3_ENDPOINT + S3_ACCESS_KEY + S3_SECRET_KEY env vars. MinIO container in docker-compose.
+- **Artifact storage** — S3/MinIO-backed file persistence. Tools (artifact_upload, artifact_download) run at daemon location, bypassing gRPC byte-proxying. Requires S3_ENDPOINT + S3_ACCESS_KEY + S3_SECRET_KEY env vars. The compose `minio` service runs RustFS (S3-compatible; MinIO no longer publishes pullable images).
 - **System settings** — Runtime-configurable knobs (timeouts, limits, resource defaults) persisted in `system_settings`. Settings UI at `/settings`. 5-minute cache TTL. No restart required.
 - **Container lifecycle policy** — Unified module handling idle checkpoint scheduling, compatibility pause/resume, and reconciliation.
 - **Durable HITL** — Interrupt resolution persisted DB-first. Sessions resume from DB state on restart. Replaces in-memory-only interrupt tracking.

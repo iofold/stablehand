@@ -121,12 +121,15 @@ services:
       - "traefik.http.routers.stablehand.tls.certresolver=letsencrypt"
       - "traefik.http.services.stablehand.loadbalancer.server.port=80"
 
+  # S3-compatible artifact store. Runs RustFS: MinIO stopped publishing pullable images
+  # (Docker Hub, quay.io and Bitnami all refuse as of 2026-09). The service keeps the
+  # `minio` name so existing S3_ENDPOINT=http://minio:9000 settings keep working.
   minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
+    image: rustfs/rustfs:1.0.0
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-stablehand}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-stablehand-dev}
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-stablehand}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-stablehand-dev}
+      RUSTFS_CONSOLE_ENABLE: "true"
     ports:
       - "${MINIO_API_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
@@ -136,7 +139,7 @@ services:
       - default
       - stablehand-agents
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
       interval: 5s
       timeout: 5s
       retries: 5
