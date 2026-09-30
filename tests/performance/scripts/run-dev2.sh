@@ -7,7 +7,7 @@ RUN_SLUG="$(date -u +%Y%m%dT%H%M%SZ)-$(basename "$PROFILE_PATH" .json)"
 OUTPUT_DIR="${2:-$ROOT_DIR/.tmp/performance/$RUN_SLUG}"
 BUN="${BUN:-bun}"
 
-export KUBECONFIG="${KUBECONFIG:-/path/to/workspace/infra/.k3s-kubeconfig.yaml}"
+export KUBECONFIG="${KUBECONFIG:-$HOME/workspace/infra/.k3s-kubeconfig.yaml}"
 export STABLEHAND_PERF_NAMESPACE="$(
   jq -r '.target.kubernetesNamespace' "$PROFILE_PATH"
 )"

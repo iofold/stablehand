@@ -32,11 +32,11 @@ a canonical run frame that cannot be replayed from `event_store`.
 
 Source code:
 
-- [bus.ts](/path/to/stablehand/packages/stablehand/src/events/bus.ts)
-- [projector.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/canonical/projector.ts)
-- [canonical-log.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/canonical/canonical-log.ts)
-- [sse.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/sse.ts)
-- [stream.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/routes/agents/stream.ts)
+- [bus.ts](../packages/stablehand/src/events/bus.ts)
+- [projector.ts](../packages/stablehand/src/orchestrator/canonical/projector.ts)
+- [canonical-log.ts](../packages/stablehand/src/orchestrator/canonical/canonical-log.ts)
+- [sse.ts](../packages/stablehand/src/orchestrator/sse.ts)
+- [stream.ts](../packages/stablehand/src/orchestrator/routes/agents/stream.ts)
 
 ## Channels
 
@@ -64,8 +64,8 @@ WHERE source_type IS NOT NULL
 ORDER BY seq;
 ```
 
-See [docs/event-spine-provenance-inventory.md](/path/to/stablehand/docs/event-spine-provenance-inventory.md)
-and [ADR 016](/path/to/stablehand/docs/adr/016-raw-event-provenance-on-event-spine.md).
+See [docs/event-spine-provenance-inventory.md](../docs/event-spine-provenance-inventory.md)
+and [ADR 016](../docs/adr/016-raw-event-provenance-on-event-spine.md).
 
 ## AG-UI Channel Projection
 
@@ -134,9 +134,9 @@ in-memory replay buffer.
 | `ResolveArtifact` | Resolve artifact metadata/download info. | Used by daemon-side artifact tools. |
 
 Proto definitions live in
-[sandbox.proto](/path/to/stablehand/packages/proto/stablehand/sandbox/v1/sandbox.proto);
+[sandbox.proto](../packages/proto/stablehand/sandbox/v1/sandbox.proto);
 conversion lives in
-[proto-convert.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/proto-convert.ts).
+[proto-convert.ts](../packages/sandbox-daemon/src/sandbox/proto-convert.ts).
 
 ## Gotchas
 

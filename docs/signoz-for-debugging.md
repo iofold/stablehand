@@ -92,12 +92,13 @@ docker compose up --build -d
 
 ## Generate Trace Traffic
 
-Basic API and UI traffic is enough to produce orchestrator spans:
+Basic API and UI traffic is enough to produce orchestrator spans (run from the
+repo root):
 
 ```bash
-bun /path/to/stablehand/.codex/skills/stablehand-cli/scripts/stablehand.ts health
-bun /path/to/stablehand/.codex/skills/stablehand-cli/scripts/stablehand.ts agents list
-bun /path/to/stablehand/.codex/skills/stablehand-cli/scripts/stablehand.ts sandbox metrics
+bun .codex/skills/stablehand-cli/scripts/stablehand.ts health
+bun .codex/skills/stablehand-cli/scripts/stablehand.ts agents list
+bun .codex/skills/stablehand-cli/scripts/stablehand.ts sandbox metrics
 ```
 
 For run/session traces, execute a short agent turn through the CLI or UI, then
@@ -121,7 +122,7 @@ In the SigNoz UI:
 You can also query dev2 ClickHouse directly:
 
 ```bash
-export KUBECONFIG=/path/to/workspace/infra/.k3s-kubeconfig.yaml
+export KUBECONFIG="$HOME/workspace/infra/.k3s-kubeconfig.yaml"
 kubectl -n observability exec chi-signoz-clickhouse-cluster-0-0-0 -- clickhouse-client --query '
 SELECT
   `resource_string_service$$name` AS service_name,
@@ -143,7 +144,7 @@ ORDER BY service_name
 Top recent span names:
 
 ```bash
-export KUBECONFIG=/path/to/workspace/infra/.k3s-kubeconfig.yaml
+export KUBECONFIG="$HOME/workspace/infra/.k3s-kubeconfig.yaml"
 kubectl -n observability exec chi-signoz-clickhouse-cluster-0-0-0 -- clickhouse-client --query '
 SELECT
   name,
@@ -194,7 +195,7 @@ Common issues:
   `OTEL_NODE_ENABLED_INSTRUMENTATIONS` was overridden. The stablehand register
   defaults to `aws-sdk,dns,grpc,http,net,openai,pg,pino,runtime-node,undici`.
 - `https://otlp-signoz.staging.example.com/v1/traces` is unreachable: check the
-  infra-owned `signoz-otlp-tailnet` ingress in `/path/to/workspace/infra`.
+  infra-owned `signoz-otlp-tailnet` ingress in the infra repo (`~/workspace/infra`).
 - Export errors: confirm the dev2 OTLP ingress is reachable from the Docker
   container network and that `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`.
 - Spans are present but hard to find: filter by `service.name =

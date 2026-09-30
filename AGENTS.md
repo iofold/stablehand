@@ -50,7 +50,7 @@ docs/
 | Define a tool | Use `defineTool({ name, description, input: z.object(...), handler })` | Zod schema for input validation |
 | Define an agent | Use `defineAgent({ tools, systemPrompt })` or YAML manifest | `{{knowledge}}` placeholder for dynamic injection |
 | Understand DI wiring | `packages/stablehand/src/config/container.ts` | `createContainer()` builds all services |
-| Trace a run execution | `orchestrator/agent-session-service.ts` → `orchestrator/sandbox-session-manager.ts` → `packages/sandbox-daemon/src/sandbox/runner.ts` | All runs go through sandbox containers |
+| Trace a run execution | `orchestrator/agent-turn-service.ts` → `orchestrator/sandbox-session-manager.ts` → `packages/sandbox-daemon/src/sandbox/runner.ts` | All runs go through sandbox containers |
 | Modify sandbox daemon | `packages/sandbox-daemon/src/` | gRPC server, harness adapters, tool proxy. Runs inside containers, NOT orchestrator |
 | Understand session lifecycle | `orchestrator/sandbox-session-manager.ts` | Active → checkpointed → restoring lifecycle plus reconciliation |
 | Configure runtime settings | `packages/stablehand/src/settings/service.ts` | DB-persisted system settings, Settings UI |
@@ -89,7 +89,7 @@ docs/
 - **NEVER suppress types** — No `as any`, `@ts-ignore`, `@ts-expect-error` (existing `as any` in source are documented tech debt from Zod/EventEmitter/Drizzle library limitations)
 - **NEVER use empty catch blocks** — `catch(e) {}` forbidden
 - **NEVER delete failing tests** to make CI pass
-- **NEVER call harness.run() directly** — All execution goes through `AgentSessionService` → `SandboxSessionManager` → Docker containers
+- **NEVER call harness.run() directly** — All execution goes through `AgentTurnService` → `SandboxSessionManager` → Docker containers
 - **NEVER exceed checkpoint limits** — The daemon checkpoint validator currently rejects oversized state payloads (>5 MB by default), and workspace tar snapshots are capped at 100 MB
 - **NO path aliases in source** — Relative imports only (with `.js`). Aliases only in `vitest.config.ts` and `vite.config.ts`
 - **NO Prettier** — No formatting enforcer configured; follow existing style

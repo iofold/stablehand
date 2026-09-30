@@ -53,10 +53,10 @@ These are not current runtime features:
 
 ## Related Code
 
-- [manifest/validate.ts](/path/to/stablehand/packages/manifest/src/validate.ts)
-- [manifest/types.ts](/path/to/stablehand/packages/manifest/src/types.ts)
-- [workspace-preparation.ts](/path/to/stablehand/packages/stablehand/src/sandbox/workspace-preparation.ts)
-- [claude-agents.ts](/path/to/stablehand/packages/sandbox-daemon/src/harness/claude-agents.ts)
+- [manifest/validate.ts](../packages/manifest/src/validate.ts)
+- [manifest/types.ts](../packages/manifest/src/types.ts)
+- [workspace-preparation.ts](../packages/stablehand/src/sandbox/workspace-preparation.ts)
+- [claude-agents.ts](../packages/sandbox-daemon/src/harness/claude-agents.ts)
 
 ## Gotchas
 

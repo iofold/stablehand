@@ -9,7 +9,7 @@ BUN="${BUN:-bun}"
 MAX_TOTAL_MODEL_CALLS="${STABLEHAND_PERF_MAX_TOTAL_MODEL_CALLS:-1200}"
 BOUNDARY_TIMEOUT_SECONDS="${STABLEHAND_PERF_BOUNDARY_TIMEOUT_SECONDS:-180}"
 
-export KUBECONFIG="${KUBECONFIG:-/path/to/workspace/infra/.k3s-kubeconfig.yaml}"
+export KUBECONFIG="${KUBECONFIG:-$HOME/workspace/infra/.k3s-kubeconfig.yaml}"
 namespace="$(jq -r '.target.kubernetesNamespace' "$RAMP_PATH")"
 api_base="$(jq -r '.target.apiBase' "$RAMP_PATH")"
 temporary_limit="$(jq -r '.maxGlobalContainers' "$RAMP_PATH")"

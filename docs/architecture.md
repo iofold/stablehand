@@ -50,11 +50,11 @@ The orchestrator is a Fastify server that wires together API auth, the database,
 
 Relevant code:
 
-- [server.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/server.ts)
-- [agent-session-service.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/agent-session-service.ts)
-- [sandbox-session-manager.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/sandbox-session-manager.ts)
-- [routes/agents.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/routes/agents.ts)
-- [auth.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/auth.ts)
+- [server.ts](../packages/stablehand/src/orchestrator/server.ts)
+- [agent-turn-service.ts](../packages/stablehand/src/orchestrator/agent-turn-service.ts)
+- [sandbox-session-manager.ts](../packages/stablehand/src/orchestrator/sandbox-session-manager.ts)
+- [routes/agents.ts](../packages/stablehand/src/orchestrator/routes/agents.ts)
+- [auth.ts](../packages/stablehand/src/orchestrator/auth.ts)
 
 ### 2. Multi-Harness Agent Execution
 
@@ -66,9 +66,9 @@ Agents are executed through a harness registry. The shipped harness adapters are
 
 Relevant code:
 
-- [harness/index.ts](/path/to/stablehand/packages/stablehand/src/harness/index.ts)
-- [agent-session-service.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/agent-session-service.ts)
-- [container.ts](/path/to/stablehand/packages/stablehand/src/config/container.ts)
+- [harness/index.ts](../packages/stablehand/src/harness/index.ts)
+- [agent-turn-service.ts](../packages/stablehand/src/orchestrator/agent-turn-service.ts)
+- [container.ts](../packages/stablehand/src/config/container.ts)
 
 ### 3. Tool Execution
 
@@ -76,9 +76,9 @@ Tools are registered centrally and executed through the local tool executor. The
 
 Relevant code:
 
-- [tool/executor.ts](/path/to/stablehand/packages/stablehand/src/tool/executor.ts)
-- [tool/providers/index.ts](/path/to/stablehand/packages/stablehand/src/tool/providers/index.ts)
-- [tool/registry.ts](/path/to/stablehand/packages/stablehand/src/tool/registry.ts)
+- [tool/executor.ts](../packages/stablehand/src/tool/executor.ts)
+- [tool/providers/index.ts](../packages/stablehand/src/tool/providers/index.ts)
+- [tool/registry.ts](../packages/stablehand/src/tool/registry.ts)
 
 ### 4. Event Bus, Canonical Log, and Triggers
 
@@ -109,12 +109,12 @@ The TypedEventBus emits the following events:
 
 Relevant code:
 
-- [events/bus.ts](/path/to/stablehand/packages/stablehand/src/events/bus.ts)
-- [events/trigger-manager.ts](/path/to/stablehand/packages/stablehand/src/events/trigger-manager.ts)
-- [orchestrator/canonical/canonical-log.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/canonical/canonical-log.ts)
-- [orchestrator/canonical/projector.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/canonical/projector.ts)
-- [orchestrator/sse.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/sse.ts)
-- [orchestrator/routes/agents/stream.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/routes/agents/stream.ts)
+- [events/bus.ts](../packages/stablehand/src/events/bus.ts)
+- [events/trigger-manager.ts](../packages/stablehand/src/events/trigger-manager.ts)
+- [orchestrator/canonical/canonical-log.ts](../packages/stablehand/src/orchestrator/canonical/canonical-log.ts)
+- [orchestrator/canonical/projector.ts](../packages/stablehand/src/orchestrator/canonical/projector.ts)
+- [orchestrator/sse.ts](../packages/stablehand/src/orchestrator/sse.ts)
+- [orchestrator/routes/agents/stream.ts](../packages/stablehand/src/orchestrator/routes/agents/stream.ts)
 
 ### 5. HITL and Suspend/Resume
 
@@ -122,11 +122,10 @@ HITL is implemented through durable interrupt records and UI responses. Sandbox 
 
 Relevant code:
 
-- [interrupt.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/interrupt.ts)
-- [suspended-session-matcher.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/suspended-session-matcher.ts)
-- [sandbox-session-manager.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/sandbox-session-manager.ts)
-- [routes/agents/interrupts.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/routes/agents/interrupts.ts)
-- [orchestrator/session-manager/interrupt-resume-service.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/session-manager/interrupt-resume-service.ts)
+- [interrupt.ts](../packages/stablehand/src/orchestrator/interrupt.ts)
+- [sandbox-session-manager.ts](../packages/stablehand/src/orchestrator/sandbox-session-manager.ts)
+- [routes/agents/interrupts.ts](../packages/stablehand/src/orchestrator/routes/agents/interrupts.ts)
+- [orchestrator/session-manager/interrupt-resume-service.ts](../packages/stablehand/src/orchestrator/session-manager/interrupt-resume-service.ts)
 
 ### 6. Workspace Isolation
 
@@ -134,9 +133,9 @@ Each run can execute against a session-scoped workspace abstraction. The shipped
 
 Relevant code:
 
-- [workspace/session-workspace.ts](/path/to/stablehand/packages/stablehand/src/workspace/session-workspace.ts)
-- [workspace/tar-upload.ts](/path/to/stablehand/packages/stablehand/src/workspace/tar-upload.ts)
-- [workspace/ensure.ts](/path/to/stablehand/packages/stablehand/src/workspace/ensure.ts)
+- [workspace/session-workspace.ts](../packages/stablehand/src/workspace/session-workspace.ts)
+- [workspace/tar-upload.ts](../packages/stablehand/src/workspace/tar-upload.ts)
+- [workspace/ensure.ts](../packages/stablehand/src/workspace/ensure.ts)
 
 ### 7. External Learning Hooks
 
@@ -144,9 +143,9 @@ Stablehand emits run, message, tool, feedback, and custom events that external l
 
 Relevant code:
 
-- [events/bus.ts](/path/to/stablehand/packages/stablehand/src/events/bus.ts)
-- [orchestrator/webhook-events.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/webhook-events.ts)
-- [callback-dispatcher.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/callback-dispatcher.ts)
+- [events/bus.ts](../packages/stablehand/src/events/bus.ts)
+- [orchestrator/webhook-events.ts](../packages/stablehand/src/orchestrator/webhook-events.ts)
+- [callback-dispatcher.ts](../packages/stablehand/src/orchestrator/callback-dispatcher.ts)
 
 ### 8. Sandbox Infrastructure
 
@@ -154,15 +153,15 @@ All harness execution routes through the sandbox subsystem. The orchestrator cre
 
 Relevant code:
 
-- [sandbox/container-manager.ts](/path/to/stablehand/packages/stablehand/src/sandbox/container-manager.ts)
-- [orchestrator/sandbox-session-manager.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/sandbox-session-manager.ts)
-- [orchestrator/container-lifecycle-policy.ts](/path/to/stablehand/packages/stablehand/src/orchestrator/container-lifecycle-policy.ts)
-- [artifact-store.ts](/path/to/stablehand/packages/stablehand/src/artifact/artifact-store.ts)
-- [sandbox/runner.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/runner.ts)
-- [sandbox/daemon.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/daemon.ts)
-- [sandbox/tool-proxy.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/tool-proxy.ts)
-- [sandbox/checkpoint.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/checkpoint.ts)
-- [sandbox/proto-convert.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/proto-convert.ts)
+- [sandbox/container-manager.ts](../packages/stablehand/src/sandbox/container-manager.ts)
+- [orchestrator/sandbox-session-manager.ts](../packages/stablehand/src/orchestrator/sandbox-session-manager.ts)
+- [orchestrator/container-lifecycle-policy.ts](../packages/stablehand/src/orchestrator/container-lifecycle-policy.ts)
+- [artifact-store.ts](../packages/stablehand/src/artifact/artifact-store.ts)
+- [sandbox/runner.ts](../packages/sandbox-daemon/src/sandbox/runner.ts)
+- [sandbox/daemon.ts](../packages/sandbox-daemon/src/sandbox/daemon.ts)
+- [sandbox/tool-proxy.ts](../packages/sandbox-daemon/src/sandbox/tool-proxy.ts)
+- [sandbox/checkpoint.ts](../packages/sandbox-daemon/src/sandbox/checkpoint.ts)
+- [sandbox/proto-convert.ts](../packages/sandbox-daemon/src/sandbox/proto-convert.ts)
 
 ### 8a. Sandbox Egress Boundary
 
@@ -170,10 +169,10 @@ Sandboxes run on an internal Docker network with no route to the internet. The `
 
 Relevant code:
 
-- [packages/egress-proxy/addon/policy.py](/path/to/stablehand/packages/egress-proxy/addon/policy.py)
-- [packages/egress-proxy/addon/stablehand_egress.py](/path/to/stablehand/packages/egress-proxy/addon/stablehand_egress.py)
-- [runtime/spec.ts `buildSandboxEgressEnv`](/path/to/stablehand/packages/stablehand/src/sandbox/runtime/spec.ts)
-- [sandbox-daemon browser-handler.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/browser-handler.ts)
+- [packages/egress-proxy/addon/policy.py](../packages/egress-proxy/addon/policy.py)
+- [packages/egress-proxy/addon/stablehand_egress.py](../packages/egress-proxy/addon/stablehand_egress.py)
+- [runtime/spec.ts `buildSandboxEgressEnv`](../packages/stablehand/src/sandbox/runtime/spec.ts)
+- [sandbox-daemon browser-handler.ts](../packages/sandbox-daemon/src/sandbox/browser-handler.ts)
 
 ### 9. A2UI Rendering
 
@@ -181,8 +180,8 @@ Structured A2UI blocks are produced through the intrinsic `a2ui-render` tool and
 
 Relevant code:
 
-- [tool/builtin/a2ui-render.ts](/path/to/stablehand/packages/stablehand/src/tool/builtin/a2ui-render.ts)
-- [ToolCallCard.tsx](/path/to/stablehand/packages/ui/src/components/session/ToolCallCard.tsx)
+- [tool/builtin/a2ui-render.ts](../packages/stablehand/src/tool/builtin/a2ui-render.ts)
+- [ToolCallCard.tsx](../packages/ui/src/components/session/ToolCallCard.tsx)
 
 ### 10. Harness Model Configuration
 
@@ -190,8 +189,8 @@ Models are configured per agent/harness. Core Stablehand does not own a global L
 
 Relevant code:
 
-- [manifest/index.ts](/path/to/stablehand/packages/manifest/src/index.ts)
-- [harness/index.ts](/path/to/stablehand/packages/stablehand/src/harness/index.ts)
+- [manifest/index.ts](../packages/manifest/src/index.ts)
+- [harness/index.ts](../packages/stablehand/src/harness/index.ts)
 
 ### 10a. Per-Turn Fan-out Caps
 
@@ -211,18 +210,17 @@ seam reserved by [cost-control-and-model-gateway.md](specs/cost-control-and-mode
 
 Relevant code:
 
-- [enforcement/fanout.ts](/path/to/stablehand/packages/sandbox-daemon/src/harness/enforcement/fanout.ts)
-- [contracts harness.ts `HarnessTurnLimitsSchema`](/path/to/stablehand/packages/contracts/src/harness.ts)
+- [enforcement/fanout.ts](../packages/sandbox-daemon/src/harness/enforcement/fanout.ts)
+- [contracts harness.ts `HarnessTurnLimitsSchema`](../packages/contracts/src/harness.ts)
 
 ### 11. Configuration and DI
 
-The `docker` execution preset, config resolver, and dependency injection container wire runtime services together.
+The config resolver and dependency injection container wire runtime services together.
 
 Relevant code:
 
-- [config/presets.ts](/path/to/stablehand/packages/stablehand/src/config/presets.ts)
-- [config/resolve.ts](/path/to/stablehand/packages/stablehand/src/config/resolve.ts)
-- [config/container.ts](/path/to/stablehand/packages/stablehand/src/config/container.ts)
+- [config/resolve.ts](../packages/stablehand/src/config/resolve.ts)
+- [config/container.ts](../packages/stablehand/src/config/container.ts)
 
 ### 12. Proto Package
 
@@ -230,7 +228,7 @@ Protocol Buffer definitions for sandbox gRPC communication. Defines the `Harness
 
 Relevant code:
 
-- [sandbox.proto](/path/to/stablehand/packages/proto/stablehand/sandbox/v1/sandbox.proto)
+- [sandbox.proto](../packages/proto/stablehand/sandbox/v1/sandbox.proto)
 
 ## Request and Run Flow
 
@@ -286,9 +284,9 @@ PostgreSQL is the current system of record for:
 
 Relevant code:
 
-- [schema-pg.ts](/path/to/stablehand/packages/stablehand/src/database/schema-pg.ts)
-- [repository.ts](/path/to/stablehand/packages/stablehand/src/database/repository.ts)
-- [migrations.ts](/path/to/stablehand/packages/stablehand/src/database/migrations.ts)
+- [schema-pg.ts](../packages/stablehand/src/database/schema-pg.ts)
+- [repository.ts](../packages/stablehand/src/database/repository.ts)
+- [migrations.ts](../packages/stablehand/src/database/migrations.ts)
 
 ## UI Surface
 
@@ -307,9 +305,9 @@ The shipped frontend is broader than a basic dashboard/chat shell. It includes:
 
 Relevant code:
 
-- [App.tsx](/path/to/stablehand/packages/ui/src/App.tsx)
-- [Sidebar.tsx](/path/to/stablehand/packages/ui/src/components/ui/Sidebar.tsx)
-- [AgentDetailPage.tsx](/path/to/stablehand/packages/ui/src/pages/AgentDetailPage.tsx)
+- [App.tsx](../packages/ui/src/App.tsx)
+- [Sidebar.tsx](../packages/ui/src/components/ui/Sidebar.tsx)
+- [AgentDetailPage.tsx](../packages/ui/src/pages/AgentDetailPage.tsx)
 
 ## Current Limitations
 

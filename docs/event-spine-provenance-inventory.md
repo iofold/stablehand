@@ -1,7 +1,7 @@
 # Event Spine Provenance Inventory
 
 Current as of 2026-07-08. This inventory covers every `EventMap` name in
-[bus.ts](/path/to/stablehand/packages/stablehand/src/events/bus.ts).
+[bus.ts](../packages/stablehand/src/events/bus.ts).
 
 For each `CanonicalLog.ingest(eventName, payload)` call, exactly one persisted
 `event_store` row has `source_type = eventName` and `source_payload` set to the

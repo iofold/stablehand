@@ -59,7 +59,7 @@ pnpm exec bun tests/performance/cli.ts plan \
 The wrapper reads `STABLEHAND_API_TOKEN` from the process environment or, when it
 is absent, decodes it in memory from the dev2 `stablehand-core-secrets` Secret.
 The token is not printed or written to the evidence directory. The default
-Kubeconfig is `/path/to/workspace/infra/.k3s-kubeconfig.yaml`.
+Kubeconfig is `$HOME/workspace/infra/.k3s-kubeconfig.yaml`.
 
 Do not run `dev2-capacity.json`, `dev2-scale-10.json`, or
 `dev2-sse-fanout.json` casually. Dev2 is a shared node. The sampler aborts the
