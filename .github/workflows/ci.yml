@@ -111,6 +111,7 @@ jobs:
           cp .env.example .env
           echo "SECRET_MASTER_KEY=$(openssl rand -hex 32)" >> .env
           STABLEHAND_API_TOKEN="$(openssl rand -hex 32)"
+          echo "::add-mask::$STABLEHAND_API_TOKEN"
           echo "STABLEHAND_API_TOKEN=$STABLEHAND_API_TOKEN" >> .env
           echo "STABLEHAND_API_TOKEN=$STABLEHAND_API_TOKEN" >> "$GITHUB_ENV"
           docker compose up --build -d
@@ -119,7 +120,8 @@ jobs:
           timeout 60 bash -c 'until curl -sf http://localhost:3002/health; do sleep 2; done'
           timeout 60 bash -c 'until curl -sf http://localhost:3200 > /dev/null; do sleep 2; done'
       - name: Run required E2E smoke gate
-        run: pnpm test:e2e -- --project=chromium --grep @smoke
+        # `pnpm test:e2e -- …` forwards the literal `--`, which Playwright reads as file filters.
+        run: pnpm test:e2e:required
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3200
           PLAYWRIGHT_API_BASE_URL: http://localhost:3002
