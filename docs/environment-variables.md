@@ -27,7 +27,7 @@ This document provides a comprehensive reference for all environment variables u
 | `STABLEHAND_PRESET` | `docker` | No | Inert. Present in some deploy manifests but not read by the application code. | `docker` |
 | `STABLEHAND_DATA_DIR` | `./.stablehand` | No | Root directory for persisted agent workspace data. | `/data/stablehand` |
 | `STABLEHAND_UI_MODE` | `disabled` | No | UI mode for `stablehand dev`. Options: `disabled`, `embedded`, `vite`. | `vite` |
-| `STABLEHAND_API_URL` | `http://localhost:3002` | No | Base URL for the API (used by CLI chat). | `https://api.ctxmill.com` |
+| `STABLEHAND_API_URL` | `http://localhost:3002` | No | Base URL for the API (used by CLI chat). | `https://api.example.com` |
 | `STABLEHAND_API_ORIGIN` | `http://localhost:3001` | No | Origin for the API (used by Vite proxy). | `http://orchestrator:3001` |
 
 ## Sandbox
@@ -55,7 +55,7 @@ sandbox Jobs.
 | `STABLEHAND_SANDBOX_OTEL_TRACES_EXPORTER` | `OTEL_TRACES_EXPORTER` or `none` | No | Trace exporter for sandbox run containers. Set to `otlp` with `docker-compose.signoz.yml`. | `otlp` |
 | `STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT` | `OTEL_EXPORTER_OTLP_ENDPOINT` or `http://host.docker.internal:4318` | No | OTLP HTTP endpoint passed to sandbox run containers. Use the dev2 tailnet collector endpoint for centralized SigNoz telemetry. | `https://otlp-signoz.staging.example.com` |
 | `STABLEHAND_SANDBOX_OTEL_SERVICE_NAME_PREFIX` | `stablehand-sandbox` | No | Prefix used for sandbox service names. The harness name is appended. | `stablehand-sandbox` |
-| `STABLEHAND_SANDBOX_OTEL_RESOURCE_ATTRIBUTES` | `OTEL_RESOURCE_ATTRIBUTES` or local stablehand attrs | No | Base sandbox resource attributes. `ctxmill.component=sandbox` and `stablehand.harness=<harness>` are appended automatically. Keep `deployment.environment` accurate for the source environment even when exporting to dev2 SigNoz. | `deployment.environment=local,service.namespace=stablehand` |
+| `STABLEHAND_SANDBOX_OTEL_RESOURCE_ATTRIBUTES` | `OTEL_RESOURCE_ATTRIBUTES` or local stablehand attrs | No | Base sandbox resource attributes. `stablehand.component=sandbox` and `stablehand.harness=<harness>` are appended automatically. Keep `deployment.environment` accurate for the source environment even when exporting to dev2 SigNoz. | `deployment.environment=local,service.namespace=stablehand` |
 | `OTEL_NODE_ENABLED_INSTRUMENTATIONS` | `aws-sdk,dns,grpc,http,net,openai,pg,pino,runtime-node,undici` | No | Comma-separated auto-instrumentation list used by the stablehand OTEL register when not explicitly overridden. | `http,undici,openai` |
 | `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `false` | No | Keep disabled unless intentionally exporting prompt/completion content to the configured OTEL backend. The stablehand register also sets OpenAI auto-instrumentation content capture off by default. | `false` |
 
@@ -86,7 +86,7 @@ Used for persistent artifact storage (file uploads/downloads).
 | Name | Default | Required? | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
 | `S3_ENDPOINT` | `http://minio:9000` | No | S3-compatible endpoint URL. | `https://s3.amazonaws.com` |
-| `S3_PUBLIC_ENDPOINT` | `http://localhost:9000` | No | Publicly accessible S3 endpoint URL (for signed URLs). | `https://artifacts.ctxmill.com` |
+| `S3_PUBLIC_ENDPOINT` | `http://localhost:9000` | No | Publicly accessible S3 endpoint URL (for signed URLs). | `https://artifacts.example.com` |
 | `S3_ACCESS_KEY` | `stablehand` | No | S3 access key. | `AKIA...` |
 | `S3_SECRET_KEY` | `stablehand-dev` | No | S3 secret key. | `secret...` |
 | `S3_BUCKET` | `stablehand-artifacts` | No | S3 bucket name. | `my-artifacts` |
@@ -96,7 +96,9 @@ Used for persistent artifact storage (file uploads/downloads).
 
 | Name | Default | Required? | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
-| `CORS_ORIGINS` | `http://localhost:3200` | No | Comma-separated list of allowed CORS origins. | `https://app.ctxmill.com` |
+| `CORS_ORIGINS` | `http://localhost:3200` | No | Comma-separated list of allowed CORS origins. | `https://app.example.com` |
+| `STABLEHAND_DOMAIN` | `stablehand.localhost` | No | Host the Traefik router in `docker-compose.yml` serves the UI and API on. Only matters behind Traefik. | `stablehand.example.com` |
+| `LITELLM_DOMAIN` | `litellm.localhost` | No | Host the Traefik router in `deploy/compose/model-gateway/docker-compose.yml` serves the LiteLLM admin UI on. | `litellm.example.com` |
 
 ## Security
 

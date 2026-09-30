@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { chartComponents } from './charts';
 
 const STORAGE_KEY = 'stablehand-console-connection';
-const DEFAULT_API_BASE = 'https://stablehand.staging.example.com/api';
+const DEFAULT_API_BASE = 'http://localhost:3200/api';
 
 const PHASE_CHIP_LABELS: Partial<Record<StablehandRunPhase, string>> = {
   submitted: 'Sending',

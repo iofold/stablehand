@@ -36,7 +36,7 @@ services:
       STABLEHAND_API_TOKEN: ${STABLEHAND_API_TOKEN:-}
       STABLEHAND_CALLBACK_TOKEN_SECRET: ${STABLEHAND_CALLBACK_TOKEN_SECRET:-}
       STABLEHAND_AUTH_DISABLED: ${STABLEHAND_AUTH_DISABLED:-}
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://platform.dev.example.com,http://localhost:3200}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3200}
       STABLEHAND_DATA_VOLUME: ${COMPOSE_PROJECT_NAME:-stablehand}_stablehand-data
       # Sandboxes live on the internal agents network; the egress proxy is their only route out.
       # Set STABLEHAND_SANDBOX_EGRESS_PROXY_URL to an empty string to run sandboxes without a proxy
@@ -116,7 +116,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=web"
-      - "traefik.http.routers.stablehand.rule=Host(`${STABLEHAND_DOMAIN:-platform.dev.example.com}`)"
+      - "traefik.http.routers.stablehand.rule=Host(`${STABLEHAND_DOMAIN:-stablehand.localhost}`)"
       - "traefik.http.routers.stablehand.entrypoints=websecure"
       - "traefik.http.routers.stablehand.tls.certresolver=letsencrypt"
       - "traefik.http.services.stablehand.loadbalancer.server.port=80"

@@ -226,7 +226,7 @@ describe('model gateway deployment', () => {
     expect(litellm?.labels).toEqual(expect.arrayContaining([
       'traefik.enable=true',
       'traefik.docker.network=web',
-      'traefik.http.routers.litellm.rule=Host(`${LITELLM_DOMAIN:-litellm.dev.example.com}`)',
+      'traefik.http.routers.litellm.rule=Host(`${LITELLM_DOMAIN:-litellm.localhost}`)',
       'traefik.http.routers.litellm.entrypoints=websecure',
       'traefik.http.routers.litellm.tls.certresolver=letsencrypt',
       'traefik.http.services.litellm.loadbalancer.server.port=4000',
