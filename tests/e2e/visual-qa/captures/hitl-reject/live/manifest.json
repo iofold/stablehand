@@ -5,13 +5,13 @@
   "captures": [
     {
       "eventType": "hitl-reject-pending",
-      "filePath": "/path/to/stablehand/tests/e2e/visual-qa/captures/hitl-reject/live/00-hitl-reject-pending.png",
+      "filePath": "tests/e2e/visual-qa/captures/hitl-reject/live/00-hitl-reject-pending.png",
       "description": "Approval card before rejection",
       "timestamp": 1774426038916
     },
     {
       "eventType": "hitl-rejected-viewport",
-      "filePath": "/path/to/stablehand/tests/e2e/visual-qa/captures/hitl-reject/live/01-hitl-rejected-viewport.png",
+      "filePath": "tests/e2e/visual-qa/captures/hitl-reject/live/01-hitl-rejected-viewport.png",
       "description": "After rejection",
       "timestamp": 1774426040997
     }

@@ -13,6 +13,7 @@ type FsModule = {
 
 type PathModule = {
   join(...paths: string[]): string;
+  relative(from: string, to: string): string;
 };
 
 const loadFs = new Function('return import("node:fs")') as () => Promise<FsModule>;
@@ -111,7 +112,7 @@ export class ScreenshotCapture {
       capturedAt: new Date().toISOString(),
       captures: this.captures.map((c) => ({
         eventType: c.eventType,
-        filePath: c.filePath,
+        filePath: path.relative(process.cwd(), c.filePath),
         description: c.description,
         timestamp: c.timestamp,
       })),

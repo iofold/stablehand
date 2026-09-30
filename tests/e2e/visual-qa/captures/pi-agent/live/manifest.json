@@ -5,13 +5,13 @@
   "captures": [
     {
       "eventType": "markdown-final",
-      "filePath": "/path/to/stablehand/tests/e2e/visual-qa/captures/pi-agent/live/00-markdown-final.png",
+      "filePath": "tests/e2e/visual-qa/captures/pi-agent/live/00-markdown-final.png",
       "description": "Page state after run attempt",
       "timestamp": 1774426080274
     },
     {
       "eventType": "markdown-content",
-      "filePath": "/path/to/stablehand/tests/e2e/visual-qa/captures/pi-agent/live/01-markdown-content-component.png",
+      "filePath": "tests/e2e/visual-qa/captures/pi-agent/live/01-markdown-content-component.png",
       "description": "Assistant message with markdown formatting",
       "timestamp": 1774426080370
     }

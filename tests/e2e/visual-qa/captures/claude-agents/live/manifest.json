@@ -5,7 +5,7 @@
   "captures": [
     {
       "eventType": "claude-native-tools-complete",
-      "filePath": "/path/to/stablehand/tests/e2e/visual-qa/captures/claude-agents/live/00-claude-native-tools-complete.png",
+      "filePath": "tests/e2e/visual-qa/captures/claude-agents/live/00-claude-native-tools-complete.png",
       "description": "Claude tool execution state",
       "timestamp": 1774426009193
     }
