@@ -43,7 +43,7 @@ describe('sandbox runtime spec builders', () => {
 
     expect(env).toContain(
       'OTEL_RESOURCE_ATTRIBUTES=deployment.environment=local,'
-      + 'service.namespace=stablehand,ctxmill.component=sandbox,'
+      + 'service.namespace=stablehand,stablehand.component=sandbox,'
       + 'stablehand.harness=langgraph,stablehand.session.id=session-1,'
       + 'stablehand.agent.id=agent-1,stablehand.conversation.id=conversation-1',
     );

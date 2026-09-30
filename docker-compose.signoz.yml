@@ -15,7 +15,7 @@ services:
   sandbox-langgraph:
     environment:
       OTEL_SERVICE_NAME: stablehand-sandbox-langgraph
-      OTEL_RESOURCE_ATTRIBUTES: ${STABLEHAND_SANDBOX_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=stablehand},ctxmill.component=sandbox,stablehand.harness=langgraph
+      OTEL_RESOURCE_ATTRIBUTES: ${STABLEHAND_SANDBOX_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=stablehand},stablehand.component=sandbox,stablehand.harness=langgraph
       OTEL_EXPORTER_OTLP_ENDPOINT: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT:-https://otlp-signoz.staging.example.com}
       OTEL_EXPORTER_OTLP_PROTOCOL: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
       OTEL_TRACES_EXPORTER: ${STABLEHAND_SANDBOX_OTEL_TRACES_EXPORTER:-otlp}
@@ -27,7 +27,7 @@ services:
   sandbox-claude-agents:
     environment:
       OTEL_SERVICE_NAME: stablehand-sandbox-claude-agents
-      OTEL_RESOURCE_ATTRIBUTES: ${STABLEHAND_SANDBOX_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=stablehand},ctxmill.component=sandbox,stablehand.harness=claude-agents
+      OTEL_RESOURCE_ATTRIBUTES: ${STABLEHAND_SANDBOX_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=stablehand},stablehand.component=sandbox,stablehand.harness=claude-agents
       OTEL_EXPORTER_OTLP_ENDPOINT: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT:-https://otlp-signoz.staging.example.com}
       OTEL_EXPORTER_OTLP_PROTOCOL: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
       OTEL_TRACES_EXPORTER: ${STABLEHAND_SANDBOX_OTEL_TRACES_EXPORTER:-otlp}
@@ -39,7 +39,7 @@ services:
   sandbox-pi-agent:
     environment:
       OTEL_SERVICE_NAME: stablehand-sandbox-pi-agent
-      OTEL_RESOURCE_ATTRIBUTES: ${STABLEHAND_SANDBOX_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=stablehand},ctxmill.component=sandbox,stablehand.harness=pi-agent
+      OTEL_RESOURCE_ATTRIBUTES: ${STABLEHAND_SANDBOX_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=stablehand},stablehand.component=sandbox,stablehand.harness=pi-agent
       OTEL_EXPORTER_OTLP_ENDPOINT: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT:-https://otlp-signoz.staging.example.com}
       OTEL_EXPORTER_OTLP_PROTOCOL: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
       OTEL_TRACES_EXPORTER: ${STABLEHAND_SANDBOX_OTEL_TRACES_EXPORTER:-otlp}

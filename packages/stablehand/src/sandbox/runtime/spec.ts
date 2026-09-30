@@ -228,7 +228,7 @@ export function buildSandboxOtelEnv(
     ?? 'deployment.environment=local,service.namespace=stablehand';
   const resourceAttributes = [
     baseResourceAttributes,
-    'ctxmill.component=sandbox',
+    'stablehand.component=sandbox',
     `stablehand.harness=${harnessName}`,
     ...(identity
       ? [

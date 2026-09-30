@@ -326,7 +326,7 @@ describe('ContainerManager', () => {
       expect(arg.Env).toContain('OTEL_SERVICE_NAME=stablehand-sandbox-langgraph');
       expect(arg.Env).toContain('OTEL_TRACES_EXPORTER=otlp');
       expect(arg.Env).toContain('OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-signoz.staging.example.com');
-      expect(arg.Env).toContain('OTEL_RESOURCE_ATTRIBUTES=deployment.environment=local,service.namespace=stablehand,ctxmill.component=sandbox,stablehand.harness=langgraph,stablehand.session.id=run-001,stablehand.agent.id=agent-abc');
+      expect(arg.Env).toContain('OTEL_RESOURCE_ATTRIBUTES=deployment.environment=local,service.namespace=stablehand,stablehand.component=sandbox,stablehand.harness=langgraph,stablehand.session.id=run-001,stablehand.agent.id=agent-abc');
       expect(arg.Env).not.toContain('OTEL_SERVICE_NAME=stablehand-orchestrator');
     });
   });
