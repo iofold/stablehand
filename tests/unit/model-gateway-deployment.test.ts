@@ -65,6 +65,20 @@ describe('model gateway deployment', () => {
 
     expect(config.model_list).toEqual(expect.arrayContaining([
       {
+        model_name: 'gpt-6.1-sol',
+        litellm_params: {
+          model: 'openai/gpt-6.1-sol',
+          api_key: 'os.environ/OPENAI_API_KEY',
+        },
+      },
+      {
+        model_name: 'gpt-6-luna',
+        litellm_params: {
+          model: 'openai/gpt-6-luna',
+          api_key: 'os.environ/OPENAI_API_KEY',
+        },
+      },
+      {
         model_name: 'gpt-5.6-sol',
         litellm_params: {
           model: 'openai/gpt-5.6-sol',
