@@ -196,9 +196,45 @@ describe('model gateway deployment', () => {
     }));
   });
 
+  it('keeps the gateway overlay free of Traefik so a plain host can run it', () => {
+    const compose = readYaml<ModelGatewayCompose & { networks?: Record<string, unknown> }>(
+      'deploy/compose/model-gateway/docker-compose.yml',
+    );
+    const litellm = compose.services?.litellm;
+
+    expect(litellm?.networks).toEqual(['default', 'stablehand-agents']);
+    expect(litellm?.labels).toBeUndefined();
+    expect(compose.networks?.web).toBeUndefined();
+    expect(litellm?.ports).toContain(
+      '127.0.0.1:${LITELLM_PORT:-4400}:4000',
+    );
+  });
+
+  it('registers the runtime key before the orchestrator starts', () => {
+    const compose = readYaml<{
+      services?: Record<string, {
+        image?: string;
+        entrypoint?: string[];
+        environment?: Record<string, string>;
+        volumes?: string[];
+        depends_on?: Record<string, { condition?: string }>;
+      }>;
+    }>('deploy/compose/model-gateway/docker-compose.yml');
+    const init = compose.services?.['gateway-init'];
+
+    expect(init?.image).toBe(compose.services?.litellm?.image);
+    expect(init?.entrypoint).toEqual(['/app/.venv/bin/python', '/opt/stablehand/bootstrap_keys.py']);
+    expect(init?.volumes).toContain(
+      './deploy/compose/model-gateway/bootstrap_keys.py:/opt/stablehand/bootstrap_keys.py:ro',
+    );
+    expect(init?.depends_on?.litellm?.condition).toBe('service_healthy');
+    expect(compose.services?.orchestrator?.depends_on?.['gateway-init']?.condition)
+      .toBe('service_completed_successfully');
+  });
+
   it('publishes the authenticated admin UI through the dev1 TLS router', () => {
     const compose = readYaml<ModelGatewayCompose>(
-      'deploy/compose/model-gateway/docker-compose.yml',
+      'deploy/compose/model-gateway/traefik.yml',
     );
     const litellm = compose.services?.litellm;
 
@@ -207,9 +243,6 @@ describe('model gateway deployment', () => {
       'stablehand-agents',
       'web',
     ]);
-    expect(litellm?.ports).toContain(
-      '127.0.0.1:${LITELLM_PORT:-4400}:4000',
-    );
     expect(litellm?.labels).toEqual(expect.arrayContaining([
       'traefik.enable=true',
       'traefik.docker.network=web',

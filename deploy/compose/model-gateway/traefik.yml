@@ -1,0 +1,21 @@
+# Publishes the LiteLLM admin UI through an existing Traefik on the external
+# `web` network. Add it after the gateway overlay in COMPOSE_FILE:
+#   docker-compose.yml:deploy/compose/traefik/docker-compose.yml:deploy/compose/model-gateway/docker-compose.yml:deploy/compose/model-gateway/traefik.yml
+services:
+  litellm:
+    networks:
+      - default
+      - stablehand-agents
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.litellm.rule=Host(`${LITELLM_DOMAIN:-litellm.localhost}`)"
+      - "traefik.http.routers.litellm.entrypoints=websecure"
+      - "traefik.http.routers.litellm.tls.certresolver=letsencrypt"
+      - "traefik.http.services.litellm.loadbalancer.server.port=4000"
+
+networks:
+  web:
+    name: web
+    external: true
