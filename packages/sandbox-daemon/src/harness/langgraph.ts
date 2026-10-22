@@ -35,6 +35,7 @@ import { isNativeToolAllowed } from './native-tool-policy.js';
 import {
   createGatewayCorrelationHeaders,
   resolveHarnessModelConnection,
+  takeGatewayBudgetStop,
 } from './model-gateway.js';
 import type { HarnessTurnEnforcer, ModelCallDecision, TurnEnforcementReason } from './enforcement/types.js';
 import {
@@ -526,6 +527,15 @@ class LangGraphSession implements HarnessSession {
         yield queuedEvent;
       }
 
+      // A subagent whose model call was refused for budget fails its `task`
+      // tool, and the parent may still wrap up on a call that slipped under
+      // the cap. Any refusal still means the run hit its cap: end on the
+      // typed stop, keeping the text and usage gathered so far.
+      const budgetStop = takeGatewayBudgetStop(input.turnId);
+      if (budgetStop) {
+        yield budgetStop;
+      }
+
       const usage = usageByModelRunId.size > 0
         ? this.sumUsage([...usageByModelRunId.values()])
         : turnOnlyUsage;
@@ -542,7 +552,8 @@ class LangGraphSession implements HarnessSession {
       for (const queuedEvent of drainQueuedEvents()) {
         yield queuedEvent;
       }
-      yield { type: 'error', error: String(err) };
+      yield takeGatewayBudgetStop(input.turnId, String(err))
+        ?? { type: 'error', error: String(err) };
     } finally {
       unlinkAbort();
     }

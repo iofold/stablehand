@@ -132,6 +132,10 @@ import {
   assertToolErrorContract,
   assertToolRoundTripContract,
 } from './contract/assert-agent-event-contract.js';
+import {
+  RELAYED_BUDGET_ERROR_TEXT,
+  recordRelayBudgetRefusal,
+} from './support/budget-refusal-fixture.js';
 
 function makeConfig(overrides: Partial<HarnessSessionConfig> = {}): HarnessSessionConfig {
   return {
@@ -1337,6 +1341,90 @@ describe('PIAgentHarness AgentEvent contract baseline', () => {
       const events = await eventsPromise;
       expect(abort).toHaveBeenCalledTimes(1);
       assertAbortContract(events);
+    } finally {
+      await session.close();
+    }
+  });
+});
+
+describe('PIAgentHarness spend-cap stop', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function mockSessionEmitting(emit: (listener: (event: Record<string, unknown>) => void) => void) {
+    let listener: ((event: Record<string, unknown>) => void) | undefined;
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: (next: (event: Record<string, unknown>) => void) => {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+        prompt: vi.fn(async () => {
+          if (listener) emit(listener);
+        }),
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        state: createNativeState(),
+        setModel: vi.fn(),
+      },
+    });
+  }
+
+  it('reports a refused model call as the typed budget stop with the relay numbers', async () => {
+    const turnId = 'turn-pi-budget';
+    const { cleanup } = await recordRelayBudgetRefusal(turnId, { spentUsd: 1.01, capUsd: 1 });
+    mockSessionEmitting((emit) => {
+      emit({
+        type: 'turn_end',
+        message: { stopReason: 'error', errorMessage: RELAYED_BUDGET_ERROR_TEXT },
+      });
+      emit({ type: 'agent_end', messages: [], willRetry: false });
+    });
+
+    const session = await new PIAgentHarness().openSession(makeConfig());
+    try {
+      const events = await collectEvents(session.deliverTurn({
+        turnId,
+        messages: [makeMessage('user', 'Loop', '2026-10-22T10:00:00.000Z')],
+      }, {}));
+
+      expect(events).toEqual([{
+        type: 'error',
+        error: expect.stringContaining('($1.01 spent of $1.00)'),
+        code: 'model_gateway_budget_exceeded',
+        details: { spentUsd: 1.01, capUsd: 1 },
+      }]);
+    } finally {
+      await session.close();
+      await cleanup();
+    }
+  });
+
+  it('recognizes the relayed refusal text when no relay record exists', async () => {
+    mockSessionEmitting((emit) => {
+      emit({
+        type: 'turn_end',
+        message: { stopReason: 'error', errorMessage: RELAYED_BUDGET_ERROR_TEXT },
+      });
+      emit({ type: 'agent_end', messages: [], willRetry: false });
+    });
+
+    const session = await new PIAgentHarness().openSession(makeConfig());
+    try {
+      const events = await collectEvents(session.deliverTurn({
+        turnId: 'turn-pi-budget-text',
+        messages: [makeMessage('user', 'Loop', '2026-10-22T10:00:00.000Z')],
+      }, {}));
+
+      expect(events).toEqual([{
+        type: 'error',
+        error: expect.stringContaining('reached its spend cap'),
+        code: 'model_gateway_budget_exceeded',
+        details: { spentUsd: null, capUsd: null },
+      }]);
     } finally {
       await session.close();
     }

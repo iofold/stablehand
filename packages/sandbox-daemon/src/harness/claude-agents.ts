@@ -35,6 +35,7 @@ import {
 import {
   createGatewayCorrelationHeaders,
   resolveHarnessModelConnection,
+  takeGatewayBudgetStop,
   type HarnessModelConnection,
 } from './model-gateway.js';
 import type { ModelCallDecision } from './enforcement/types.js';
@@ -156,6 +157,22 @@ export function toSdkSessionId(conversationId: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${((parseInt(h[16]!, 16) & 0x3) | 0x8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
+/** Plain text of an SDK assistant message (e.g. the CLI's "API Error: ..." notice). */
+function assistantMessageText(message: { content?: unknown } | undefined): string {
+  const content = message?.content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((block: unknown) => (
+      typeof block === 'object'
+      && block !== null
+      && (block as { type?: unknown }).type === 'text'
+      && typeof (block as { text?: unknown }).text === 'string'
+        ? (block as { text: string }).text
+        : ''
+    ))
+    .join('\n');
+}
+
 class ClaudeSession implements HarnessSession {
   private transcript: Message[] = [];
   private readonly queuedEvents: AgentEvent[] = [];
@@ -247,6 +264,7 @@ class ClaudeSession implements HarnessSession {
     const streamState = this.harness.createStreamMappingState();
     const accumulator = new TurnAccumulator({ turnId: input.turnId });
     let fanoutError: string | undefined;
+    let budgetStop: AgentEvent | undefined;
 
     try {
       const maxTurns = this.harnessConfig.maxTurns;
@@ -284,6 +302,18 @@ class ClaudeSession implements HarnessSession {
       const enforcer = this.config.turnEnforcer;
       for await (const message of q) {
         yield* this.flushQueuedEvents();
+        // The CLI reports a failed API call as a synthetic assistant message
+        // ("API Error: 400 ...") flagged with `error`. When the gateway
+        // refused it for budget, end the turn on the typed stop instead of
+        // streaming that text as the agent's answer.
+        if (message.type === 'assistant' && message.error) {
+          const apiErrorText = assistantMessageText(message.message);
+          budgetStop = takeGatewayBudgetStop(input.turnId, apiErrorText);
+          if (budgetStop) {
+            abortController.abort();
+            break;
+          }
+        }
         // One completed assistant message per model call — parent and
         // subagent alike — so counting them enforces the cap across every
         // parallel Task branch the out-of-process SDK spawns.
@@ -332,6 +362,11 @@ class ClaudeSession implements HarnessSession {
             });
           }
 
+          if (event.type === 'error') {
+            yield takeGatewayBudgetStop(input.turnId, event.error) ?? event;
+            continue;
+          }
+
           if (event.type === 'done') {
             accumulator.recordDone(event);
             if (!accumulator.hasCommitContent() && typeof event.result === 'string') {
@@ -350,7 +385,13 @@ class ClaudeSession implements HarnessSession {
       }
 
       yield* this.flushQueuedEvents();
-      if (fanoutError) {
+      budgetStop ??= takeGatewayBudgetStop(input.turnId);
+      if (budgetStop) {
+        // Keep the text and usage gathered before the refusal: the typed
+        // error decides the outcome, finalizeTurn records what happened.
+        yield budgetStop;
+        fanoutError = undefined;
+      } else if (fanoutError) {
         yield { type: 'error', error: fanoutError };
         fanoutError = undefined;
       }
@@ -362,7 +403,9 @@ class ClaudeSession implements HarnessSession {
     } catch (error) {
       console.error('[claude-agents] deliverTurn error:', error);
       yield* this.flushQueuedEvents();
-      yield { type: 'error', error: fanoutError ?? errorMessage(error) };
+      yield budgetStop
+        ?? takeGatewayBudgetStop(input.turnId, errorMessage(error))
+        ?? { type: 'error', error: fanoutError ?? errorMessage(error) };
     } finally {
       cleanupAbort();
     }

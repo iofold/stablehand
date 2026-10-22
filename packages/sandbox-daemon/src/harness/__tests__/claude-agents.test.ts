@@ -83,6 +83,10 @@ import {
   assertToolErrorContract,
   assertToolRoundTripContract,
 } from './contract/assert-agent-event-contract.js';
+import {
+  RELAYED_BUDGET_ERROR_TEXT,
+  recordRelayBudgetRefusal,
+} from './support/budget-refusal-fixture.js';
 
 function makeMessage(role: Message['role'], content: string): Message {
   return {
@@ -1341,5 +1345,134 @@ describe('ClaudeAgentsHarness subagent mapping (ctx-5myn)', () => {
     expect(parentTool).toEqual([
       { type: 'tool_call_start', id: 'p-1', name: 'Bash', args: { cmd: 'ls' } },
     ]);
+  });
+});
+
+describe('Claude Agents spend-cap stop', () => {
+  const gatewaySecrets = {
+    STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+    STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+    STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'session-key',
+    STABLEHAND_MODEL_GATEWAY_REVISION: 'dev1-1',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function openGatewaySession() {
+    const harness = new ClaudeAgentsHarness();
+    Reflect.set(harness, 'loadSdkModule', async () => ({
+      query: mockQuery,
+      tool: mockTool,
+      createSdkMcpServer: mockCreateSdkMcpServer,
+    }));
+    return harness.openSession(makeConfig({
+      harnessConfigJson: JSON.stringify({ model: 'claude-sonnet-5' }),
+      secrets: gatewaySecrets,
+    }));
+  }
+
+  it('ends the turn on the typed budget stop instead of streaming the CLI API-error text', async () => {
+    const turnId = 'turn-claude-budget';
+    const { cleanup } = await recordRelayBudgetRefusal(turnId, { spentUsd: 0.0512, capUsd: 0.05 });
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'stream_event',
+        event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Working on it. ' } },
+        parent_tool_use_id: null,
+      };
+      yield {
+        type: 'assistant',
+        error: 'invalid_request',
+        parent_tool_use_id: null,
+        message: { content: [{ type: 'text', text: `API Error: ${RELAYED_BUDGET_ERROR_TEXT}` }] },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        result: `API Error: ${RELAYED_BUDGET_ERROR_TEXT}`,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      };
+    });
+
+    const session = await openGatewaySession();
+    try {
+      const events = await collectEvents(session.deliverTurn(
+        { messages: [makeMessage('user', 'Loop forever')], turnId },
+        {},
+      ));
+
+      const texts = events
+        .filter((event): event is Extract<AgentEvent, { type: 'text_delta' }> => event.type === 'text_delta')
+        .map((event) => event.content)
+        .join('');
+      expect(texts).toBe('Working on it. ');
+      const errors = events.filter((event) => event.type === 'error');
+      expect(errors).toEqual([{
+        type: 'error',
+        error: expect.stringContaining('reached its spend cap ($0.0512 spent of $0.0500)'),
+        code: 'model_gateway_budget_exceeded',
+        details: { spentUsd: 0.0512, capUsd: 0.05 },
+      }]);
+      expect(events.some((event) => event.type === 'done')).toBe(false);
+    } finally {
+      await session.close();
+      await cleanup();
+    }
+  });
+
+  it('recognizes a relayed refusal in a failed query result without the relay record', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        subtype: 'error_during_execution',
+        errors: [`API Error: ${RELAYED_BUDGET_ERROR_TEXT}`],
+        usage: { input_tokens: 1, output_tokens: 0 },
+      };
+    });
+
+    const session = await openGatewaySession();
+    try {
+      const events = await collectEvents(session.deliverTurn(
+        { messages: [makeMessage('user', 'Hello')], turnId: 'turn-claude-budget-text' },
+        {},
+      ));
+
+      expect(events.filter((event) => event.type === 'error')).toEqual([{
+        type: 'error',
+        error: expect.stringContaining('reached its spend cap'),
+        code: 'model_gateway_budget_exceeded',
+        details: { spentUsd: null, capUsd: null },
+      }]);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('leaves unrelated API errors untyped', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        subtype: 'error_during_execution',
+        errors: ['API Error: 500 upstream exploded'],
+      };
+    });
+
+    const session = await openGatewaySession();
+    try {
+      const events = await collectEvents(session.deliverTurn(
+        { messages: [makeMessage('user', 'Hello')], turnId: 'turn-claude-500' },
+        {},
+      ));
+
+      expect(events.filter((event) => event.type === 'error')).toEqual([{
+        type: 'error',
+        error: 'API Error: 500 upstream exploded',
+      }]);
+    } finally {
+      await session.close();
+    }
   });
 });

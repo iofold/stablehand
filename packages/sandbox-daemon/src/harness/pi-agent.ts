@@ -37,6 +37,7 @@ import { filterNativeToolNames } from './native-tool-policy.js';
 import {
   createGatewayCorrelationHeaders,
   resolveHarnessModelConnection,
+  takeGatewayBudgetStop,
   type HarnessModelConnection,
 } from './model-gateway.js';
 import type { ModelCallDecision } from './enforcement/types.js';
@@ -866,7 +867,19 @@ class PiAgentSession implements HarnessSession {
         }
         if (piEvent.type === 'agent_end') {
           if (!aborted && modelError) {
-            eventQueue.push({ type: 'error', error: modelError });
+            eventQueue.push(
+              takeGatewayBudgetStop(input.turnId, modelError)
+                ?? { type: 'error', error: modelError },
+            );
+          } else if (!aborted) {
+            // A refused call inside a nested model call (e.g. an extension)
+            // can leave the main loop finishing normally; the run still hit
+            // its cap.
+            const budgetStop = takeGatewayBudgetStop(input.turnId);
+            if (budgetStop) {
+              modelError = budgetStop.error;
+              eventQueue.push(budgetStop);
+            }
           }
           done = true;
         }
@@ -902,7 +915,10 @@ class PiAgentSession implements HarnessSession {
         : Promise.resolve();
 
       promptPromise.catch((err: unknown) => {
-        eventQueue.push({ type: 'error', error: String(err) });
+        eventQueue.push(
+          takeGatewayBudgetStop(input.turnId, String(err))
+            ?? { type: 'error', error: String(err) },
+        );
         done = true;
       });
 
@@ -923,7 +939,8 @@ class PiAgentSession implements HarnessSession {
       await promptPromise;
     } catch (err) {
       console.error('[pi-agent] deliverTurn error:', err);
-      yield { type: 'error', error: String(err) };
+      yield takeGatewayBudgetStop(input.turnId, String(err))
+        ?? { type: 'error', error: String(err) };
     } finally {
       unlinkAbort();
       this.turnRef.queuedEvents = undefined;

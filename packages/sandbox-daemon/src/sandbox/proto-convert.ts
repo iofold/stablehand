@@ -477,6 +477,8 @@ function convertAgentEvent(event: AgentEvent): ProtoAgentEvent {
           value: create(ProtoErrorEventSchema, {
             message: event.error,
             category: 'runtime',
+            ...(event.code ? { code: event.code } : {}),
+            ...(event.details ? { detailsJson: stringifyJsonWithBigInts(event.details) } : {}),
           }),
         },
       });
@@ -647,13 +649,20 @@ export function protoAgentEventToAGUI(
       };
     }
 
-    case 'error':
+    case 'error': {
+      const v = proto.event.value;
+      const details = v.detailsJson
+        ? parseJsonOrThrow(v.detailsJson, 'error event details')
+        : undefined;
       return {
         type: 'RUN_ERROR',
         timestamp: ts,
         runId,
-        error: proto.event.value.message,
+        error: v.message,
+        ...(v.code ? { code: v.code } : {}),
+        ...(details ? { details } : {}),
       };
+    }
 
     case 'done': {
       const v = proto.event.value;

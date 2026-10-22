@@ -19,6 +19,10 @@ import {
   assertToolErrorContract,
   assertToolRoundTripContract,
 } from './contract/assert-agent-event-contract.js';
+import {
+  RELAYED_BUDGET_ERROR_TEXT,
+  recordRelayBudgetRefusal,
+} from './support/budget-refusal-fixture.js';
 
 const mockStreamEvents = vi.fn();
 const mockCreateDeepAgent = vi.fn((_config?: Record<string, unknown>) => ({
@@ -1083,5 +1087,71 @@ describe('LangGraphHarness native-tool policy against real deepagents', () => {
     expect(existsSync(path.join(workspaceDir, 'sub.txt'))).toBe(false);
     const refused = toolResults(model).filter((message) => message.status === 'error');
     expect(refused.map((message) => message.tool_call_id).sort()).toEqual(['call-sub-exec', 'call-sub-write']);
+  });
+});
+
+describe('LangGraphHarness spend-cap stop', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('turns a relayed budget refusal from the model client into the typed stop', async () => {
+    mockStreamEvents.mockImplementation(async function* () {
+      yield { event: 'on_chat_model_stream', data: { chunk: { content: 'Step 1 done. ' } } };
+      // What ChatOpenAI throws for the relay's terminal 400.
+      throw Object.assign(new Error(RELAYED_BUDGET_ERROR_TEXT), { status: 400 });
+    });
+    const messages = [makeMessage('user', 'Keep going')];
+    const session = await openRestoredTestSession({
+      stateVersion: '1',
+      messages,
+      payload: { transcript: messages },
+    });
+
+    try {
+      const events = await collectEvents(
+        session.deliverTurn({ messages, turnId: 'turn-langgraph-budget' }, {}),
+      ) as AgentEvent[];
+
+      expect(events.at(-1)).toEqual({
+        type: 'error',
+        error: expect.stringContaining('reached its spend cap'),
+        code: 'model_gateway_budget_exceeded',
+        details: { spentUsd: null, capUsd: null },
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('uses the relay record for the numbers and keeps usage when a subagent hit the cap', async () => {
+    const turnId = 'turn-langgraph-subagent-budget';
+    mockStreamEvents.mockImplementation(() => langGraphStream([
+      { event: 'on_chat_model_stream', data: { chunk: { content: 'The research subagent ran out of budget.' } } },
+    ]));
+    const messages = [makeMessage('user', 'Research this')];
+    const session = await openRestoredTestSession({
+      stateVersion: '1',
+      messages,
+      payload: { transcript: messages },
+    });
+    const { cleanup } = await recordRelayBudgetRefusal(turnId, { spentUsd: 0.2, capUsd: 0.2 });
+
+    try {
+      const events = await collectEvents(session.deliverTurn({ messages, turnId }, {})) as AgentEvent[];
+      const errorIndex = events.findIndex((event) => event.type === 'error');
+
+      expect(events[errorIndex]).toEqual({
+        type: 'error',
+        error: expect.stringContaining('($0.2000 spent of $0.2000)'),
+        code: 'model_gateway_budget_exceeded',
+        details: { spentUsd: 0.2, capUsd: 0.2 },
+      });
+      // The typed stop decides the outcome; what the turn produced is kept.
+      expect(events.slice(errorIndex + 1).some((event) => event.type === 'message_committed')).toBe(true);
+    } finally {
+      await session.close();
+      await cleanup();
+    }
   });
 });

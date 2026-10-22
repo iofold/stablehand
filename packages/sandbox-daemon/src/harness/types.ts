@@ -47,7 +47,9 @@ export type AgentEvent =
   | { type: 'approval_resolved'; id: string; action: 'approve' | 'reject' }
   | { type: 'custom_agui_event'; event: AgentSessionEvent }
   | MessageCommittedAgentEvent
-  | { type: 'error'; error: string }
+  // code/details: typed terminal reason (e.g. model_gateway_budget_exceeded
+  // with spentUsd/capUsd). Untyped failures carry the message only.
+  | { type: 'error'; error: string; code?: string; details?: Record<string, unknown> }
   | { type: 'done'; result?: string; usage?: TokenUsage };
 
 export interface TokenUsage {

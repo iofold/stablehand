@@ -52,6 +52,10 @@ import {
 } from './turn-delivery-context.js';
 import { flushOpenTelemetry } from '../observability/telemetry-flush.js';
 
+import {
+  startModelGatewayRelayFromEnv,
+  stopModelGatewayRelay,
+} from '../harness/model-gateway-relay.js';
 import type { ResolvedSecrets } from '../harness/types.js';
 import type { ToolContext, ToolDefinition } from '../tool/types.js';
 
@@ -434,6 +438,11 @@ export async function startDaemon(
     interceptors: [runtimeInstanceAuthInterceptor],
   });
 
+  // Gateway mode: harness clients reach the model gateway through a loopback
+  // relay that turns a budget refusal into a terminal, typed error. Started
+  // before the gRPC listener so every harness session sees it.
+  await startModelGatewayRelayFromEnv();
+
   server = createServer(connectHandler);
 
   // Bun's default idle timeout (~10s) kills the DeliverTurn stream while
@@ -475,6 +484,8 @@ export async function stopDaemon(): Promise<void> {
     toolApi.stop();
     toolApi = null;
   }
+
+  await stopModelGatewayRelay();
 
   secrets = {};
   secretsLoaded = false;

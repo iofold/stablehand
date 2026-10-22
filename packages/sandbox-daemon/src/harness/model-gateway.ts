@@ -6,7 +6,11 @@ import {
   type CertifiedNativeModelGatewayProvider,
 } from '@stablehand/shared';
 import { resolveModelAuth } from './kit/model-auth.js';
-import type { ResolvedSecrets } from './types.js';
+import {
+  getModelGatewayRelay,
+  type GatewayBudgetRefusal,
+} from './model-gateway-relay.js';
+import type { AgentEvent, ResolvedSecrets } from './types.js';
 
 const GATEWAY_ENV = {
   enabled: 'STABLEHAND_MODEL_GATEWAY_ENABLED',
@@ -35,6 +39,11 @@ interface ResolveHarnessModelConnectionInput {
   apiKeyRef?: string;
   baseUrl?: string;
   secrets: ResolvedSecrets;
+  /**
+   * Loopback relay root to use instead of the gateway root. Defaults to the
+   * relay this process registered at startup; null forces the direct root.
+   */
+  relayUrl?: string | null;
 }
 
 function nonEmpty(
@@ -86,12 +95,19 @@ export function resolveHarnessModelConnection(
     throw new Error('Model gateway is enabled but its credential revision is unavailable');
   }
 
+  // Route through the in-sandbox relay when one is running, so a budget
+  // refusal reaches the client as a terminal error instead of a retried 429.
+  const relayUrl = input.relayUrl === undefined
+    ? getModelGatewayRelay()?.url
+    : input.relayUrl ?? undefined;
+  const effectiveRoot = (relayUrl ?? rootUrl).replace(/\/+$/, '');
+
   if (input.provider === 'openai') {
     return {
       mode: 'gateway',
       provider: 'openai',
       apiKey: runtimeKey,
-      baseUrl: `${rootUrl.replace(/\/+$/, '')}/v1`,
+      baseUrl: `${effectiveRoot}/v1`,
       gatewayRevision: revision,
     };
   }
@@ -99,7 +115,7 @@ export function resolveHarnessModelConnection(
     mode: 'gateway',
     provider: input.provider,
     apiKey: runtimeKey,
-    baseUrl: rootUrl.replace(/\/+$/, ''),
+    baseUrl: effectiveRoot,
     gatewayRevision: revision,
   };
 }
@@ -119,4 +135,71 @@ export function createGatewayCorrelationHeaders(
       stablehand_turn_correlation: correlation,
     }),
   });
+}
+
+/** Error code for a model call the gateway refused because the run's budget ran out. */
+export const MODEL_GATEWAY_BUDGET_EXCEEDED = 'model_gateway_budget_exceeded';
+
+const BUDGET_REFUSAL_TEXT_PATTERNS: readonly RegExp[] = [
+  // The relay's rewritten refusal (GATEWAY_BUDGET_REFUSAL_MESSAGE).
+  /Stablehand spend cap reached/,
+  // LiteLLM's own refusal text, when a client reached the gateway directly.
+  /Budget has been exceeded!/,
+  /"type"\s*:\s*"budget_exceeded"/,
+];
+
+/** True when an SDK error text is a gateway budget refusal (relayed or raw). */
+export function isGatewayBudgetRefusalText(text: string): boolean {
+  return BUDGET_REFUSAL_TEXT_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function formatUsdAmount(value: number): string {
+  return `$${value.toFixed(value < 1 ? 4 : 2)}`;
+}
+
+type GatewayBudgetErrorEvent = Extract<AgentEvent, { type: 'error' }>;
+
+export function gatewayBudgetErrorEvent(
+  refusal: Pick<GatewayBudgetRefusal, 'spentUsd' | 'capUsd'>,
+): GatewayBudgetErrorEvent {
+  const amounts = refusal.capUsd !== null
+    ? ` (${refusal.spentUsd !== null ? `${formatUsdAmount(refusal.spentUsd)} spent of ` : ''}${formatUsdAmount(refusal.capUsd)})`
+    : '';
+  return {
+    type: 'error',
+    error: `Stopped: the model gateway refused further model calls because this run reached its spend cap${amounts}.`,
+    code: MODEL_GATEWAY_BUDGET_EXCEEDED,
+    details: {
+      spentUsd: refusal.spentUsd,
+      capUsd: refusal.capUsd,
+    },
+  };
+}
+
+/**
+ * The typed terminal error for a turn the gateway stopped for budget, if it
+ * did. Consults the relay's record for this turn first (exact numbers), then
+ * falls back to recognizing the refusal in the SDK's error text.
+ */
+export function takeGatewayBudgetStop(
+  turnId: string,
+  errorText?: string,
+): GatewayBudgetErrorEvent | undefined {
+  const refusal = getModelGatewayRelay()?.takeBudgetRefusal(toOpaqueTurnCorrelation(turnId));
+  if (refusal) return gatewayBudgetErrorEvent(refusal);
+  if (errorText !== undefined && isGatewayBudgetRefusalText(errorText)) {
+    const amounts = /Current cost:\s*([0-9.eE+-]+),\s*Max budget:\s*([0-9.eE+-]+)/.exec(errorText);
+    const spent = amounts ? Number(amounts[1]) : Number.NaN;
+    const cap = amounts ? Number(amounts[2]) : Number.NaN;
+    return gatewayBudgetErrorEvent({
+      spentUsd: Number.isFinite(spent) ? spent : null,
+      capUsd: Number.isFinite(cap) ? cap : null,
+    });
+  }
+  return undefined;
+}
+
+/** True when the relay already saw a budget refusal for this turn. */
+export function hasGatewayBudgetRefusal(turnId: string): boolean {
+  return getModelGatewayRelay()?.hasBudgetRefusal(toOpaqueTurnCorrelation(turnId)) ?? false;
 }

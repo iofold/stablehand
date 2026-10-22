@@ -31,6 +31,7 @@ import type { OrchestratorServiceClient } from '../tool-proxy.js';
 import {
   agentEventToSessionEvent,
   messageToCommittedEvent,
+  protoAgentEventToAGUI,
   protoDeliverTurnToInput,
   protoFreshBootstrapToSessionConfig,
   protoRestoreBootstrapToRestorePoint,
@@ -900,5 +901,46 @@ describe('protoToToolDefs', () => {
     expect(() => protoToToolDefs(tools)).toThrow(
       /Failed to parse JSON for tool broken input schema/,
     );
+  });
+});
+
+describe('typed error events', () => {
+  it('carries a terminal code and its details from the harness to the AG-UI RUN_ERROR', () => {
+    const sessionEvent = agentEventToSessionEvent({
+      type: 'error',
+      error: 'Stopped: this run reached its spend cap.',
+      code: 'model_gateway_budget_exceeded',
+      details: { spentUsd: 0.0512, capUsd: 0.05 },
+    });
+    const payload = getAgentEventPayload(sessionEvent);
+    if (payload.event.case !== 'error') {
+      throw new Error('Expected error payload');
+    }
+    expect(payload.event.value).toMatchObject({
+      message: 'Stopped: this run reached its spend cap.',
+      category: 'runtime',
+      code: 'model_gateway_budget_exceeded',
+      detailsJson: '{"spentUsd":0.0512,"capUsd":0.05}',
+    });
+
+    expect(protoAgentEventToAGUI(payload, 'turn-1')).toMatchObject({
+      type: 'RUN_ERROR',
+      runId: 'turn-1',
+      error: 'Stopped: this run reached its spend cap.',
+      code: 'model_gateway_budget_exceeded',
+      details: { spentUsd: 0.0512, capUsd: 0.05 },
+    });
+  });
+
+  it('keeps untyped errors free of code and details', () => {
+    const payload = getAgentEventPayload(agentEventToSessionEvent({ type: 'error', error: 'boom' }));
+    if (payload.event.case !== 'error') {
+      throw new Error('Expected error payload');
+    }
+    expect(payload.event.value.code).toBeUndefined();
+    expect(payload.event.value.detailsJson).toBeUndefined();
+    const converted = protoAgentEventToAGUI(payload, 'turn-2');
+    expect(converted).not.toHaveProperty('code');
+    expect(converted).not.toHaveProperty('details');
   });
 });
