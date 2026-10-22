@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
 import {
   Sparkles,
   Zap,
@@ -8,6 +8,7 @@ import {
   ArrowDown,
   ChevronDown,
   ChevronRight,
+  CircleCheck,
   Info,
   Wrench,
 } from 'lucide-react';
@@ -19,6 +20,7 @@ import { cn } from '@/lib/utils';
 import { formatDurationBetween } from '@/lib/format';
 import { describeTurnCost } from '@/lib/usage-cost';
 import type { Message, ToolCallState, MessagePart } from '@/stores/conversation';
+import { isA2UIRenderToolName } from '@/lib/tool-display';
 
 export interface SessionThreadProps {
   messages: Message[];
@@ -34,7 +36,34 @@ export interface SessionThreadProps {
   turns?: Turn[];
   /** When set, each turn divider gets an info button that opens the turn inspector. */
   onInspectTurn?: (turnId: string) => void;
+  /**
+   * What the open turn is doing. 'finishing' means the reply is complete but
+   * the turn has not closed; 'awaiting-approval' means a decision is pending.
+   */
+  activity?: SessionActivity;
+  /** Rendered at the end of the conversation, inside the scroll area (e.g. a pending approval). */
+  trailing?: ReactNode;
+  /** Changes when the trailing content changes, so the thread scrolls to it. */
+  trailingKey?: string;
+  /** Epoch ms of the last event from the open turn; drives the "no new output" hint. */
+  lastOutputAt?: number | null;
 }
+
+/** Silence longer than this gets an explicit "no new output" note. */
+const IDLE_NOTE_AFTER_MS = 15_000;
+
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  return now;
+}
+
+export type SessionActivity = 'idle' | 'working' | 'awaiting-approval' | 'finishing';
 
 /** Runs of more than this many top-level cards collapse by default (ctx-q201). */
 const TOOL_CALL_COLLAPSE_THRESHOLD = 2;
@@ -126,12 +155,22 @@ function ToolCallGroupCard({ group }: { group: ToolCallGroup }) {
     : <ToolCallCard toolCall={group.call} />;
 }
 
+/** Charts and other A2UI output are results, not plumbing: never fold them away. */
+function isVisualGroup(group: ToolCallGroup): boolean {
+  return group.children.length === 0
+    && isA2UIRenderToolName(group.call.name)
+    && group.call.status !== 'error';
+}
+
 function CollapsibleToolCalls({ toolCalls }: { toolCalls: ToolCallState[] }) {
   const [expanded, setExpanded] = useState(false);
   const groups = groupToolCalls(toolCalls);
   if (groups.length === 0) return null;
 
-  if (groups.length <= TOOL_CALL_COLLAPSE_THRESHOLD) {
+  const visualGroups = groups.filter(isVisualGroup);
+  const otherGroups = groups.filter((group) => !isVisualGroup(group));
+
+  if (otherGroups.length <= TOOL_CALL_COLLAPSE_THRESHOLD) {
     return (
       <>
         {groups.map((group) => (
@@ -141,10 +180,14 @@ function CollapsibleToolCalls({ toolCalls }: { toolCalls: ToolCallState[] }) {
     );
   }
 
-  const { suffix, running } = statusSummary(toolCalls);
+  const foldedCalls = otherGroups.flatMap((group) => [group.call, ...group.children]);
+  const { suffix, running } = statusSummary(foldedCalls);
 
   return (
     <div className="my-1">
+      {visualGroups.map((group) => (
+        <ToolCallGroupCard key={group.call.id} group={group} />
+      ))}
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -152,12 +195,12 @@ function CollapsibleToolCalls({ toolCalls }: { toolCalls: ToolCallState[] }) {
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <Wrench className="h-3 w-3" />
-        <span>{toolCalls.length} tool calls{suffix}</span>
+        <span>{foldedCalls.length} tool calls{suffix}</span>
         {running > 0 && <span className="h-1.5 w-1.5 rounded-full bg-yellow-500 animate-pulse" />}
       </button>
       {expanded && (
         <div className="mt-1 space-y-0.5">
-          {groups.map((group) => (
+          {otherGroups.map((group) => (
             <ToolCallGroupCard key={group.call.id} group={group} />
           ))}
         </div>
@@ -302,8 +345,15 @@ export function SessionThread({
   pastRunError,
   turns = [],
   onInspectTurn,
+  activity = isStreaming ? 'working' : 'idle',
+  trailing,
+  trailingKey,
+  lastOutputAt = null,
 }: SessionThreadProps) {
   const endRef = useRef<HTMLDivElement>(null);
+  const showWorkingIndicator = activity === 'working' && !streamingContent && toolCalls.size === 0;
+  const now = useNow(showWorkingIndicator && lastOutputAt !== null);
+  const idleMs = showWorkingIndicator && lastOutputAt !== null ? now - lastOutputAt : 0;
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -319,10 +369,12 @@ export function SessionThread({
     void streamingContent;
     void toolCalls.size;
     void pastRunError;
+    void trailingKey;
+    void activity;
     if (autoScroll && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [messages, streamingContent, autoScroll, toolCalls.size, pastRunError]);
+  }, [messages, streamingContent, autoScroll, toolCalls.size, pastRunError, trailingKey, activity]);
 
   const scrollToBottom = useCallback(() => {
     if (containerRef.current) {
@@ -503,7 +555,7 @@ export function SessionThread({
           )}
 
           {/* Typing indicator when streaming but no content yet */}
-          {isStreaming && !streamingContent && activeToolCalls.length === 0 && (
+          {showWorkingIndicator && (
             <div className="flex items-start gap-3 py-3 animate-fade-in">
               <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-surface-800 ring-1 ring-surface-700/50">
                 <Sparkles className="h-3.5 w-3.5 text-accent-400" />
@@ -512,8 +564,27 @@ export function SessionThread({
                 <span className="h-1.5 w-1.5 rounded-full bg-surface-400 animate-[pulse_1.4s_ease-in-out_infinite]" />
                 <span className="h-1.5 w-1.5 rounded-full bg-surface-400 animate-[pulse_1.4s_ease-in-out_0.2s_infinite]" />
                 <span className="h-1.5 w-1.5 rounded-full bg-surface-400 animate-[pulse_1.4s_ease-in-out_0.4s_infinite]" />
+                {idleMs >= IDLE_NOTE_AFTER_MS && lastOutputAt !== null && (
+                  <span data-testid="turn-idle-note" className="ml-2 text-xs text-surface-500 tabular-nums">
+                    No new output for {formatDurationBetween(lastOutputAt, now)}
+                  </span>
+                )}
               </div>
             </div>
+          )}
+
+          {activity === 'finishing' && (
+            <div
+              data-testid="turn-finishing"
+              className="flex items-center gap-2 py-2 text-xs text-surface-500 animate-fade-in"
+            >
+              <CircleCheck className="h-3.5 w-3.5 text-surface-500" aria-hidden />
+              <span>Reply complete · closing the turn</span>
+            </div>
+          )}
+
+          {trailing && (
+            <div className="pt-2">{trailing}</div>
           )}
 
           {!isStreaming && pastRunError && (

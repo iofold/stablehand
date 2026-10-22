@@ -62,7 +62,8 @@ export function isMissingToolName(rawName: string | undefined): boolean {
   return !rawName || rawName.trim() === '' || rawName === MISSING_TOOL_NAME;
 }
 
-function sentenceCase(name: string): string {
+/** `content_preview` / `contentPreview` → `Content preview`. */
+export function humanizeIdentifier(name: string): string {
   const words = name
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
@@ -83,13 +84,13 @@ function sentenceCase(name: string): string {
 export function toolDisplayName(rawName: string | undefined): string {
   if (isMissingToolName(rawName)) return 'Tool call';
   const base = baseToolName(rawName!.trim());
-  return KNOWN_TOOL_LABELS[base] ?? sentenceCase(base);
+  return KNOWN_TOOL_LABELS[base] ?? humanizeIdentifier(base);
 }
 
 /** Label for an a2ui-render card, named after the component it drew. */
 export function a2uiDisplayName(component: string): string {
   const bare = component.replace(/^(?:stablehand\.)?charts:/, '');
-  return A2UI_COMPONENT_LABELS[bare] ?? sentenceCase(bare);
+  return A2UI_COMPONENT_LABELS[bare] ?? humanizeIdentifier(bare);
 }
 
 export function isA2UIRenderToolName(rawName: string): boolean {

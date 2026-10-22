@@ -141,6 +141,13 @@ interface ConversationStore {
   currentTurnId: string | null;
   activeConversationId: string | null;
   isStreaming: boolean;
+  /**
+   * The agent's final reply for the current turn is committed and nothing
+   * new has streamed since; the turn itself has not closed (no RUN_FINISHED).
+   */
+  responseComplete: boolean;
+  /** Epoch ms of the last event for the open turn (second resolution). */
+  lastTurnEventAt: number | null;
   committedMessageCount: number;
   streamingContent: string;
   streamingRole: 'user' | 'assistant';
@@ -156,7 +163,8 @@ interface ConversationStore {
   loadMessages: (msgs: Message[]) => void;
   setActiveConversation: (conversationId: string | null) => void;
   reset: () => void;
-  addSystemMessage: (content: string) => void;
+  /** Local log line; with a turnId it stays inside that turn's section. */
+  addSystemMessage: (content: string, turnId?: string) => void;
 }
 
 interface PreviewController {
@@ -476,6 +484,8 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
   currentTurnId: null,
   activeConversationId: null,
   isStreaming: false,
+  responseComplete: false,
+  lastTurnEventAt: null,
   committedMessageCount: 0,
   streamingContent: '',
   streamingRole: 'assistant',
@@ -522,9 +532,10 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
     });
   },
 
-  addSystemMessage: (content: string) => {
+  addSystemMessage: (content: string, turnId?: string) => {
     const msg: Message = {
       id: nextId(),
+      ...(turnId ? { turnId } : {}),
       messageRevision: 0,
       role: 'system',
       content,
@@ -566,6 +577,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
       messages: normalizedMessages,
       // Preserve streaming state if a run is active — don't clobber
       isStreaming,
+      responseComplete: isStreaming ? get().responseComplete : false,
       committedMessageCount: isStreaming ? committedMessageCount : 0,
       streamingContent: isStreaming ? streamingContent : '',
       streamingRole: isStreaming ? streamingRole : 'assistant',
@@ -627,11 +639,34 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
       }
     }
 
+    // Coarse "last heard from the turn" clock for the idle hint; at most one
+    // store write per second so token deltas don't double the render rate.
+    const now = Date.now();
+    const lastTurnEventAt = get().lastTurnEventAt;
+    if (lastTurnEventAt === null || now - lastTurnEventAt >= 1000) {
+      set({ lastTurnEventAt: now });
+    }
+
+    // Any new output or pause means the agent is not done with its reply.
+    if (
+      get().responseComplete
+      && (
+        type === 'TOOL_CALL_START'
+        || type === 'STABLEHAND_INTERRUPT_REQUESTED'
+        || ((type === 'TEXT_MESSAGE_START' || type === 'TEXT_MESSAGE_CONTENT')
+          && get().streamingRole !== 'user'
+          && event.role !== 'user')
+      )
+    ) {
+      set({ responseComplete: false });
+    }
+
     switch (type) {
       case 'STABLEHAND_TURN_PENDING': {
         resetPreviewController();
         set({
           isStreaming: true,
+          responseComplete: false,
           currentTurnId: (event.turnId as string) || null,
           committedMessageCount: 0,
           streamingContent: '',
@@ -648,6 +683,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
         }
         set({
           isStreaming: true,
+          responseComplete: false,
           currentTurnId: nextTurnId,
           streamingContent: get().streamingContent || '',
           toolCalls: get().toolCalls.size > 0 ? get().toolCalls : new Map(),
@@ -848,16 +884,25 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
         }
         if (event.name === 'stablehand.interrupt.resolved') {
           const action = (event.action as string) || 'resolved';
-          const isApproved = action === 'approve';
-          const prefix = isApproved ? '✓ Approved' : '✗ Rejected';
-          const label = prefix;
-          const existing = get().messages;
-          const alreadyLogged = existing.length > 0 &&
-            existing[existing.length - 1].role === 'system' &&
-            existing[existing.length - 1].content.startsWith(prefix);
-          if (!alreadyLogged) {
+          const label = action === 'approve'
+            ? '✓ Approved'
+            : action === 'reject'
+              ? '✗ Rejected'
+              : action === 'timeout'
+                ? 'Approval request timed out'
+                : null;
+          const resolvedTurnId = typeof event.turnId === 'string' && event.turnId.length > 0
+            ? event.turnId
+            : undefined;
+          // The approver's own tab already logged the decision locally.
+          const alreadyLogged = label !== null && get().messages.slice(-20).some((message) =>
+            message.role === 'system'
+            && message.content.startsWith(label)
+            && (resolvedTurnId === undefined || message.turnId === undefined || message.turnId === resolvedTurnId));
+          if (label && !alreadyLogged) {
             const msg: Message = {
               id: nextId(),
+              ...(resolvedTurnId ? { turnId: resolvedTurnId } : {}),
               messageRevision: 0,
               role: 'system',
               content: label,
@@ -959,8 +1004,19 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
           }
 
           const upserted = upsertMessageById(prev.messages, msg);
+          const toolStillRunning = Array.from(nextToolCalls.values()).some(
+            (toolCall) => toolCall.status === 'running' || toolCall.status === 'pending',
+          );
+          // Harnesses commit a text-only assistant message once their output
+          // for the turn is done; tool-carrying commits happen mid-turn.
+          const isFinalReply = role === 'assistant'
+            && content.trim().length > 0
+            && mergedToolCalls.length === 0
+            && !parts.some((part) => part.type === 'tool_call')
+            && !toolStillRunning;
           return {
             messages: upserted.messages,
+            responseComplete: prev.isStreaming && isFinalReply,
             committedMessageCount: prev.committedMessageCount + (upserted.inserted ? 1 : 0),
             streamingContent: '',
             streamingRole: 'assistant',
@@ -1010,6 +1066,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
         // The UI only clears preview state here; it does not synthesize final messages.
         set({
           isStreaming: false,
+          responseComplete: false,
           currentTurnId: null,
           committedMessageCount: 0,
           streamingContent: '',
@@ -1038,6 +1095,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
         set((prev) => ({
           messages: [...prev.messages, msg],
           isStreaming: false,
+          responseComplete: false,
           currentTurnId: null,
           committedMessageCount: 0,
           streamingContent: '',
@@ -1065,6 +1123,8 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
       currentTurnId: null,
       activeConversationId: null,
       isStreaming: false,
+      responseComplete: false,
+      lastTurnEventAt: null,
       committedMessageCount: 0,
       streamingContent: '',
       streamingRole: 'assistant',

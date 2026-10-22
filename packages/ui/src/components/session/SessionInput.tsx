@@ -2,15 +2,43 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Send, CornerDownLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+/** Why the composer is locked, if it is. */
+export type ComposerStatus = 'ready' | 'connecting' | 'working' | 'awaiting-approval' | 'finishing';
+
+const COMPOSER_COPY: Record<ComposerStatus, { placeholder: string; hint: string }> = {
+  ready: {
+    placeholder: 'Message the agent…',
+    hint: 'Enter to send · Shift+Enter for a new line',
+  },
+  connecting: {
+    placeholder: 'Connecting…',
+    hint: 'Loading the conversation',
+  },
+  working: {
+    placeholder: 'Agent is working…',
+    hint: 'You can send a new message when this turn ends',
+  },
+  'awaiting-approval': {
+    placeholder: 'Waiting for your decision…',
+    hint: 'The agent is paused until you approve or reject the request',
+  },
+  finishing: {
+    placeholder: 'Closing the turn…',
+    hint: 'The reply is complete. You can send a new message when the turn closes',
+  },
+};
+
 interface SessionInputProps {
   onSend: (content: string) => void;
-  disabled?: boolean;
+  status?: ComposerStatus;
 }
 
-export function SessionInput({ onSend, disabled }: SessionInputProps) {
+export function SessionInput({ onSend, status = 'ready' }: SessionInputProps) {
   const [value, setValue] = useState('');
   const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const disabled = status !== 'ready';
+  const copy = COMPOSER_COPY[status];
 
   /* Auto-focus on mount */
   useEffect(() => {
@@ -60,6 +88,7 @@ export function SessionInput({ onSend, disabled }: SessionInputProps) {
           <textarea
             ref={textareaRef}
             data-testid="session-input"
+            data-status={status}
             value={value}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
@@ -67,7 +96,7 @@ export function SessionInput({ onSend, disabled }: SessionInputProps) {
             onBlur={() => setIsFocused(false)}
             disabled={disabled}
             rows={1}
-            placeholder={disabled ? 'Agent is thinking...' : 'Message the agent...'}
+            placeholder={copy.placeholder}
             className={cn(
               'flex-1 resize-none bg-transparent px-4 py-3 text-sm text-surface-200 placeholder-surface-400 focus:outline-none',
               'min-h-[44px] max-h-[200px]',
@@ -86,6 +115,7 @@ export function SessionInput({ onSend, disabled }: SessionInputProps) {
               data-testid="send-button"
               onClick={handleSend}
               disabled={!canSend}
+              aria-label="Send message"
               className={cn(
                 'flex h-10 w-10 items-center justify-center rounded-md transition-all duration-200',
                 canSend
@@ -98,8 +128,8 @@ export function SessionInput({ onSend, disabled }: SessionInputProps) {
           </div>
         </div>
         <div className="mt-1.5 flex items-center justify-center">
-          <p className="text-[10px] text-surface-400">
-            {disabled ? 'Streaming response...' : 'Press Enter to send, Shift+Enter for new line'}
+          <p data-testid="session-input-hint" className="text-[10px] text-surface-400">
+            {copy.hint}
           </p>
         </div>
       </div>

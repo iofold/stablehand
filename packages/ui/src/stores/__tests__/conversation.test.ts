@@ -1014,4 +1014,73 @@ describe('conversation store', () => {
     expect(message.toolCallId).toBe('tc-9');
     expect(message.content).toBe('done');
   });
+  describe('reply complete before the turn closes', () => {
+    function commitAssistant(messageId: string, extra: Record<string, unknown> = {}) {
+      getStore().handleSSEEvent(makeEvent('CUSTOM', {
+        name: 'stablehand.message.committed',
+        messageId,
+        role: 'assistant',
+        content: 'All done.',
+        messageSeq: 1,
+        turnId: 'r1',
+        ...extra,
+      }));
+    }
+
+    it('marks the reply complete on a text-only commit and clears it on RUN_FINISHED', () => {
+      getStore().handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+      commitAssistant('final-1');
+
+      expect(getStore().isStreaming).toBe(true);
+      expect(getStore().responseComplete).toBe(true);
+
+      getStore().handleSSEEvent(makeEvent('RUN_FINISHED', { runId: 'r1' }));
+      expect(getStore().isStreaming).toBe(false);
+      expect(getStore().responseComplete).toBe(false);
+    });
+
+    it('does not treat a tool-carrying commit as the final reply', () => {
+      getStore().handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+      commitAssistant('batch-1', {
+        toolCalls: [{ id: 'tc1', name: 'Read', args: '{}', status: 'complete', result: 'ok' }],
+      });
+
+      expect(getStore().responseComplete).toBe(false);
+    });
+
+    it('drops back to working when the agent starts something new', () => {
+      getStore().handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+      commitAssistant('final-2');
+      expect(getStore().responseComplete).toBe(true);
+
+      getStore().handleSSEEvent(makeEvent('TOOL_CALL_START', { runId: 'r1', toolCallId: 'tc2', toolCallName: 'Bash' }));
+      expect(getStore().responseComplete).toBe(false);
+    });
+  });
+  describe('approval decisions in the transcript', () => {
+    it('keeps a local decision line inside its turn and does not log it twice', () => {
+      getStore().addSystemMessage('✓ Approved', 'turn-7');
+      getStore().handleSSEEvent(makeEvent('CUSTOM', {
+        name: 'stablehand.interrupt.resolved',
+        action: 'approve',
+        turnId: 'turn-7',
+      }));
+
+      const systemMessages = getStore().messages.filter((message) => message.role === 'system');
+      expect(systemMessages).toHaveLength(1);
+      expect(systemMessages[0].turnId).toBe('turn-7');
+    });
+
+    it('logs a timeout as a timeout, not a rejection', () => {
+      getStore().handleSSEEvent(makeEvent('CUSTOM', {
+        name: 'stablehand.interrupt.resolved',
+        action: 'timeout',
+        turnId: 'turn-8',
+      }));
+
+      const [message] = getStore().messages;
+      expect(message.content).toBe('Approval request timed out');
+      expect(message.turnId).toBe('turn-8');
+    });
+  });
 });

@@ -99,4 +99,17 @@ describe('SessionThread subagent grouping and collapse', () => {
     expect(container.textContent).toContain('coder · 1 call');
     expect(container.textContent).not.toContain('Bash');
   });
+  it('keeps A2UI visuals visible when the plumbing calls around them collapse', () => {
+    const metric = JSON.stringify({ component: 'MetricCard', props: { title: 'Growth', value: '2,600' } });
+    renderThread([message([
+      { type: 'tool_call', id: 'v-1', name: 'mcp__stablehand__a2ui-render', args: metric, status: 'complete' },
+      { type: 'tool_call', id: 'p-1', name: 'mcp__stablehand__artifact_upload', args: '{}', status: 'complete' },
+      { type: 'tool_call', id: 'p-2', name: 'mcp__stablehand__emit-event', args: '{}', status: 'complete' },
+      { type: 'tool_call', id: 'p-3', name: 'Write', args: '{}', status: 'complete' },
+    ])]);
+
+    expect(container.querySelector('[data-testid="a2ui-metric-card"]')).not.toBeNull();
+    expect(container.textContent).toContain('3 tool calls');
+    expect(container.textContent).not.toContain('Upload artifact');
+  });
 });

@@ -50,7 +50,7 @@ vi.mock('@/components/session/SessionThread', () => ({
 }));
 
 vi.mock('@/components/session/SessionInput', () => ({
-  SessionInput: (props: { disabled: boolean; onSend: (content: string) => Promise<void> }) => {
+  SessionInput: (props: { status: string; onSend: (content: string) => Promise<void> }) => {
     sessionInputMock(props);
     return null;
   },
@@ -134,7 +134,7 @@ describe('SessionPage conversation snapshot boundary', () => {
       expect.objectContaining({ enabled: true }),
     );
     expect(sessionInputMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ disabled: true }),
+      expect.objectContaining({ status: 'connecting' }),
     );
 
     resolveSnapshot?.(ConversationSnapshotResponseSchema.parse({
@@ -163,7 +163,7 @@ describe('SessionPage conversation snapshot boundary', () => {
       eventCursor: '000000000042',
     });
     expect(sessionInputMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ disabled: false }),
+      expect.objectContaining({ status: 'ready' }),
     );
   });
 
@@ -195,10 +195,10 @@ describe('SessionPage conversation snapshot boundary', () => {
     await flushEffects();
 
     const inputProps = sessionInputMock.mock.lastCall?.[0] as {
-      disabled: boolean;
+      status: string;
       onSend: (content: string) => Promise<void>;
     };
-    expect(inputProps.disabled).toBe(false);
+    expect(inputProps.status).toBe('ready');
 
     await act(async () => {
       await inputProps.onSend('reconcile the account');

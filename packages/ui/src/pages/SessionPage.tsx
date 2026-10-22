@@ -6,8 +6,8 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import type { Turn } from '@stablehand/contracts';
-import { SessionThread } from '@/components/session/SessionThread';
-import { SessionInput } from '@/components/session/SessionInput';
+import { SessionThread, type SessionActivity } from '@/components/session/SessionThread';
+import { SessionInput, type ComposerStatus } from '@/components/session/SessionInput';
 import { ErrorDisplay } from '@/components/session/ErrorDisplay';
 import { TurnInspectorPanel } from '@/components/agent/TurnInspectorPanel';
 import { ApprovalCard } from '@/components/hitl/ApprovalCard';
@@ -35,6 +35,37 @@ import {
   type BudgetBlock,
 } from '@/lib/budget-block';
 import { parseTagsInput } from '@/lib/tags';
+import { baseToolName, isApprovalToolName, toolDisplayName } from '@/lib/tool-display';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The request-approval tool carries the agent's reason plus free-form
+ * details; any other gated tool is described by its own arguments.
+ */
+function describeInterrupt(toolName: string, args: Record<string, unknown>): {
+  reason?: string;
+  details: Record<string, unknown>;
+  isApprovalRequest: boolean;
+} {
+  if (!isApprovalToolName(toolName)) {
+    return { details: args, isApprovalRequest: false };
+  }
+  const { reason, details, ...rest } = args;
+  return {
+    ...(typeof reason === 'string' && reason.trim() ? { reason } : {}),
+    details: { ...rest, ...(isRecord(details) ? details : details === undefined ? {} : { details }) },
+    isApprovalRequest: true,
+  };
+}
+
+/** The approval tool needs no name in the log line; other gated tools do. */
+function decisionSuffix(toolName: string | undefined): string {
+  if (!toolName || isApprovalToolName(toolName)) return '';
+  return `: ${toolDisplayName(toolName)}`;
+}
 
 function humanizeError(raw: string): { summary: string; details: string } {
   if (raw.includes('ConnectError') || raw.includes('stream closed')) {
@@ -67,6 +98,8 @@ export function SessionPage() {
   const {
     messages,
     isStreaming,
+    responseComplete,
+    lastTurnEventAt,
     streamingContent,
     toolCalls,
     addUserMessage,
@@ -188,6 +221,8 @@ export function SessionPage() {
           }
         }
 
+        // Pending approvals are fetched per agent; only this conversation's belong here.
+        const conversationTurnIds = new Set<string>();
         if (mounted) {
           try {
             const turnsRaw = await fetchAgentTurns(id!);
@@ -224,6 +259,7 @@ export function SessionPage() {
                 .sort(
                   (a, b) => b.startedAt - a.startedAt,
                 );
+              for (const turn of convTurns) conversationTurnIds.add(turn.id);
               setConversationTurns(convTurns);
               const lastTurn = convTurns[0];
               if (lastTurn?.error) {
@@ -247,8 +283,9 @@ export function SessionPage() {
           }
 
           try {
-            const pendingInterrupts = await fetchInterrupts(id!);
-            if (mounted && Array.isArray(pendingInterrupts) && pendingInterrupts.length > 0) {
+            const pendingInterrupts = (await fetchInterrupts(id!))
+              .filter((pending) => conversationTurnIds.has(pending.turnId));
+            if (mounted && pendingInterrupts.length > 0) {
               const first = [...pendingInterrupts].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))[0];
               useInterruptStore.getState().setPending({
                 interruptId: first.id,
@@ -337,9 +374,9 @@ export function SessionPage() {
     if (!id || !interrupt?.interruptId) return;
     setError(null);
     try {
-      const toolName = interrupt?.toolName || '';
       useConversationStore.getState().addSystemMessage(
-        `✓ Approved${toolName ? `: ${toolName}` : ''}`,
+        `✓ Approved${decisionSuffix(interrupt?.toolName)}`,
+        interrupt?.turnId,
       );
       await sendInterrupt(id, {
         interruptId: interrupt.interruptId,
@@ -350,15 +387,15 @@ export function SessionPage() {
       console.debug('[Session] Failed to send approval:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolName]);
+  }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolName, interrupt?.turnId]);
 
   const handleReject = useCallback(async () => {
     if (!id || !interrupt?.interruptId) return;
     setError(null);
     try {
-      const toolName = interrupt?.toolName || '';
       useConversationStore.getState().addSystemMessage(
-        `✗ Rejected${toolName ? `: ${toolName}` : ''}`,
+        `✗ Rejected${decisionSuffix(interrupt?.toolName)}`,
+        interrupt?.turnId,
       );
       await sendInterrupt(id, {
         interruptId: interrupt.interruptId,
@@ -369,7 +406,7 @@ export function SessionPage() {
       console.debug('[Session] Failed to send rejection:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolName]);
+  }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolName, interrupt?.turnId]);
 
   const handleDocSubmit = useCallback(
     async (content: string) => {
@@ -442,6 +479,57 @@ export function SessionPage() {
     );
   }
 
+  const interruptToolName = interrupt ? baseToolName(interrupt.toolName) : '';
+  const interruptView = interrupt ? describeInterrupt(interrupt.toolName, interrupt.args) : null;
+  // A pending decision renders at the end of the conversation, below the
+  // output it is about, rather than pinned over it.
+  const interruptPanel = interrupt && id ? (
+    interruptToolName === 'edit_document' ? (
+      <EditableDocument
+        title={(interrupt.args.title as string) ?? 'Review document'}
+        content={(interrupt.args.content as string) ?? ''}
+        onSubmit={handleDocSubmit}
+        onCancel={() => clearInterrupt()}
+      />
+    ) : interruptToolName === 'request_fields' ? (
+      <FieldRequestForm
+        title={(interrupt.args.title as string) ?? 'More information needed'}
+        fields={
+          ((interrupt.args.fields as Array<{ name: string; type: 'text' | 'number' | 'date' | 'select' | 'textarea'; label: string; required?: boolean; options?: string[] }>) ?? [])
+        }
+        onSubmit={handleFormSubmit}
+      />
+    ) : (
+      <ApprovalCard
+        key={interrupt.interruptId}
+        toolLabel={toolDisplayName(interrupt.toolName)}
+        toolName={interrupt.toolName}
+        reason={interruptView?.reason}
+        details={interruptView?.details}
+        isApprovalRequest={interruptView?.isApprovalRequest}
+        onApprove={handleApprove}
+        onReject={handleReject}
+      />
+    )
+  ) : null;
+
+  const threadActivity: SessionActivity = !isStreaming
+    ? 'idle'
+    : interrupt
+      ? 'awaiting-approval'
+      : responseComplete
+        ? 'finishing'
+        : 'working';
+  const composerStatus: ComposerStatus = !streamReady
+    ? 'connecting'
+    : !isStreaming
+      ? 'ready'
+      : interrupt
+        ? 'awaiting-approval'
+        : responseComplete
+          ? 'finishing'
+          : 'working';
+
   return (
     <div className="flex h-screen flex-col bg-surface-950">
       {/* Connection banner */}
@@ -502,38 +590,11 @@ export function SessionPage() {
             pastRunError={pastRunError}
             turns={conversationTurns}
             onInspectTurn={id ? setInspectedTurnId : undefined}
+            activity={threadActivity}
+            lastOutputAt={lastTurnEventAt}
+            trailing={interruptPanel}
+            trailingKey={interrupt?.interruptId}
           />
-
-          {/* HITL interrupt components */}
-          {interrupt && id && (
-            <div className="mx-auto w-full max-w-3xl px-4 pb-2">
-              {interrupt.toolName === 'edit_document' ? (
-                <EditableDocument
-                  title={(interrupt.args.title as string) ?? 'Review Document'}
-                  content={(interrupt.args.content as string) ?? ''}
-                  onSubmit={handleDocSubmit}
-                  onCancel={() => clearInterrupt()}
-                />
-              ) : interrupt.toolName === 'request_fields' ? (
-                <FieldRequestForm
-                  title={(interrupt.args.title as string) ?? 'Additional Information'}
-                  fields={
-                    ((interrupt.args.fields as Array<{ name: string; type: 'text' | 'number' | 'date' | 'select' | 'textarea'; label: string; required?: boolean; options?: string[] }>) ?? [])
-                  }
-                  onSubmit={handleFormSubmit}
-                />
-              ) : (
-                <ApprovalCard
-                  title={`Approve: ${interrupt.toolName}`}
-                  description={`The agent wants to execute "${interrupt.toolName}".`}
-                  action={interrupt.toolName}
-                  details={interrupt.args}
-                  onApprove={handleApprove}
-                  onReject={handleReject}
-                />
-              )}
-            </div>
-          )}
 
           {!conversationId && pendingTags && (
             <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-1.5 px-4 pb-1">
@@ -617,7 +678,7 @@ export function SessionPage() {
           ) : (
             <SessionInput
               onSend={handleSend}
-              disabled={isStreaming || !streamReady}
+              status={composerStatus}
             />
           )}
         </div>
