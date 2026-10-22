@@ -394,6 +394,15 @@ describe('conversation store', () => {
     });
   });
 
+  it('reads the AG-UI toolCallName field on TOOL_CALL_START', () => {
+    const { handleSSEEvent } = getStore();
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
+
+    expect(getStore().toolCalls.get('tc1')?.name).toBe('search');
+  });
+
   it('stablehand.message.committed creates a message with tool calls merged from preview state', () => {
     const { handleSSEEvent } = getStore();
 

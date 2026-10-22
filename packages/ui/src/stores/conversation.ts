@@ -748,7 +748,8 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
         flushPendingDelta();
         const tc: ToolCallState = {
           id: (event.toolCallId as string) || nextId(),
-          name: (event.toolName as string) || 'unknown',
+          // AG-UI carries the name as toolCallName; older frames used toolName.
+          name: (event.toolCallName as string) || (event.toolName as string) || 'unknown',
           args: '',
           status: 'running',
           ...(typeof event.parentToolCallId === 'string'
