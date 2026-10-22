@@ -8,7 +8,9 @@ import {
   MAX_CACHED_BYTES,
   blobResponseHeaders,
   isCacheableMime,
+  missingGalleryConfig,
   renderGalleryPage,
+  renderNotConnectedPage,
   sortedEntries,
   upsertEntry,
   verifyWebhookSignature,
@@ -35,14 +37,9 @@ const DATA_DIR = process.env.GALLERY_DATA_DIR ?? path.join(process.cwd(), 'data'
 const WEBHOOK_SECRET = process.env.GALLERY_WEBHOOK_SECRET ?? '';
 const SYNC_INTERVAL_MS = Number(process.env.GALLERY_SYNC_INTERVAL_MS ?? 60_000);
 
-if (!API_KEY) {
-  console.error('[gallery] STABLEHAND_API_KEY is required (scoped key: artifacts:read + webhooks:manage)');
-  process.exit(1);
-}
-if (!WEBHOOK_SECRET) {
-  console.error('[gallery] GALLERY_WEBHOOK_SECRET is required (HMAC secret for webhook deliveries)');
-  process.exit(1);
-}
+// Without a key or secret the service still starts and explains what is
+// missing, so a compose stack brought up before the seed does not crash-loop.
+const MISSING_CONFIG = missingGalleryConfig({ apiKey: API_KEY, webhookSecret: WEBHOOK_SECRET });
 
 const INDEX_PATH = path.join(DATA_DIR, 'index.json');
 const BLOB_DIR = path.join(DATA_DIR, 'blobs');
@@ -170,6 +167,26 @@ async function ensureWebhooks(): Promise<void> {
   }
 }
 
+/**
+ * The startup probe, retried while Stablehand is still booting (connection
+ * refused or a 5xx), so the gallery can start alongside the stack. A 4xx is
+ * returned at once: the key is wrong, and retrying will not fix it.
+ */
+async function waitForStablehand(): Promise<Response> {
+  const deadline = Date.now() + Number(process.env.GALLERY_STARTUP_WAIT_MS ?? 180_000);
+  for (;;) {
+    try {
+      const res = await api('/api/artifacts?limit=1');
+      if (res.status < 500 || Date.now() >= deadline) return res;
+      console.log(`[gallery] Stablehand answered ${res.status}; retrying`);
+    } catch (err) {
+      if (Date.now() >= deadline) throw err;
+      console.log(`[gallery] waiting for Stablehand at ${BASE_URL}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+  }
+}
+
 async function readBody(req: import('node:http').IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -179,6 +196,17 @@ async function readBody(req: import('node:http').IncomingMessage): Promise<strin
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', PUBLIC_URL);
+
+    if (MISSING_CONFIG.length > 0) {
+      if (req.method === 'GET' && url.pathname === '/healthz') {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, connected: false, missing: MISSING_CONFIG }));
+        return;
+      }
+      res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(renderNotConnectedPage(MISSING_CONFIG));
+      return;
+    }
 
     if (req.method === 'GET' && url.pathname === '/healthz') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -248,13 +276,20 @@ const server = createServer(async (req, res) => {
 });
 
 async function main(): Promise<void> {
+  if (MISSING_CONFIG.length > 0) {
+    console.warn(`[gallery] not connected: set ${MISSING_CONFIG.join(' and ')} (scoped key: artifacts:read + webhooks:manage)`);
+    server.listen(PORT, () => {
+      console.log(`[gallery] waiting for configuration on :${PORT}`);
+    });
+    return;
+  }
   await mkdir(BLOB_DIR, { recursive: true });
   if (!existsSync(INDEX_PATH)) await writeFile(INDEX_PATH, JSON.stringify(EMPTY_INDEX));
   await loadIndex();
 
   // Startup probe per the EXTENDING.md handshake: one allowed endpoint, one
   // deliberately forbidden endpoint — proves the key is scoped, not master.
-  const allowed = await api('/api/artifacts?limit=1');
+  const allowed = await waitForStablehand();
   if (!allowed.ok) {
     console.error(`[gallery] startup probe failed: GET /api/artifacts → ${allowed.status}. Check the scoped key.`);
     process.exit(1);

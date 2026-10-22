@@ -129,6 +129,62 @@ function formatBytes(bytes: number): string {
 
 const BRAND_MARK_SVG = `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4.7 19.3h2.5v-6.5a4.8 4.8 0 0 1 9.6 0v6.5h2.5" stroke="#2dd4bf" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="15" r="2" fill="#2dd4bf"/></svg>`;
 
+/** What the gallery still needs before it can sync, in the order to fix it. */
+export function missingGalleryConfig(env: {
+  apiKey: string;
+  webhookSecret: string;
+}): string[] {
+  const missing: string[] = [];
+  if (!env.apiKey) missing.push('STABLEHAND_API_KEY');
+  if (!env.webhookSecret) missing.push('GALLERY_WEBHOOK_SECRET');
+  return missing;
+}
+
+const PAGE_STYLE = `
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: #0b0b0d; color: #e4e4e7; font: 15px/1.5 system-ui, sans-serif; padding: 24px; }
+  header { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+  header h1 { font-size: 20px; letter-spacing: -0.02em; }
+  header span { color: #71717a; font-size: 13px; margin-left: auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+  .card { background: #18181b; border: 1px solid #27272a; border-radius: 10px; overflow: hidden; }
+  .card img { width: 100%; height: 160px; object-fit: cover; display: block; background: #101012; }
+  .card .doc { display: flex; align-items: center; justify-content: center; height: 160px; background: #101012; color: #2dd4bf; font-weight: 600; text-decoration: none; text-align: center; }
+  .card .doc.muted { color: #52525b; }
+  figcaption { padding: 10px 12px; display: grid; gap: 2px; }
+  figcaption strong { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  figcaption span, figcaption time { color: #71717a; font-size: 12px; }
+  .empty { color: #71717a; padding: 60px 0; text-align: center; }
+  .setup { max-width: 640px; display: grid; gap: 12px; color: #a1a1aa; }
+  .setup code { color: #e4e4e7; background: #18181b; padding: 1px 5px; border-radius: 4px; }
+`;
+
+/**
+ * Shown instead of the gallery while the service has no scoped key or
+ * webhook secret yet, so a stack started before the seed explains itself
+ * instead of restarting in a loop.
+ */
+export function renderNotConnectedPage(missing: readonly string[]): string {
+  const items = missing.map((name) => `<code>${escapeHtml(name)}</code>`).join(' and ');
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Artifact gallery: not connected</title>
+<style>${PAGE_STYLE}</style>
+</head>
+<body>
+<header>${BRAND_MARK_SVG}<h1>Artifact gallery</h1></header>
+<div class="setup">
+  <p>The gallery is running but cannot read artifacts yet: ${items} ${missing.length === 1 ? 'is' : 'are'} not set.</p>
+  <p>The Overnight Analyst seed creates a scoped key for it. Put the <code>GALLERY_API_KEY</code> line the seed prints into <code>.env</code>, then run <code>docker compose up -d gallery</code>. <code>install.sh</code> does both for you.</p>
+</div>
+</body>
+</html>`;
+}
+
 /** Server-rendered gallery page: zero client dependencies. */
 export function renderGalleryPage(options: {
   entries: GalleryEntry[];
@@ -162,23 +218,7 @@ export function renderGalleryPage(options: {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; margin: 0; }
-  body { background: #0b0b0d; color: #e4e4e7; font: 15px/1.5 system-ui, sans-serif; padding: 24px; }
-  header { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
-  header h1 { font-size: 20px; letter-spacing: -0.02em; }
-  header span { color: #71717a; font-size: 13px; margin-left: auto; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
-  .card { background: #18181b; border: 1px solid #27272a; border-radius: 10px; overflow: hidden; }
-  .card img { width: 100%; height: 160px; object-fit: cover; display: block; background: #101012; }
-  .card .doc { display: flex; align-items: center; justify-content: center; height: 160px; background: #101012; color: #2dd4bf; font-weight: 600; text-decoration: none; text-align: center; }
-  .card .doc.muted { color: #52525b; }
-  figcaption { padding: 10px 12px; display: grid; gap: 2px; }
-  figcaption strong { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  figcaption span, figcaption time { color: #71717a; font-size: 12px; }
-  .empty { color: #71717a; padding: 60px 0; text-align: center; }
-</style>
+<style>${PAGE_STYLE}</style>
 </head>
 <body>
 <header>${BRAND_MARK_SVG}<h1>${escapeHtml(title)}</h1><span>${options.entries.length} artifact${options.entries.length === 1 ? '' : 's'}</span></header>

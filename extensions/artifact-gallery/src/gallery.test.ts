@@ -4,7 +4,9 @@ import {
   EMPTY_INDEX,
   blobResponseHeaders,
   isCacheableMime,
+  missingGalleryConfig,
   renderGalleryPage,
+  renderNotConnectedPage,
   sortedEntries,
   upsertEntry,
   verifyWebhookSignature,
@@ -115,5 +117,22 @@ describe('artifact-gallery index and rendering', () => {
   it('renders an honest empty state', () => {
     const page = renderGalleryPage({ entries: [] });
     expect(page).toContain('No artifacts yet');
+  });
+});
+
+describe('artifact-gallery before it is connected', () => {
+  it('names each missing setting in the order to fix it', () => {
+    expect(missingGalleryConfig({ apiKey: '', webhookSecret: '' }))
+      .toEqual(['STABLEHAND_API_KEY', 'GALLERY_WEBHOOK_SECRET']);
+    expect(missingGalleryConfig({ apiKey: 'cmk_x', webhookSecret: '' }))
+      .toEqual(['GALLERY_WEBHOOK_SECRET']);
+    expect(missingGalleryConfig({ apiKey: 'cmk_x', webhookSecret: 's' })).toEqual([]);
+  });
+
+  it('explains how to connect instead of showing an empty gallery', () => {
+    const html = renderNotConnectedPage(['STABLEHAND_API_KEY']);
+    expect(html).toContain('<code>STABLEHAND_API_KEY</code> is not set');
+    expect(html).toContain('docker compose up -d gallery');
+    expect(html).not.toContain('class="grid"');
   });
 });
