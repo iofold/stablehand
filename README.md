@@ -37,7 +37,7 @@ You need Docker with Compose and an OpenAI API key.
 curl -fsSL https://raw.githubusercontent.com/iofold/stablehand/master/install.sh | sh
 ```
 
-The installer clones the repo into `./stablehand`, writes `.env` with generated secrets and starts the stack with the LiteLLM model gateway and the artifact gallery. It pulls prebuilt images from `ghcr.io/iofold` and builds any that are not published for your commit. Then it seeds the [Overnight Analyst](packages/examples/overnight-analyst), which reads web pages and writes a one-page brief, and runs it once. It asks for your OpenAI key unless `OPENAI_API_KEY` is set.
+The installer clones the repo into `./stablehand`, writes `.env` with generated secrets and starts the stack with the LiteLLM model gateway and the artifact gallery. It pulls prebuilt images from `ghcr.io/iofold`, the ones built from your commit when they exist and `latest` otherwise, and builds any it cannot pull. Then it seeds the [Overnight Analyst](packages/examples/overnight-analyst), which reads web pages and writes a one-page brief, and runs it once. It asks for your OpenAI key unless `OPENAI_API_KEY` is set.
 
 At the end it prints the UI address, your API token and the first run's receipt: model, tokens and cost. The brief is under Artifacts in the UI and in the gallery at http://localhost:8090. Running the installer again keeps your `.env`, starts no new run and spends nothing. Its settings are listed at the top of [install.sh](install.sh); read it before you pipe it to a shell.
 
