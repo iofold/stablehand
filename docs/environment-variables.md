@@ -40,8 +40,11 @@ sandbox Jobs.
 | `ORCHESTRATOR_CALLBACK_URL` | `http://orchestrator:3001` | **Yes*** | URL for sandboxes to call back to the orchestrator. *Required in foreign stacks. | `http://stablehand-api:3001` |
 | `ORCHESTRATOR_URL` | - | No | Injected by the orchestrator into each sandbox container's environment; the daemon uses it to proxy tool calls back to the orchestrator. Derived from the stack's orchestrator URL, not normally set by hand. | `http://orchestrator:3001` |
 | `STABLEHAND_SANDBOX_RUNTIME` | `docker` | No | Sandbox runtime. Use `kubernetes` or `k8s` to create sandbox sessions as Kubernetes Jobs. | `kubernetes` |
-| `STABLEHAND_IMAGE_PREFIX` | `stablehand/harness` | No | Prefix for sandbox harness images. Runtime image = `<prefix>-<harness>:<tag>`. | `myregistry.com/stablehand` |
-| `STABLEHAND_SANDBOX_IMAGE_TAG` | `latest` | No | Tag appended to sandbox harness images (`<prefix>-<harness>:<tag>`). Local stacks use `latest`; deploy pins a commit tag so sandbox Jobs run the deployed revision. | `75435dd` |
+| `STABLEHAND_IMAGE_PREFIX` | `stablehand/harness`; the compose stack sets `ghcr.io/iofold/stablehand-harness` | No | Prefix for sandbox harness images. Runtime image = `<prefix>-<harness>:<tag>`. | `myregistry.com/stablehand` |
+| `STABLEHAND_SANDBOX_IMAGE_TAG` | `latest`; the compose stack sets `STABLEHAND_IMAGE_TAG` | No | Tag appended to sandbox harness images (`<prefix>-<harness>:<tag>`). Deploys pin a commit tag so sandbox Jobs run the deployed revision. | `75435dd` |
+| `STABLEHAND_SANDBOX_NETWORK` | `stablehand-agents` | No | Docker network sandboxes join. The compose stack names its internal agents network after it, so two stacks on one Docker host stay apart. | `staging-agents` |
+| `STABLEHAND_IMAGE_TAG` | `latest` | No | Compose only. Tag of every `ghcr.io/iofold/stablehand-*` image the stack pulls or builds, sandbox images included. `latest` follows master; pin a release (`0.1.0`) or `sha-<commit>`. `install.sh` writes the tag it used. | `0.1.0` |
+| `STABLEHAND_IMAGE_REGISTRY` | `ghcr.io/iofold` | No | Compose only. Registry and namespace of those images, for a mirror. | `registry.example.com/stablehand` |
 | `CLAUDE_CONFIG_DIR` | `$HOME/.claude` | No | Directory the Claude Agents harness reads its Claude SDK config and session JSONL from. | `/home/stablehand/.claude` |
 | `STABLEHAND_MAX_GLOBAL_CONTAINERS` | `20` | No | Maximum number of concurrent sandbox containers globally. | `50` |
 | `STABLEHAND_DATA_VOLUME` | - | No | Docker volume name for persistent agent data. Required for volume-based persistence. | `myapp_stablehand-data` |
@@ -101,7 +104,11 @@ Used for persistent artifact storage (file uploads/downloads).
 | :--- | :--- | :--- | :--- | :--- |
 | `CORS_ORIGINS` | `http://localhost:3200` | No | Comma-separated list of allowed CORS origins. | `https://app.example.com` |
 | `STABLEHAND_DOMAIN` | — | With the Traefik overlay | Hostname Traefik routes to the UI when `deploy/compose/traefik/docker-compose.yml` is in the compose file list. The overlay also adds `https://$STABLEHAND_DOMAIN` to the default `CORS_ORIGINS`. | `stablehand.example.com` |
-| `LITELLM_DOMAIN` | `litellm.localhost` | No | Host the Traefik router in `deploy/compose/model-gateway/docker-compose.yml` serves the LiteLLM admin UI on. | `litellm.example.com` |
+| `LITELLM_DOMAIN` | `litellm.localhost` | No | Host the Traefik router in `deploy/compose/model-gateway/traefik.yml` serves the LiteLLM admin UI on. | `litellm.example.com` |
+| `COMPOSE_FILE` | `.env.example`: base + model gateway + gallery | No | Compose's own variable: the files that make up the stack, `:`-separated. `docker-compose.yml` alone runs without the gateway and gallery. | `docker-compose.yml:deploy/compose/model-gateway/docker-compose.yml` |
+| `GALLERY_API_KEY` | - | With the gallery overlay | Scoped key (`artifacts:read`, `webhooks:manage`) for `extensions/artifact-gallery`. The Overnight Analyst seed prints one. | `cmk_...` |
+| `GALLERY_WEBHOOK_SECRET` | - | With the gallery overlay | HMAC secret the gallery checks on webhook deliveries. | `openssl rand -hex 24` |
+| `GALLERY_PORT` | `8090` | No | Host port of the gallery. | `8590` |
 
 ## Security
 

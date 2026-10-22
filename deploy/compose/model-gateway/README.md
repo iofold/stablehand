@@ -1,8 +1,10 @@
-# Optional LiteLLM model gateway
+# LiteLLM model gateway
 
 This overlay enables the deployment-scoped `default` gateway profile without
-changing agent manifests or STABLEHAND budget policies. Direct-only deployments
-do not use this file and have no LiteLLM dependency.
+changing agent manifests or STABLEHAND budget policies. The quickstart turns it
+on: `.env.example` lists it in `COMPOSE_FILE` and `install.sh` generates its
+keys. Direct-only deployments leave it out of `COMPOSE_FILE` and have no
+LiteLLM dependency.
 
 The image is LiteLLM 1.93.0, pinned by digest. The derived image replaces
 `pyasn1` 0.6.3 with 0.6.4; the pinned base image and patch must be reviewed
@@ -85,7 +87,15 @@ Provide these through the deployment secret store:
   `CLOUDFLARE_API_KEY`. `OPENROUTER_API_KEY` is required only when using the
   optional `glm-5.2` alias.
 
-Generate the runtime virtual key after LiteLLM is healthy:
+The `gateway-init` service registers `STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY`
+on every `docker compose up`, before the orchestrator starts, so the value can
+be generated into `.env` up front (`sk-` followed by random hex). It uses
+`bootstrap_keys.py`, restricts the key to every alias in `config.yaml`, and
+does nothing when LiteLLM already knows the key. On a single host the quickstart
+uses `LITELLM_MASTER_KEY` as the metering and admin key; both stay in the
+orchestrator.
+
+To create the runtime key by hand instead, once LiteLLM is healthy:
 
 ```bash
 curl -fsS http://127.0.0.1:4400/key/generate \
@@ -123,6 +133,9 @@ otherwise the deployment admin key is the temporary metering credential.
 
 ## Start
 
+With `.env` from `.env.example`, `docker compose up -d` includes this overlay.
+Without it in `COMPOSE_FILE`:
+
 ```bash
 docker compose \
   -f docker-compose.yml \
@@ -130,10 +143,11 @@ docker compose \
   up --build -d
 ```
 
-The overlay exposes LiteLLM only on host loopback at port 4400 and on the
-internal `stablehand-agents` network. Its admin UI is also published through
-Traefik on the external `web` network, so that network must exist
-(`docker network create web` on hosts without Traefik). Message/response logging is disabled.
+The overlay exposes LiteLLM only on host loopback at port 4400 (`LITELLM_PORT`)
+and on the internal `stablehand-agents` network. To publish its admin UI
+through an existing Traefik on the external `web` network, add
+`deploy/compose/model-gateway/traefik.yml` after this file. Message/response
+logging is disabled.
 STABLEHAND polls sanitized spend records asynchronously; gateway or metering
 failure never causes a synchronous budget API dependency or silent direct
 fallback.
@@ -147,8 +161,10 @@ ingestion turns off silently while turns keep running (ctx-fpi1). On dev1 this
 is prevented by pinning the full file list in `.env`:
 
 ```
-COMPOSE_FILE=docker-compose.yml:deploy/compose/traefik/docker-compose.yml:docker-compose.override.yml:deploy/compose/model-gateway/docker-compose.yml
+COMPOSE_FILE=docker-compose.yml:deploy/compose/traefik/docker-compose.yml:docker-compose.override.yml:deploy/compose/model-gateway/docker-compose.yml:deploy/compose/model-gateway/traefik.yml
 ```
+
+The quickstart pins it the same way through `.env.example`.
 
 If ingestion is ever off with gateway turns waiting, `/api/model-gateway/status`
 reports `state: degraded` with an `awaitingTurns` count, the orchestrator warns

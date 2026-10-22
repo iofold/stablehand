@@ -22,6 +22,17 @@ On startup the service calls one allowed endpoint and one master-only endpoint, 
 
 ## Run
 
+### With the stack
+
+The default stack runs it: [docker-compose.yml](docker-compose.yml) in this directory is a compose overlay, and `.env.example` lists it in `COMPOSE_FILE`. It serves http://localhost:8090 (`GALLERY_PORT`) from the `ghcr.io/iofold/stablehand-gallery` image, or builds it from this directory. Two settings in `.env` connect it:
+
+- `GALLERY_API_KEY`: the scoped key. The [Overnight Analyst seed](../../packages/examples/overnight-analyst) creates one bound to that agent and prints it once; [install.sh](../../install.sh) saves it for you.
+- `GALLERY_WEBHOOK_SECRET`: any random string, for example `openssl rand -hex 24`.
+
+Until both are set, the page says which one is missing. After setting them, run `docker compose up -d gallery`. Webhooks reach it at `http://gallery:8090` on the compose network; the overlay adds `gallery` to `STABLEHAND_EGRESS_ALLOWLIST` so the orchestrator may deliver to that private address. If you set that variable yourself, include `gallery` in it.
+
+### On its own
+
 ```bash
 export STABLEHAND_BASE_URL=https://your-stablehand
 export STABLEHAND_API_KEY=cmk_...            # scoped key from Settings, Access keys
@@ -30,10 +41,10 @@ export GALLERY_PUBLIC_URL=https://gallery.example.com   # must be reachable by S
 export GALLERY_PORT=8090                  # optional
 export GALLERY_DATA_DIR=./data            # optional
 
-bun run src/server.ts    # or: node --experimental-strip-types src/server.ts
+bun run src/server.ts
 ```
 
-`GET /healthz` reports the index size and webhook coverage.
+`GET /healthz` reports the index size and webhook coverage, or `503` with the missing settings while it is not connected.
 
 ## Uninstall
 

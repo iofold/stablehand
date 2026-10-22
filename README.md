@@ -31,17 +31,23 @@ Each agent picks its own loop: LangGraph, the Claude Agent SDK or Pi. MIT licens
 
 ## Quickstart
 
-You need Docker with Compose, `openssl`, and an OpenAI API key. The first agent you run is the [Overnight Analyst](packages/examples/overnight-analyst), which reads web pages and writes a one-page brief.
+You need Docker with Compose and an OpenAI API key.
 
-<!--
-  ONE-COMMAND INSTALL SLOT
-  Prebuilt GHCR images plus a `curl | sh` or `npx` one-liner that ends with a seeded agent running.
-  When it ships, it replaces steps 1-3 below, and a "paste this prompt into your coding agent" path goes under it.
--->
+```bash
+curl -fsSL https://raw.githubusercontent.com/iofold/stablehand/master/install.sh | sh
+```
 
-### 1. Clone and configure
+The installer clones the repo into `./stablehand`, writes `.env` with generated secrets and starts the stack with the LiteLLM model gateway and the artifact gallery. It pulls prebuilt images from `ghcr.io/iofold` and builds any that are not published for your commit. Then it seeds the [Overnight Analyst](packages/examples/overnight-analyst), which reads web pages and writes a one-page brief, and runs it once. It asks for your OpenAI key unless `OPENAI_API_KEY` is set.
 
-The `sed` call fills the blank lines that `.env.example` already has, so no key appears twice.
+At the end it prints the UI address, your API token and the first run's receipt: model, tokens and cost. The brief is under Artifacts in the UI and in the gallery at http://localhost:8090. Running the installer again keeps your `.env`, starts no new run and spends nothing. Its settings are listed at the top of [install.sh](install.sh); read it before you pipe it to a shell.
+
+To have a coding agent do the install and explain each step, paste the prompt in [docs/install-with-an-agent.md](docs/install-with-an-agent.md) into it.
+
+### Install by hand
+
+#### 1. Clone and configure
+
+`.env.example` already lists the gateway and gallery overlays in `COMPOSE_FILE` and has a blank line for every secret; the `sed` call fills them, so no key appears twice. The gateway prices each model call and stops a run at its spend cap. The last line lets sandboxes read public web pages (GET and HEAD only), which the analyst needs; by default they reach only package registries, GitHub and model APIs.
 
 ```bash
 git clone https://github.com/iofold/stablehand.git
@@ -49,42 +55,52 @@ cd stablehand
 cp .env.example .env
 
 export OPENAI_API_KEY=sk-...   # your key
+gateway_key=sk-$(openssl rand -hex 24)
 sed -i.bak \
   -e "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=${OPENAI_API_KEY}|" \
   -e "s|^SECRET_MASTER_KEY=.*|SECRET_MASTER_KEY=$(openssl rand -hex 32)|" \
   -e "s|^STABLEHAND_API_TOKEN=.*|STABLEHAND_API_TOKEN=$(openssl rand -hex 32)|" \
+  -e "s|^LITELLM_MASTER_KEY=.*|LITELLM_MASTER_KEY=${gateway_key}|" \
+  -e "s|^STABLEHAND_MODEL_GATEWAY_METERING_KEY=.*|STABLEHAND_MODEL_GATEWAY_METERING_KEY=${gateway_key}|" \
+  -e "s|^STABLEHAND_MODEL_GATEWAY_ADMIN_KEY=.*|STABLEHAND_MODEL_GATEWAY_ADMIN_KEY=${gateway_key}|" \
+  -e "s|^STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY=.*|STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY=sk-$(openssl rand -hex 24)|" \
+  -e "s|^LITELLM_SALT_KEY=.*|LITELLM_SALT_KEY=$(openssl rand -hex 32)|" \
+  -e "s|^LITELLM_DATABASE_PASSWORD=.*|LITELLM_DATABASE_PASSWORD=$(openssl rand -hex 24)|" \
+  -e "s|^GALLERY_WEBHOOK_SECRET=.*|GALLERY_WEBHOOK_SECRET=$(openssl rand -hex 24)|" \
+  -e 's|^STABLEHAND_EGRESS_EXTRA_ALLOW=.*|STABLEHAND_EGRESS_EXTRA_ALLOW="GET *;HEAD *"|' \
   .env && rm .env.bak
-
-# Sandboxes can only reach package registries, GitHub and model APIs by default.
-# This lets them read public web pages (GET and HEAD only) so the analyst can browse.
-echo 'STABLEHAND_EGRESS_EXTRA_ALLOW="GET *;HEAD *"' >> .env
 ```
 
-### 2. Start the stack
+#### 2. Start the stack
 
-The first build compiles the API, the UI, the egress proxy and three agent images, so expect it to take several minutes.
+The pull fetches the prebuilt images. `up` builds any image it could not pull, which takes several minutes the first time; `docker compose up --build -d` builds all of them from your checkout instead.
 
 ```bash
-docker compose up --build -d
+docker compose pull --ignore-pull-failures
+docker compose up -d
 ```
 
-### 3. Seed the Overnight Analyst and run it once
+#### 3. Seed the Overnight Analyst and run it once
 
-The seed creates the agent, a daily 07:00 schedule and the trigger that turns each fire into a run. The `curl` fires one run now instead of waiting for 07:00.
+The seed creates the agent, a daily 07:00 UTC schedule, the trigger that turns each fire into a run, and a scoped key for the gallery. It prints that key once, as a `GALLERY_API_KEY=...` line: add the line to `.env` before the next command.
 
 ```bash
 docker compose exec -e API_URL=http://localhost:3001 \
   -w /app/packages/examples/overnight-analyst \
   orchestrator node --experimental-strip-types seed.ts
-
-TOKEN=$(grep '^STABLEHAND_API_TOKEN=' .env | cut -d= -f2-)
-curl -X POST http://localhost:3002/api/triggers/emit \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"type":"custom.overnight.brief","payload":{"sources":"https://news.ycombinator.com"}}'
-echo "$TOKEN"
 ```
 
-Open http://localhost:3200, paste the token, and open Overnight Analyst. The run streams in as it browses; the screenshots and `overnight-brief.html` land under Artifacts when it finishes. The schedule uses `Asia/Kolkata` time unless you pass `-e ANALYST_TZ=<IANA zone>` to the seed command.
+Then start the gallery with its key and fire one run. `run-once.ts` waits for the run to finish and prints its receipt.
+
+```bash
+docker compose up -d gallery
+docker compose exec -e API_URL=http://localhost:3001 -e GALLERY_URL=http://gallery:8090 \
+  -w /app/packages/examples/overnight-analyst \
+  orchestrator node --experimental-strip-types run-once.ts
+grep '^STABLEHAND_API_TOKEN=' .env
+```
+
+Open http://localhost:3200, paste the token, and open Overnight Analyst to see the run, its receipt and its files. Pass `-e ANALYST_TZ=<IANA zone>` to the seed for a schedule in your own timezone.
 
 <!--
   SCREENSHOT STRIP SLOT
@@ -122,7 +138,7 @@ The inbox agent, folder review and experiment loop started as client and researc
 
 An orchestrator (Node.js, Fastify, PostgreSQL) holds everything that has to outlive a run: agents, schedules, triggers, approvals, budgets and the event log. Each agent session runs in its own Docker container, where a small daemon drives the agent loop and talks to the orchestrator over gRPC. The loop runs inside the sandbox; approvals, budgets and schedules stay outside it, where the agent cannot edit them. The container's only route to the internet is an egress proxy that allows listed hosts and nothing else.
 
-Every event the agent produces is written to PostgreSQL before any browser sees it. A reload, a second tab or a phone replays from the same log and then follows it live. Approvals are database rows, so a pending approval survives an orchestrator restart. So does a running turn: the sandbox keeps working while the orchestrator is down, and the restarted process picks the turn back up and replays what it missed. Schedules fire events, triggers turn events into background runs, and files the agent publishes go to S3-compatible storage with a signed webhook to anything that subscribes. An optional LiteLLM gateway prices every model call, and the budgets count against those prices.
+Every event the agent produces is written to PostgreSQL before any browser sees it. A reload, a second tab or a phone replays from the same log and then follows it live. Approvals are database rows, so a pending approval survives an orchestrator restart. So does a running turn: the sandbox keeps working while the orchestrator is down, and the restarted process picks the turn back up and replays what it missed. Schedules fire events, triggers turn events into background runs, and files the agent publishes go to S3-compatible storage with a signed webhook to anything that subscribes. A LiteLLM gateway, on in the default install, prices every model call, and the budgets count against those prices.
 
 Clients receive runs as [AG-UI](https://docs.ag-ui.com) events, the open streaming protocol for agent front ends, so AG-UI renderers can display them. Agents draw charts and tables with a built-in render tool that emits [A2UI](https://a2ui.org) blocks, Google's open format for agent-drawn UI. The full design is in [docs/architecture.md](docs/architecture.md).
 
@@ -153,10 +169,10 @@ Each of these ships as an extension, and each has a thread asking what you would
 - Per-run spend caps need the LiteLLM gateway. The gateway checks the cap before each model call, so the call that crosses the cap finishes and the run stops before the next one. Agents that call a provider directly are only checked when a turn starts.
 - If the orchestrator dies, a running turn keeps going in its sandbox for 120 seconds (`STABLEHAND_TURN_ORPHAN_GRACE_MS`) and the restarted orchestrator picks it up. A tool that runs inside the orchestrator and was cut off by the crash runs again, so give tools with side effects an idempotency key. If the sandbox died too, the turn ends in an error.
 - Approval gates cover local tools you mark and the built-in `request-approval` tool. HTTP tools ignore the flag today, and the Claude Agent SDK's own Bash, Write and Edit tools run without asking; the container is the boundary.
-- Turns priced through the LiteLLM gateway show their full cost. Turns that call a provider directly may show as unpriced, and Claude Agent SDK usage is under-counted.
+- The default install sends model calls through the LiteLLM gateway, so runs show their full cost. Agents whose manifest sets `apiKeyRef` call the provider directly and may show as unpriced, and Claude Agent SDK usage is under-counted.
 - MCP and Composio provider classes exist in `packages/stablehand/src/tool/providers/` but are not registered, so agents cannot reach MCP servers or Composio tools yet.
 - There is no built-in knowledge or RAG search.
-- The npm packages (`stablehand`, `create-stablehand`, `@stablehand/*`) are not published yet, so `create-stablehand` cannot scaffold a working project today.
+- The npm packages (`stablehand`, `create-stablehand`, `@stablehand/*`) are ready to publish but not on npm yet, so `npx create-stablehand` does not work today.
 
 ## Configuration
 
@@ -168,24 +184,27 @@ Settings live in `.env` (start from [.env.example](.env.example)). The full list
 | `SECRET_MASTER_KEY` | Encrypts per-agent secrets (AES-256-GCM). Required. |
 | `STABLEHAND_API_TOKEN` | Operator master token for the API and UI. Required. Create scoped `cmk_` keys for extensions under Settings, Access keys. |
 | `STABLEHAND_EGRESS_EXTRA_ALLOW` | Extra egress rules for sandboxes, `;`-separated, appended to [packages/egress-proxy/rules.default.txt](packages/egress-proxy/rules.default.txt). |
+| `COMPOSE_FILE` | The compose files that make up the stack. `.env.example` lists the base file, the model gateway and the gallery. |
+| `STABLEHAND_IMAGE_TAG` | Tag of the `ghcr.io/iofold/stablehand-*` images. `latest` follows master; set a release such as `0.1.0` or `sha-<commit>` to pin one. |
+| `LITELLM_MASTER_KEY`, `STABLEHAND_MODEL_GATEWAY_*` | Model gateway credentials; [deploy/compose/model-gateway](deploy/compose/model-gateway/README.md) explains each. |
 
 Runtime knobs such as timeouts, container limits and queue sizes are stored in the database and edited in the UI under Settings.
 
-Two optional overlays:
+The stack is `docker-compose.yml` plus overlays, listed in `COMPOSE_FILE`:
 
-- Your own domain behind an existing Traefik: [deploy/compose/traefik](deploy/compose/traefik/docker-compose.yml).
-  ```bash
-  COMPOSE_FILE=docker-compose.yml:deploy/compose/traefik/docker-compose.yml \
-  STABLEHAND_DOMAIN=stablehand.example.com \
-    docker compose up --build -d
-  ```
-- A LiteLLM model gateway that prices every call and enforces budgets: [deploy/compose/model-gateway](deploy/compose/model-gateway/README.md).
+- The LiteLLM model gateway, on by default. It prices every model call and enforces per-run caps: [deploy/compose/model-gateway](deploy/compose/model-gateway/README.md).
+- The artifact gallery, on by default: [extensions/artifact-gallery](extensions/artifact-gallery).
+- Your own domain behind an existing Traefik: [deploy/compose/traefik](deploy/compose/traefik/docker-compose.yml). Append it to `COMPOSE_FILE` and set `STABLEHAND_DOMAIN`.
+
+Remove an overlay from `COMPOSE_FILE` to run without it. `COMPOSE_FILE=docker-compose.yml` is the base stack, with model calls going straight to the provider.
 
 | Service | Address |
 |---|---|
 | UI | http://localhost:3200 |
 | API | http://localhost:3002 |
 | PostgreSQL | localhost:5433 |
+| Artifact gallery | http://localhost:8090 |
+| LiteLLM gateway | http://127.0.0.1:4400, loopback only |
 | Sandbox egress proxy | `egress:8080`, on the internal agents network only |
 | pgAdmin (`--profile debug`) | http://localhost:5050 |
 
@@ -202,7 +221,7 @@ Day-to-day commands: `docker compose logs -f`, `docker compose down`, and `docke
 | [packages/client](packages/client), [packages/react](packages/react) | Browser client and React components for embedding the chat in your own app |
 | [packages/contracts](packages/contracts), [packages/shared](packages/shared), [packages/proto](packages/proto) | API schemas, event types and the gRPC definitions |
 | [packages/manifest](packages/manifest) | The YAML agent manifest parser |
-| [packages/create-stablehand](packages/create-stablehand) | Project scaffold (waits on the npm publish) |
+| [packages/create-stablehand](packages/create-stablehand) | Project scaffold with `assistant` and `overnight-analyst` templates on the prebuilt images (waits on the npm publish) |
 | [packages/examples](packages/examples) | overnight-analyst, kitchen-sink (one agent per loop, 11 shared tools), react-embed-chat, artifact-console |
 | [extensions](extensions) | artifact-gallery and gdpval-bench, both running beside Stablehand on scoped keys |
 

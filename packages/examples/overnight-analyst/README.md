@@ -2,24 +2,30 @@
 
 A scheduled agent that opens your sources in a sandboxed browser, screenshots each one, and publishes a self-contained HTML brief as an artifact. The [artifact-gallery extension](../../../extensions/artifact-gallery) turns those briefs into a public page. We have run it every morning since August 2026.
 
+The [root installer](../../../README.md#quickstart) sets all of this up and runs it once. This page covers what it creates and how to drive it by hand.
+
 ## What the seed creates
 
-Manifests cannot carry schedules or triggers, so `seed.ts` creates three objects through the API:
+Manifests cannot carry schedules or triggers, so `seed.ts` creates them through the API:
 
-- The agent `overnight-analyst`, from [agents/overnight-analyst/agent.yaml](agents/overnight-analyst/agent.yaml): LangGraph with `gpt-5.4-mini` and the built-in `browse`, `screenshot` and `artifact_upload` tools, in `background` mode.
-- The schedule `overnight-analyst-daily`, which emits `custom.overnight.brief` every day at 07:00 in the timezone you choose.
-- A trigger that turns that event into a background turn and splices the sources into the task through `{{payload.sources}}`.
+- The agent `overnight-analyst`, from [agents/overnight-analyst/agent.yaml](agents/overnight-analyst/agent.yaml): LangGraph with `gpt-5.4-mini` and the built-in `browse`, `screenshot` and `artifact_upload` tools, in `background` mode, with a per-run spend cap of $0.50 (`limits.maxCostUsd`).
+- The schedule `overnight-analyst-daily`, which emits `custom.overnight.brief` every day at 07:00 in the timezone you choose (UTC by default).
+- A trigger that turns that event into a background run and splices the sources into the task through `{{payload.sources}}`.
+- A scoped key for the gallery, `artifact-gallery`, with `artifacts:read` and `webhooks:manage` and bound to this agent, so the gallery can read this agent's files and nothing else. The seed prints it once as a `GALLERY_API_KEY=...` line for `.env`.
 
 Each run uploads one PNG per source and `overnight-brief.html` (`kind: brief`) to the agent's artifacts.
 
-## Run it
+## Costs and the spend cap
 
-Start the stack as in the [root quickstart](../../../README.md#quickstart). Two settings matter for this example:
+The manifest has no `apiKeyRef`. With the model gateway on (the default stack), every model call goes through LiteLLM: each run is priced on its receipt, and the gateway refuses calls past $0.50, which stops the run with a `budget_reached` receipt. A run over two sources usually costs a few cents. Without the gateway the agent calls OpenAI directly with `OPENAI_API_KEY`; the run then shows as unpriced and the cap does not apply.
 
-- `OPENAI_API_KEY` must be set in `.env`; the agent reads it as `$secret:OPENAI_API_KEY`.
-- Sandboxes can only reach the hosts in [packages/egress-proxy/rules.default.txt](../../egress-proxy/rules.default.txt), which does not include news sites. Add `STABLEHAND_EGRESS_EXTRA_ALLOW="GET *;HEAD *"` to `.env` for read-only web access, or list only your sources, for example `STABLEHAND_EGRESS_EXTRA_ALLOW="GET news.ycombinator.com/**"`.
+## Web access
 
-Seed from inside the orchestrator container, which already has the built packages:
+Sandboxes can only reach the hosts in [packages/egress-proxy/rules.default.txt](../../egress-proxy/rules.default.txt), which does not include news sites. The installer sets `STABLEHAND_EGRESS_EXTRA_ALLOW="GET *;HEAD *"`, read-only access to any public host, because pages load images and styles from many CDNs. To allow only your sources, list them instead, for example `STABLEHAND_EGRESS_EXTRA_ALLOW="GET news.ycombinator.com/**"`, and restart the `egress` service.
+
+## Seed it
+
+From the repo root, inside the orchestrator container, which already has the built packages:
 
 ```bash
 docker compose exec -e API_URL=http://localhost:3001 \
@@ -30,7 +36,7 @@ docker compose exec -e API_URL=http://localhost:3001 \
   orchestrator node --experimental-strip-types seed.ts
 ```
 
-All three `ANALYST_*` variables are optional. The defaults are Hacker News and The Verge, `0 7 * * *`, and `Asia/Kolkata`. Re-running the seed is safe: anything that already exists by name is left alone.
+All `ANALYST_*` variables are optional. The defaults are Hacker News and The Verge, `0 7 * * *`, and `UTC`. Re-running the seed is safe: anything that already exists by name is left alone. A key's secret is shown only once, so on a re-run the seed keeps the existing gallery key; pass `-e GALLERY_API_KEY` to check that the one in your environment still works (a refused key is replaced), or `-e ANALYST_GALLERY=rotate` to mint a new one and revoke the old. `ANALYST_GALLERY=off` skips the key.
 
 To seed from your host instead, install the workspace and build the manifest package first (Node 22 and pnpm):
 
@@ -41,15 +47,27 @@ cd packages/examples/overnight-analyst
 STABLEHAND_API_TOKEN=... npx --yes tsx seed.ts
 ```
 
-## Fire a run now
+## Run it now
 
-The trigger listens for the event, so you can emit it yourself instead of waiting for the schedule:
+`run-once.ts` emits the event the schedule would, follows the run the trigger starts, and prints a receipt once the gateway has priced it:
 
 ```bash
-curl -X POST http://localhost:3002/api/triggers/emit \
-  -H "Authorization: Bearer $STABLEHAND_API_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"type":"custom.overnight.brief","payload":{"sources":"https://news.ycombinator.com"}}'
+docker compose exec -e API_URL=http://localhost:3001 -e GALLERY_URL=http://gallery:8090 \
+  -w /app/packages/examples/overnight-analyst \
+  orchestrator node --experimental-strip-types run-once.ts
 ```
+
+```text
+Receipt
+  status   COMPLETED
+  model    gpt-5.4-mini via the model gateway
+  tokens   ... in, ... out, ... model calls
+  cost     $0.03
+  brief    <artifact id>
+  gallery  showing the brief
+```
+
+`ANALYST_SOURCES` changes what this one run reads. The script exits non-zero when the run fails or stops at its cap.
 
 To change the cadence of the schedule itself:
 
@@ -61,6 +79,6 @@ curl -X PATCH http://localhost:3002/api/schedules/<schedule-id> \
 
 `GET /api/schedules` lists the schedule ids.
 
-## Costs
+## As your own project
 
-The manifest calls OpenAI directly with your key, so these turns may show as unpriced in Analytics. To price every run and count it against a budget, start the [model gateway overlay](../../../deploy/compose/model-gateway/README.md) and remove `apiKeyRef` from the manifest so the agent's model calls go through the gateway.
+`create-stablehand my-briefs --template overnight-analyst` scaffolds a project with this agent, a compose file on the prebuilt images and npm scripts for the seed and run-once. It works once the npm packages are published.
