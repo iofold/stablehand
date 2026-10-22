@@ -142,9 +142,9 @@ Checked against each product's public documentation on 2026-10-22. Corrections a
 
 Each of these ships as an extension, and each has a thread asking what you would use it for.
 
-- Sandbox-free agents: agents that only call tools or answer questions run without a container, under the same approvals, budgets and receipts. [Discuss](https://github.com/iofold/stablehand/discussions)
-- Confidence-gated approvals: a decision model, called through the gateway's `/v1/decisions` route, scores each risky step; confident steps go ahead and the rest wait for a person. [Discuss](https://github.com/iofold/stablehand/discussions)
-- Harbor and RL-environment campaigns: scheduled Harbor runs with a campaign budget, a review queue and a receipt for every trial. [Discuss](https://github.com/iofold/stablehand/discussions)
+- Sandbox-free agents: agents that only call tools or answer questions run without a container, under the same approvals, budgets and receipts. [Discuss](https://github.com/iofold/stablehand/discussions/1)
+- Confidence-gated approvals: a decision model, called through the gateway's `/v1/decisions` route, scores each risky step; confident steps go ahead and the rest wait for a person. [Discuss](https://github.com/iofold/stablehand/discussions/2)
+- Harbor and RL-environment campaigns: scheduled Harbor runs with a campaign budget, a review queue and a receipt for every trial. [Discuss](https://github.com/iofold/stablehand/discussions/3)
 
 ## Current boundaries
 
