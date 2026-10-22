@@ -200,6 +200,19 @@ describe('ContainerManager', () => {
       expect(info.status).toBe('created');
     });
 
+    it('joins the network and image names a second stack on the same host configures', async () => {
+      vi.stubEnv('STABLEHAND_SANDBOX_NETWORK', 'second-agents');
+      vi.stubEnv('STABLEHAND_IMAGE_PREFIX', 'ghcr.io/example/stablehand-harness');
+      vi.stubEnv('STABLEHAND_SANDBOX_IMAGE_TAG', 'v1.2.3');
+      const scoped = new ContainerManager(undefined, docker as unknown as Dockerode);
+
+      await scoped.createContainer(defaultCreateOpts());
+
+      const arg = docker.createContainer.mock.calls[0][0];
+      expect(arg.HostConfig.NetworkMode).toBe('second-agents');
+      expect(arg.Image).toBe('ghcr.io/example/stablehand-harness-claude-agents:v1.2.3');
+    });
+
     it('uses stablehand-sandbox-{sessionId} naming convention', async () => {
       const info = await manager.createContainer({
         ...defaultCreateOpts(),
