@@ -16,6 +16,7 @@ import type { ContainerLifecyclePolicy } from '../../container-lifecycle-policy.
 import type { CanonicalLog } from '../../canonical/canonical-log.js';
 import type { ScheduleService } from '../../../schedules/service.js';
 import type { EventTriggerManager } from '../../../events/trigger-manager.js';
+import type { McpServerManager } from '../../../mcp/manager.js';
 
 export type AgentHttpToolDefinition = HttpToolDefinition;
 
@@ -40,6 +41,8 @@ export interface AgentRouteOptions {
   scheduleService?: Pick<ScheduleService, 'stopForAgent'>;
   /** Loaded event triggers, fenced before an agent is deleted. */
   triggerManager?: Pick<EventTriggerManager, 'stopForAgent'>;
+  /** Keeps each agent's declared MCP servers registered and runs OAuth connects. */
+  mcpServerManager?: McpServerManager;
 }
 
 export interface AgentSubRouteOptions extends AgentRouteOptions {

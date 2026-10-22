@@ -103,7 +103,7 @@ function stripBrackets(host: string): string {
   return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
 }
 
-function hostMatchesAllowlist(host: string, allowlist: string[]): boolean {
+export function hostMatchesAllowlist(host: string, allowlist: readonly string[]): boolean {
   return allowlist.some((pattern) => {
     if (pattern.startsWith('*.')) {
       const suffix = pattern.slice(1); // ".example.com"

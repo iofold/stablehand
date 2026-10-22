@@ -35,7 +35,15 @@ function agentInputToDefinition(
     systemPrompt: input.systemPrompt,
     ...(input.nativeToolPolicy ? { nativeToolPolicy: input.nativeToolPolicy } : {}),
     ...(input.description !== undefined ? { description: input.description } : {}),
-    ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+    ...(input.metadata !== undefined || input.mcpServers !== undefined
+      ? {
+        metadata: {
+          ...(input.metadata ?? {}),
+          // Stored where the agent API keeps them, so boot registers them.
+          ...(input.mcpServers !== undefined ? { mcpServers: input.mcpServers } : {}),
+        },
+      }
+      : {}),
     ...(input.mode !== undefined ? { mode: input.mode } : {}),
     ...(input.workspaceContent !== undefined
       ? { workspaceContent: input.workspaceContent }

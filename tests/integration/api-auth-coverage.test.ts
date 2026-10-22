@@ -13,6 +13,8 @@ type ExpectedRouteAccess = 'public' | 'master' | CapabilityVerb;
 const EXPECTED_ROUTE_ACCESS: Readonly<Record<string, ExpectedRouteAccess>> = {
   'GET /health': 'public',
   'GET /api/health': 'public',
+  // The OAuth redirect target: authorized by its single-use state, not a token.
+  'GET /api/mcp/oauth/callback': 'public',
 
   'GET /api/agents': 'agents:read',
   'GET /api/agents/:id': 'agents:read',
@@ -22,6 +24,7 @@ const EXPECTED_ROUTE_ACCESS: Readonly<Record<string, ExpectedRouteAccess>> = {
   'GET /api/agents/:id/turns': 'agents:read',
   'GET /api/agents/:id/turns/:turnId': 'agents:read',
   'GET /api/agents/:id/stream': 'agents:read',
+  'GET /api/agents/:id/mcp-servers': 'agents:read',
   'GET /api/conversations': 'agents:read',
   'GET /api/conversations/recent': 'agents:read',
   'GET /api/sandbox-sessions': 'agents:read',
@@ -29,6 +32,7 @@ const EXPECTED_ROUTE_ACCESS: Readonly<Record<string, ExpectedRouteAccess>> = {
   'POST /api/agents': 'agents:write',
   'PATCH /api/agents/:id': 'agents:write',
   'DELETE /api/agents/:id': 'agents:write',
+  'POST /api/agents/:id/mcp-servers/:server/refresh': 'agents:write',
 
   'POST /api/agents/:id/message': 'conversations:write',
   'POST /api/agents/:id/turns': 'conversations:write',
@@ -75,6 +79,8 @@ const EXPECTED_ROUTE_ACCESS: Readonly<Record<string, ExpectedRouteAccess>> = {
   'GET /api/agents/:id/secrets': 'master',
   'POST /api/agents/:id/secrets': 'master',
   'DELETE /api/agents/:id/secrets/:key': 'master',
+  'POST /api/agents/:id/mcp-servers/:server/connect': 'master',
+  'DELETE /api/agents/:id/mcp-servers/:server/connection': 'master',
   'POST /api/agents/:id/sandbox-sessions/:sandboxSessionId/suspend': 'master',
   'POST /api/agents/:id/sandbox-sessions/:sandboxSessionId/restore': 'master',
   'POST /api/agents/:id/sandbox-sessions/:sandboxSessionId/kill': 'master',
@@ -148,14 +154,14 @@ describe('API auth route coverage', () => {
     restoreEnv('STABLEHAND_AUTH_DISABLED', oldDisabled);
   });
 
-  it('marks exactly the health endpoints public', () => {
+  it('marks exactly the health endpoints and the MCP OAuth redirect public', () => {
     const publicUrls = [...new Set(
       app.apiRouteTable
         .filter((route) => route.public)
         .map((route) => route.url),
     )].sort();
 
-    expect(publicUrls).toEqual(['/api/health', '/health']);
+    expect(publicUrls).toEqual(['/api/health', '/api/mcp/oauth/callback', '/health']);
   });
 
   it('records only API, health, and ConnectRPC routes', () => {
@@ -180,7 +186,7 @@ describe('API auth route coverage', () => {
         : ((route as typeof route & { capability?: CapabilityVerb }).capability ?? 'master'),
     ]));
 
-    expect(routes).toHaveLength(83);
+    expect(routes).toHaveLength(88);
     expect(Object.keys(actual)).toHaveLength(routes.length);
     expect(actual).toEqual(EXPECTED_ROUTE_ACCESS);
   });
@@ -193,7 +199,7 @@ describe('API auth route coverage', () => {
         return { method: route.slice(0, separator), url: route.slice(separator + 1) };
       });
 
-    expect(masterOnlyRoutes).toHaveLength(40);
+    expect(masterOnlyRoutes).toHaveLength(42);
     for (const route of masterOnlyRoutes) {
       const res = await app.inject({
         method: route.method,

@@ -14,7 +14,7 @@ const VALID_AGENT = {
 interface CatalogTool {
   name: string;
   description?: string;
-  source: 'local' | 'mcp' | 'composio';
+  source: 'local' | 'http' | 'mcp';
   inputSchema?: Record<string, unknown>;
 }
 

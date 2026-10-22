@@ -9,6 +9,7 @@ import {
   AgentPatchInputSchema,
   type AgentCreateInput,
   type AgentPatchInput,
+  type McpServerDefinition,
 } from '@stablehand/contracts';
 import {
   agentManifestSchema,
@@ -17,6 +18,7 @@ import {
 } from '@stablehand/manifest';
 
 import { getAgentHttpToolProviderName, registerAgentHttpTools } from '../../http-tools.js';
+import { checkMcpServerUrl } from '../../../mcp/egress.js';
 import {
   AGENT_MANAGED_METADATA_FIELDS,
   ensureAgentWorkspace,
@@ -75,6 +77,7 @@ type ManifestValidationResult =
   | { success: false; details: unknown };
 
 const MANIFEST_OWNED_FIELDS = [
+  'mcpServers',
   'name',
   'harness',
   'harnessConfig',
@@ -165,7 +168,17 @@ function manifestCompiledPatch(
     nativeToolPolicy: compiled.nativeToolPolicy ?? null,
     workspaceContent: compiled.workspaceContent ?? null,
     mode: compiled.mode ?? null,
+    mcpServers: compiled.mcpServers ?? null,
   };
+}
+
+/** First MCP server whose URL the egress policy would refuse, as a 400 body. */
+function mcpServerUrlError(servers: readonly McpServerDefinition[] | null | undefined): string | null {
+  for (const server of servers ?? []) {
+    const problem = checkMcpServerUrl(server.url);
+    if (problem) return problem;
+  }
+  return null;
 }
 
 const defaultSandboxSessionCounts = (): ApiSandboxSessionStatusCounts => ({
@@ -230,6 +243,7 @@ export async function crudRoutes(
     canonicalLog,
     scheduleService,
     triggerManager,
+    mcpServerManager,
     loadAgent,
   } = opts;
 
@@ -347,6 +361,12 @@ export async function crudRoutes(
         });
       }
 
+      const mcpServers = definition.mcpServers;
+      const mcpError = mcpServerUrlError(mcpServers);
+      if (mcpError) {
+        return reply.status(400).send({ error: mcpError, code: 'mcp_server_blocked' });
+      }
+
       const metadata: Record<string, unknown> = { ...(definition.metadata ?? {}) };
       if (definition.resourceLimits) {
         metadata.resourceLimits = definition.resourceLimits;
@@ -365,6 +385,9 @@ export async function crudRoutes(
       }
       if (httpToolDefs !== undefined) {
         metadata.httpTools = httpToolDefs;
+      }
+      if (mcpServers !== undefined && mcpServers.length > 0) {
+        metadata.mcpServers = mcpServers;
       }
 
       let agent: StoredAgent;
@@ -417,6 +440,10 @@ export async function crudRoutes(
           throw registrationError;
         }
       }
+
+      // Connect and list each declared MCP server. Failures are recorded on
+      // the server's status, never on the agent save.
+      await mcpServerManager?.sync(agent);
 
       if (eventBus) {
         eventBus.emit('agent.created', {
@@ -528,6 +555,11 @@ export async function crudRoutes(
         });
       }
 
+      const mcpError = mcpServerUrlError(update.mcpServers);
+      if (mcpError) {
+        return reply.status(400).send({ error: mcpError, code: 'mcp_server_blocked' });
+      }
+
       const updateData: Parameters<typeof db.updateAgent>[1] = {};
       if (update.name !== undefined) updateData.name = update.name;
       if (update.systemPrompt !== undefined) updateData.systemPrompt = update.systemPrompt;
@@ -563,6 +595,7 @@ export async function crudRoutes(
         || update.builtinToolPolicy !== undefined
         || update.metadata !== undefined
         || update.httpTools !== undefined
+        || update.mcpServers !== undefined
         || update.nativeToolPolicy !== undefined
         || update.workspaceContent !== undefined
         || update.mode !== undefined
@@ -588,6 +621,9 @@ export async function crudRoutes(
 
         if (update.httpTools === undefined && existingMetadata.httpTools !== undefined) {
           newMetadata.httpTools = existingMetadata.httpTools;
+        }
+        if (update.mcpServers === undefined && existingMetadata.mcpServers !== undefined) {
+          newMetadata.mcpServers = existingMetadata.mcpServers;
         }
 
         if (update.resourceLimits === null) {
@@ -622,6 +658,12 @@ export async function crudRoutes(
 
         if (update.httpTools !== undefined) {
           newMetadata.httpTools = update.httpTools;
+        }
+
+        if (update.mcpServers === null || (update.mcpServers !== undefined && update.mcpServers.length === 0)) {
+          delete newMetadata.mcpServers;
+        } else if (update.mcpServers) {
+          newMetadata.mcpServers = update.mcpServers;
         }
 
         updateData.metadata = Object.keys(newMetadata).length > 0 ? newMetadata : null;
@@ -664,6 +706,10 @@ export async function crudRoutes(
         }
       }
 
+      if (updated) {
+        await mcpServerManager?.sync(updated);
+      }
+
       const activeTurns = updated ? await db.getActiveTurnsForAgent(id) : [];
       return reply.send(updated
         ? { ...toAgentResponse(updated), status: activeTurns.length > 0 ? 'running' : 'idle' }
@@ -688,6 +734,7 @@ export async function crudRoutes(
         toolRegistry.removeProvider(getAgentHttpToolProviderName(id));
         await toolRegistry.refresh();
       }
+      await mcpServerManager?.remove(id);
 
       await secretProvider?.deleteForAgent?.(id);
 

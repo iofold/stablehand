@@ -1,3 +1,4 @@
+import { getAgentMcpServers } from '../../../mcp/config.js';
 import { join } from 'node:path';
 import { chown, readdir, stat } from 'node:fs/promises';
 import type { FastifyRequest } from 'fastify';
@@ -18,6 +19,7 @@ import type { AgentHttpToolDefinition, AgentRouteOptions, StoredAgent } from './
 export const AGENT_MANAGED_METADATA_FIELDS: ReadonlySet<string> = new Set([
   'builtinToolPolicy',
   'httpTools',
+  'mcpServers',
   'mode',
   'nativeToolPolicy',
   'resourceLimits',
@@ -141,6 +143,7 @@ export function toAgentResponse(agent: StoredAgent): Agent {
     createdAt: agent.createdAt,
     updatedAt: agent.updatedAt,
     httpTools: getAgentHttpTools(agent.metadata),
+    mcpServers: getAgentMcpServers(agent.metadata),
     metadata: getPublicAgentMetadata(agent.metadata),
     builtinToolPolicy: builtinToolPolicy ?? null,
     nativeToolPolicy: nativeToolPolicy ?? null,

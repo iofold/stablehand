@@ -48,6 +48,8 @@ import type { DefaultToolRegistry } from '../tool/registry.js';
 import type { ArtifactStore } from '../artifact/index.js';
 import { ArtifactRegistrationService } from '../artifact/registration-service.js';
 import { registerExistingAgentHttpTools } from './http-tools.js';
+import { McpServerManager } from '../mcp/manager.js';
+import { mcpOAuthRoutes } from './routes/mcp-oauth.js';
 import type { SystemSettingsService } from '../settings/service.js';
 import type { SandboxSessionManager } from './sandbox-session-manager.js';
 import type { ContainerLifecyclePolicy } from './container-lifecycle-policy.js';
@@ -94,6 +96,8 @@ export interface ServerOptions {
   canonicalLog?: CanonicalLog;
   /** Non-secret optional gateway deployment status configuration. */
   modelGateway?: ModelGatewayStatusConfig;
+  /** Per-agent MCP servers; built from the registry and secret store when omitted. */
+  mcpServerManager?: McpServerManager;
 }
 
 /**
@@ -188,6 +192,23 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   app.decorate('toolDefinitionRegistry', toolDefinitionRegistry);
 
   await registerExistingAgentHttpTools(db, toolDefinitionRegistry, opts.secretProvider);
+
+  // MCP servers declared by agents run in this process (tokens stay out of
+  // sandboxes). Boot does not wait on remote servers: each one connects in
+  // the background and its tools appear when listed.
+  const mcpServerManager = opts.mcpServerManager ?? new McpServerManager({
+    toolRegistry: toolDefinitionRegistry,
+    ...(opts.secretProvider ? { secretProvider: opts.secretProvider } : {}),
+  });
+  app.decorate('mcpServerManager', mcpServerManager);
+  void db.listAgents()
+    .then((agents) => mcpServerManager.syncAll(agents))
+    .catch((error: unknown) => {
+      app.log.error({ err: error }, 'MCP server registration at boot failed');
+    });
+  app.addHook('onClose', async () => {
+    await mcpServerManager.close();
+  });
 
   const artifactRegistration = new ArtifactRegistrationService({
     repository: db,
@@ -295,7 +316,8 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   });
 
   // ── Route plugins ──────────────────────────────────────
-  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessSchemas, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, turnStartupService: opts.turnStartupService, canonicalLog: opts.canonicalLog, scheduleService: opts.scheduleService, triggerManager: opts.triggerManager });
+  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessSchemas, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, turnStartupService: opts.turnStartupService, canonicalLog: opts.canonicalLog, scheduleService: opts.scheduleService, triggerManager: opts.triggerManager, mcpServerManager });
+  await app.register(mcpOAuthRoutes, { prefix: '/api/mcp', db, mcpServerManager });
   await app.register(activeConversationRoutes, {
     prefix: '/api/conversations',
     db,
@@ -414,6 +436,7 @@ declare module 'fastify' {
     interrupts: InterruptManager;
     db: DatabaseRepository;
     toolDefinitionRegistry: DefaultToolRegistry;
+    mcpServerManager: McpServerManager;
     apiAuth: ApiAuthConfig;
     apiRouteTable: ApiRouteRecord[];
   }

@@ -5,6 +5,7 @@ import { conversationRoutes } from './agents/conversations.js';
 import { crudRoutes } from './agents/crud.js';
 import { fileRoutes } from './agents/files.js';
 import { interruptRoutes } from './agents/interrupts.js';
+import { mcpServerRoutes } from './agents/mcp.js';
 import { feedbackRoutes } from './agents/feedback.js';
 import { secretRoutes } from './agents/secrets.js';
 import { turnRoutes } from './agents/turns.js';
@@ -38,5 +39,6 @@ export async function agentRoutes(app: FastifyInstance, opts: AgentRouteOptions)
   await app.register(feedbackRoutes, subOpts);
   await app.register(fileRoutes, subOpts);
   await app.register(secretRoutes, subOpts);
+  await app.register(mcpServerRoutes, subOpts);
   await app.register(webhookRoutes, subOpts);
 }
