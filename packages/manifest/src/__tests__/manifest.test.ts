@@ -301,7 +301,7 @@ describe('canonical agent API conversion', () => {
   });
 
   it.each([
-    ['MCP tools', { tools: [{ mcp: { name: 'drive', url: 'https://mcp.example.test' } }] }, 'MCP tool'],
+    ['MCP tools', { tools: [{ mcp: { name: 'drive', url: 'https://mcp.example.test' } }] }, 'spec.mcpServers'],
     ['inline tools', { tools: [{ inline: { name: 'inline', description: 'Inline', input: {} } }] }, 'inline tool'],
     ['triggers', { triggers: [{ event: 'invoice.ready' }] }, 'triggers'],
     ['emits', { emits: [{ event: 'invoice.reviewed' }] }, 'emit declarations'],
@@ -312,6 +312,41 @@ describe('canonical agent API conversion', () => {
     const manifest = validateManifest(candidate);
 
     expect(() => manifestToAgentCreateInput(manifest)).toThrow(message);
+  });
+
+  it('compiles spec.mcpServers into the agent create input', () => {
+    const candidate = structuredClone(minimalManifest());
+    (candidate.spec as Record<string, unknown>).mcpServers = [
+      {
+        name: 'apify',
+        url: 'https://mcp.apify.com/?tools=apidojo/tweet-scraper',
+        auth: { type: 'bearer', token: '$secret:APIFY_TOKEN' },
+        requireApproval: ['call-actor'],
+      },
+      { name: 'granola', url: 'https://mcp.granola.ai/mcp', auth: { type: 'oauth' }, tools: ['list_*', 'get_*'] },
+    ];
+    const compiled = manifestToAgentCreateInput(validateManifest(candidate));
+    expect(compiled.mcpServers?.map((server) => server.name)).toEqual(['apify', 'granola']);
+    expect(compiled.mcpServers?.[0]?.auth).toEqual({ type: 'bearer', token: '$secret:APIFY_TOKEN' });
+  });
+
+  it.each([
+    ['a literal token', { name: 'apify', url: 'https://mcp.apify.com', auth: { type: 'bearer', token: 'apify_api_123' } }],
+    ['a name with capitals', { name: 'Granola', url: 'https://mcp.granola.ai/mcp' }],
+    ['a non-http url', { name: 'files', url: 'file:///etc/passwd' }],
+  ])('rejects an MCP server with %s', (_label, server) => {
+    const candidate = structuredClone(minimalManifest());
+    (candidate.spec as Record<string, unknown>).mcpServers = [server];
+    expect(() => validateManifest(candidate)).toThrow();
+  });
+
+  it('rejects two MCP servers with the same name', () => {
+    const candidate = structuredClone(minimalManifest());
+    (candidate.spec as Record<string, unknown>).mcpServers = [
+      { name: 'notes', url: 'https://a.example.com/mcp' },
+      { name: 'notes', url: 'https://b.example.com/mcp' },
+    ];
+    expect(() => validateManifest(candidate)).toThrow(/Duplicate MCP server name/);
   });
 
   it('uses a safely expanded workspace plan when supplied by the Node loader', () => {

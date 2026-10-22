@@ -3,6 +3,7 @@ import type {
   BuiltinToolPolicy,
   ClaudeAgentsConfig,
   LangGraphConfig,
+  McpServerDefinition,
   NativeToolPolicy,
   PIAgentConfig,
 } from '@stablehand/contracts';
@@ -19,6 +20,10 @@ export type ManifestToolRef =
   | { mcp: ManifestMCPTool }
   | { inline: ManifestInlineTool };
 
+/**
+ * Legacy per-tool MCP entry. Rejected at conversion: declare servers under
+ * `spec.mcpServers` instead (one entry per server, not per tool).
+ */
 export interface ManifestMCPTool {
   name: string;
   command?: string;
@@ -77,9 +82,13 @@ export interface ManifestResources {
 
 export type ManifestMode = 'interactive' | 'background' | 'both';
 
+/** A remote MCP server the agent may call; the orchestrator runs the client. */
+export type ManifestMcpServer = McpServerDefinition;
+
 interface ManifestSpecCommon {
   instructions: string;
   tools?: ManifestToolRef[];
+  mcpServers?: ManifestMcpServer[];
   builtinToolPolicy?: ManifestBuiltinToolPolicy;
   nativeToolPolicy?: ManifestNativeToolPolicy;
   triggers?: ManifestTrigger[];

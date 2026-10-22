@@ -9,6 +9,7 @@ export type {
   ManifestFileCopy,
   ManifestWorkspaceContent,
   ManifestMCPTool,
+  ManifestMcpServer,
   ManifestInlineTool,
   ManifestTrigger,
   ManifestEmit,

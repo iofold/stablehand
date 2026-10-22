@@ -17,9 +17,13 @@ export interface ManifestConversionOptions {
 function assertRepresentableManifest(manifest: AgentManifest): void {
   const unsupportedTool = manifest.spec.tools?.find((tool) => !('ref' in tool));
   if (unsupportedTool) {
-    const kind = 'mcp' in unsupportedTool ? 'MCP' : 'inline';
+    if ('mcp' in unsupportedTool) {
+      throw new Error(
+        'MCP tools are declared per server, not per tool: move this entry to spec.mcpServers (name, url, auth)',
+      );
+    }
     throw new Error(
-      `${kind} tool definitions cannot be registered by the agent create contract; register the tool separately and use a ref`,
+      'inline tool definitions cannot be registered by the agent create contract; register the tool separately and use a ref',
     );
   }
   if (manifest.spec.triggers?.length) {
@@ -93,6 +97,7 @@ function toAgentInputCandidate(
     ...(workspaceContent ? { workspaceContent } : {}),
     ...(resourceLimits ? { resourceLimits } : {}),
     ...(manifest.spec.mode ? { mode: manifest.spec.mode } : {}),
+    ...(manifest.spec.mcpServers ? { mcpServers: manifest.spec.mcpServers } : {}),
     manifest,
   };
 }

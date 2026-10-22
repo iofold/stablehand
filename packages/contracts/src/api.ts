@@ -145,6 +145,121 @@ export const HttpToolDefinitionSchema = z.strictObject({
   requiresApproval: z.boolean().optional(),
 });
 
+/**
+ * A `$secret:NAME` reference to an agent secret. MCP server auth accepts only
+ * references, never literal tokens, and resolves them from the agent's
+ * tools-scope secrets, which never enter the sandbox.
+ */
+export const SECRET_REFERENCE_PATTERN = /^\$secret:[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+export const SecretReferenceSchema = z.string().trim().regex(
+  SECRET_REFERENCE_PATTERN,
+  'Use a $secret:NAME reference and store the value as a tools-only secret on the agent',
+);
+
+/** Lowercase name of an MCP server; it prefixes the server's tool names. */
+export const McpServerNameSchema = z.string().trim().regex(
+  /^[a-z][a-z0-9_-]{0,23}$/,
+  'Use 1-24 lowercase letters, digits, - or _, starting with a letter',
+);
+
+export const McpServerAuthSchema = z.discriminatedUnion('type', [
+  z.strictObject({ type: z.literal('none') }),
+  /** `Authorization: Bearer <secret>` on every request. */
+  z.strictObject({ type: z.literal('bearer'), token: SecretReferenceSchema }),
+  /** A custom header, e.g. `x-api-key: <secret>`. */
+  z.strictObject({
+    type: z.literal('header'),
+    name: z.string().trim().regex(/^[A-Za-z0-9-]{1,64}$/, 'Header names use letters, digits and -'),
+    value: SecretReferenceSchema,
+  }),
+  /**
+   * OAuth 2.1 with discovery, dynamic client registration and PKCE. A person
+   * connects once from the agent's Tools tab; tokens are stored encrypted in
+   * the agent's tools-scope secrets and refreshed by the orchestrator.
+   */
+  z.strictObject({
+    type: z.literal('oauth'),
+    scopes: z.array(z.string().trim().min(1)).max(32).optional(),
+  }),
+]);
+
+export const McpServerDefinitionSchema = z.strictObject({
+  name: McpServerNameSchema,
+  /** Remote Streamable HTTP endpoint. https, or http for an allowlisted internal host. */
+  url: z.string().url().refine(
+    (value) => value.startsWith('https://') || value.startsWith('http://'),
+    'MCP server URLs must use https (or http for an allowlisted internal host)',
+  ),
+  description: z.string().max(500).optional(),
+  auth: McpServerAuthSchema.optional(),
+  /** Glob allowlist of the server's tool names (`*` wildcard). Default: every tool. */
+  tools: z.array(z.string().trim().min(1)).max(100).optional(),
+  /**
+   * Which calls wait for a person's approval: `true` every tool, `false`
+   * none, or a glob list of tool names. Omitted: tools the server marks
+   * destructive.
+   */
+  requireApproval: z.union([z.boolean(), z.array(z.string().trim().min(1)).max(100)]).optional(),
+  /** Per-call timeout in milliseconds (default 120000). */
+  timeoutMs: z.number().int().min(1_000).max(600_000).optional(),
+});
+
+export const McpServerListSchema = z.array(McpServerDefinitionSchema).max(10).superRefine((servers, ctx) => {
+  const seen = new Set<string>();
+  servers.forEach((server, index) => {
+    if (seen.has(server.name)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [index, 'name'],
+        message: `Duplicate MCP server name: ${server.name}`,
+      });
+    }
+    seen.add(server.name);
+  });
+});
+
+export const McpServerStateSchema = z.enum(['connecting', 'ready', 'needs_auth', 'error']);
+
+export const McpServerToolSummarySchema = z.strictObject({
+  /** Name the agent calls, e.g. `granola__list_meetings`. */
+  name: z.string(),
+  /** Name on the MCP server, e.g. `list_meetings`. */
+  mcpName: z.string(),
+  displayName: z.string(),
+  requiresApproval: z.boolean(),
+});
+
+export const McpServerStatusSchema = z.strictObject({
+  name: McpServerNameSchema,
+  url: z.string(),
+  authType: z.enum(['none', 'bearer', 'header', 'oauth']),
+  state: McpServerStateSchema,
+  /** Plain-language reason when state is needs_auth or error. */
+  message: z.string().optional(),
+  /** OAuth servers: true once a person has connected an account. */
+  connected: z.boolean(),
+  toolCount: z.number().int().nonnegative(),
+  lastListedAt: z.number().int().nonnegative().nullable(),
+  tools: z.array(McpServerToolSummarySchema),
+});
+
+export const McpServerStatusListResponseSchema = z.strictObject({
+  servers: z.array(McpServerStatusSchema),
+});
+
+export const McpServerConnectInputSchema = z.strictObject({
+  /** Origin the browser uses for the Stablehand API, e.g. https://stablehand.example.com. */
+  redirectOrigin: z.string().url().optional(),
+});
+
+export const McpServerConnectResponseSchema = z.strictObject({
+  /** Open this in a browser to sign in to the server's provider. */
+  authorizationUrl: z.string().url(),
+  /** Host of the sign-in page, shown before the person follows the link. */
+  host: z.string(),
+  expiresAt: z.number().int().positive(),
+});
+
 export const AgentCreateInputSchema = z.strictObject({
   name: z.string().trim().min(1),
   harness: z.string().trim().min(1),
@@ -152,6 +267,8 @@ export const AgentCreateInputSchema = z.strictObject({
   systemPrompt: z.string(),
   tools: z.array(z.string().trim().min(1)),
   httpTools: z.array(HttpToolDefinitionSchema).optional(),
+  /** Remote MCP servers whose tools this agent may call (run by the orchestrator). */
+  mcpServers: McpServerListSchema.optional(),
   builtinToolPolicy: BuiltinToolPolicySchema.optional(),
   description: z.string().optional(),
   metadata: UnknownRecordSchema.optional(),
@@ -172,6 +289,7 @@ export const AgentPatchInputSchema = AgentCreateInputSchema
     workspaceContent: AgentWorkspaceContentSchema.nullable().optional(),
     mode: AgentModeSchema.nullable().optional(),
     manifest: UnknownRecordSchema.nullable().optional(),
+    mcpServers: McpServerListSchema.nullable().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, 'At least one agent field is required');
 
@@ -259,6 +377,7 @@ export const AgentSchema = z.strictObject({
   builtinToolPolicy: BuiltinToolPolicySchema.nullable(),
   nativeToolPolicy: NativeToolPolicySchema.nullable(),
   httpTools: z.array(HttpToolDefinitionSchema),
+  mcpServers: z.array(McpServerDefinitionSchema).optional(),
   workspaceContent: AgentWorkspaceContentSchema.nullable(),
   mode: AgentModeSchema.nullable(),
   resourceLimits: AgentResourceLimitsSchema.nullable(),
@@ -873,6 +992,11 @@ export type AgentResourceLimits = z.infer<typeof AgentResourceLimitsSchema>;
 export type AgentWorkspaceContent = z.infer<typeof AgentWorkspaceContentSchema>;
 export type AgentMode = z.infer<typeof AgentModeSchema>;
 export type HttpToolDefinition = z.infer<typeof HttpToolDefinitionSchema>;
+export type McpServerDefinition = z.infer<typeof McpServerDefinitionSchema>;
+export type McpServerAuth = z.infer<typeof McpServerAuthSchema>;
+export type McpServerStatus = z.infer<typeof McpServerStatusSchema>;
+export type McpServerToolSummary = z.infer<typeof McpServerToolSummarySchema>;
+export type McpServerConnectResponse = z.infer<typeof McpServerConnectResponseSchema>;
 export type AgentCreateInput = z.input<typeof AgentCreateInputSchema>;
 export type AgentPatchInput = z.input<typeof AgentPatchInputSchema>;
 export type Agent = z.infer<typeof AgentSchema>;

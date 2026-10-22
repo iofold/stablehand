@@ -3,6 +3,7 @@ import {
   BuiltinToolPolicySchema,
   ClaudeAgentsConfigSchema,
   LangGraphConfigSchema,
+  McpServerListSchema,
   NativeToolPolicySchema,
   PIAgentConfigSchema,
 } from '@stablehand/contracts';
@@ -114,6 +115,7 @@ const manifestMetadataSchema = z.strictObject({
 const manifestSpecCommon = {
   instructions: z.string().min(1),
   tools: z.array(manifestToolRefSchema).optional(),
+  mcpServers: McpServerListSchema.optional(),
   builtinToolPolicy: BuiltinToolPolicySchema.optional(),
   nativeToolPolicy: NativeToolPolicySchema.optional(),
   triggers: z.array(manifestTriggerSchema).optional(),
