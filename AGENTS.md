@@ -136,7 +136,7 @@ docker build --target harness-pi-agent -t stablehand/harness-pi-agent -f Dockerf
 - **pnpm 10.12.4** — Locked via `packageManager` field. `--shamefully-hoist` in production for SDK lazy imports.
 - **Strict test mode** — `STABLEHAND_STRICT_TESTS=1` in CI. Tests fail on console errors matching: CRITICAL, FOREIGN KEY, mount failure, etc. Opt out per-test with `allowConsoleErrors()`. See `tests/AGENTS.md`.
 - **Sandbox images** — 3 Docker images per harness (langgraph, claude-agents, pi-agent), all FROM `harness-base` in `Dockerfile.sandbox`. Built separately with `--target harness-{name}`.
-- **gRPC IPC** — Orchestrator ↔ sandbox via ConnectRPC on port 50051. Two services: HarnessService (OpenSession, DeliverTurn, SuspendSession, KillSession), OrchestratorService (RequestTool, EmitEvent, RefreshSecrets).
+- **gRPC IPC** — Orchestrator ↔ sandbox via ConnectRPC on port 50051. Two services: HarnessService (OpenSession, DeliverTurn, AttachTurn, CancelTurn, SuspendSession, KillSession), OrchestratorService (RequestTool, EmitEvent, RefreshSecrets). A dropped DeliverTurn stream only detaches: the turn keeps running and a restarted orchestrator re-attaches (ADR 024).
 - **SSE streaming** — UI connects to `/api/agents/:id/stream` via EventSource. Events flow: harness → proto → gRPC → SSE → React.
 - **Event chaining** — Agents emit events via `emit-event` tool → EventTriggerManager matches → spawns background run on another agent. Cascade protection: `MAX_TRIGGER_DEPTH=5`.
 - **Checkpoint/Resume** — Sessions suspend cooperatively at safe execution phases. Checkpoint v2 format; workspace captured as tar.gz (100 MB max). Secrets NEVER in checkpoints.
