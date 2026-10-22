@@ -1,37 +1,14 @@
-# gdpval-bench — harness benchmark extension
+# gdpval-bench
 
-Runs the GDPval-CTX slice (and later the Terminal-Bench slice) against
-Stablehand harnesses, grades the results locally, and reports per-cell scores
-and costs. Everything lives in this extension; **core is never modified**:
+Runs a 60-task slice of OpenAI's GDPval tasks against each Stablehand agent loop and model you choose, grades the deliverables locally, and reports a score and a cost per cell. It changes nothing in core: everything below lives in this directory.
 
-- **Images**: `images/Dockerfile` derives tooling-extended harness images
-  (`stablehand-bench/harness-*`) FROM the stock `stablehand/harness-*` images
-  (adds headless LibreOffice, ffmpeg, fonts). Build with
-  `./build-images.sh` after any stock image rebuild.
-- **Activation**: the orchestrator's existing `STABLEHAND_IMAGE_PREFIX` env
-  seam points sandboxes at the derived images —
-  `STABLEHAND_IMAGE_PREFIX=stablehand-bench/harness` in the (uncommitted)
-  `docker-compose.override.yml` during a benchmark window. Remove the
-  var to return to stock images.
-- **Slice**: `slice/slice.json` pins the 60-task GDPval-CTX slice
-  (25 Finance and Insurance, 25 Health Care and Social Assistance,
-  10 cross-sector presentation-deliverable tasks). Task *content* is
-  fetched from `openai/gdpval` on Hugging Face at runtime and never
-  committed (no explicit license on the dataset).
-- **Runner** (`runner/`): per campaign cell (harness × model), seeds
-  reference files via the workspace tar API, starts one background turn
-  per task (tags `{bench, campaign, task}` → spend ledger), collects
-  deliverables via the artifact API, validates (T0), packages results.
-- **Grader** (`grader/`): self-run — evals.openai.com does not host
-  grading. (1) pairwise vs the published human expert deliverables,
-  judge k=3 with position swap → win-rate; (2) rubric scoring from
-  `rubric_json` (deterministic checks + judge items, k=3 median).
-  Judges call the in-stack LiteLLM gateway directly (temp 0, JSON out).
-- **Audit** (`audit/`): transcript grep for gold-solution retrieval
-  (`huggingface`/`gdpval`/dataset URLs in tool calls) and the
-  deliverable injection sanitizer.
+## Pieces
 
-Campaign matrix and full design: `docs/plans/proposals/2026-08-20-harness-benchmark-suite.md`.
+- Images. `images/Dockerfile` builds `stablehand-bench/harness-*` from the stock `stablehand/harness-*` images and adds headless LibreOffice, ffmpeg and fonts. Run `./build-images.sh` after every rebuild of the stock images.
+- Activation. Set `STABLEHAND_IMAGE_PREFIX=stablehand-bench/harness` in an uncommitted `docker-compose.override.yml` for the length of a benchmark window, so new sandboxes start from the derived images. Remove it to return to the stock images.
+- Slice. `slice/slice.json` pins 60 tasks: 25 from Finance and Insurance, 25 from Health Care and Social Assistance, and 10 cross-sector tasks whose deliverable is a presentation. The runner fetches task content from `openai/gdpval` on Hugging Face at run time and never commits it, because the dataset has no explicit license.
+- Runner (`runner/`). For each cell (agent loop and model), it seeds reference files through the workspace tar API, starts one background turn per task tagged `{bench, campaign, task}` so spend lands in the ledger, collects deliverables through the artifact API, validates them, and packages the results.
+- Grader (`grader/`). evals.openai.com does not host grading, so grading runs here in two ways: pairwise against the published expert deliverables (judge k=3 with position swap, reported as a win rate), and rubric scoring from `rubric_json` (deterministic checks plus judge items, median of k=3). Judges call the stack's LiteLLM gateway at temperature 0 with JSON output.
+- Audit (`audit/`). Greps transcripts for attempts to fetch the gold answers (`huggingface`, `gdpval` or dataset URLs in tool calls) and sanitizes injected deliverables.
 
-Results land in `results/` (gitignored); result datasets are optionally
-published to HF (`your-hf-user/gdpval-results-*`) for archival.
+Results land in `results/`, which is gitignored. You can publish them to a Hugging Face dataset for archival.

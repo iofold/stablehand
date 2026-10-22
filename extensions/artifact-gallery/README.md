@@ -1,24 +1,15 @@
 # artifact-gallery
 
-Reference Stablehand extension: a public, self-hosted gallery of agent-published
-artifacts. It exists to prove the extension contract by consumption — an
-out-of-process service, a least-privilege scoped key, webhook + read-API
-integration, and its own rebuildable state — while giving every demo run a
-visible destination.
+A self-hosted public gallery of the files your agents publish. The [Overnight Analyst](../../packages/examples/overnight-analyst) uses it as the page where each morning's brief appears.
+
+It is also the reference extension. It runs as its own process beside Stablehand, holds a scoped key with two capabilities, learns about new files from webhooks and the read API, and keeps state you can delete and rebuild. [EXTENDING.md](../../EXTENDING.md) describes that contract.
 
 ## What it does
 
-- Ingests `artifact.created` webhook deliveries (HMAC-verified) and runs a
-  periodic read-API sweep that both backfills history and discovers agents
-  whose first artifact predates their webhook registration.
-- Registers its own webhook per known agent — agents are learned from
-  artifact payloads, so the key never needs agent enumeration.
-- Caches visual artifact blobs (images, HTML, SVG, text, JSON ≤ 20 MB) in a
-  local directory and serves a dark-themed gallery at `/` with stable public
-  links at `/a/:artifactId`. HTML/SVG artifacts are served behind a
-  sandboxing CSP; everything is `nosniff`.
-- The local store (`data/`) is a projection: delete it and the next sweep
-  rebuilds it from Stablehand.
+- Receives `artifact.created` webhooks and checks their HMAC signature. A periodic sweep of the read API backfills history and finds agents whose first artifact predates the webhook.
+- Registers its own webhook for each agent it learns about from artifact payloads, so the key never needs to list agents.
+- Caches images, HTML, SVG, text and JSON files up to 20 MB in a local directory and serves a dark gallery at `/`, with stable links at `/a/:artifactId`. HTML and SVG are served under a sandboxing Content-Security-Policy, and every response sets `nosniff`.
+- Treats `data/` as a projection. Delete it and the next sweep rebuilds it from Stablehand.
 
 ## Capabilities
 
@@ -27,15 +18,13 @@ artifacts:read
 webhooks:manage
 ```
 
-Nothing else. On startup the service probes one allowed endpoint and one
-master-only endpoint and warns loudly if the key turns out to be
-over-privileged.
+On startup the service calls one allowed endpoint and one master-only endpoint, and logs a warning if the key can reach the second.
 
 ## Run
 
 ```bash
 export STABLEHAND_BASE_URL=https://your-stablehand
-export STABLEHAND_API_KEY=cmk_...            # scoped key from Settings → Access keys
+export STABLEHAND_API_KEY=cmk_...            # scoped key from Settings, Access keys
 export GALLERY_WEBHOOK_SECRET=$(openssl rand -hex 24)
 export GALLERY_PUBLIC_URL=https://gallery.example.com   # must be reachable by Stablehand
 export GALLERY_PORT=8090                  # optional
@@ -48,7 +37,4 @@ bun run src/server.ts    # or: node --experimental-strip-types src/server.ts
 
 ## Uninstall
 
-Per the EXTENDING.md handshake: stop the service, revoke the scoped key in
-Settings → Access keys, and delete the webhooks it registered (visible per
-agent under `GET /api/agents/:id/webhooks`). The `data/` directory holds no
-irreplaceable state.
+Stop the service, revoke the scoped key under Settings, Access keys, and delete the webhooks it registered (listed per agent at `GET /api/agents/:id/webhooks`). The `data/` directory holds nothing you cannot rebuild.
