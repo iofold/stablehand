@@ -1,3 +1,7 @@
+# Images: every service Stablehand builds also names a prebuilt image,
+# ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-<name>:${STABLEHAND_IMAGE_TAG:-latest}.
+# `docker compose pull` fetches them; `docker compose up --build` builds them
+# from this checkout instead. install.sh tries the pull first.
 services:
   postgres:
     image: pgvector/pgvector:pg17
@@ -22,6 +26,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: orchestrator
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-orchestrator:${STABLEHAND_IMAGE_TAG:-latest}
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://stablehand:stablehand@postgres:5432/stablehand}
       STABLEHAND_PRESET: docker
@@ -38,6 +43,11 @@ services:
       STABLEHAND_AUTH_DISABLED: ${STABLEHAND_AUTH_DISABLED:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3200}
       STABLEHAND_DATA_VOLUME: ${COMPOSE_PROJECT_NAME:-stablehand}_stablehand-data
+      # Sandbox images and network. These follow the sandbox-* services and the
+      # stablehand-agents network below, so keep them in step.
+      STABLEHAND_IMAGE_PREFIX: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-harness
+      STABLEHAND_SANDBOX_IMAGE_TAG: ${STABLEHAND_IMAGE_TAG:-latest}
+      STABLEHAND_SANDBOX_NETWORK: ${STABLEHAND_SANDBOX_NETWORK:-stablehand-agents}
       # Sandboxes live on the internal agents network; the egress proxy is their only route out.
       # Set STABLEHAND_SANDBOX_EGRESS_PROXY_URL to an empty string to run sandboxes without a proxy
       # (they then have no internet at all, since the agents network is internal).
@@ -88,7 +98,7 @@ services:
   egress:
     build:
       context: packages/egress-proxy
-    image: stablehand/egress:latest
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-egress:${STABLEHAND_IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       STABLEHAND_EGRESS_EXTRA_ALLOW: ${STABLEHAND_EGRESS_EXTRA_ALLOW:-}
@@ -105,6 +115,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: ui
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-ui:${STABLEHAND_IMAGE_TAG:-latest}
     ports:
       - "${UI_PORT:-3200}:80"
     # To publish the UI through Traefik with TLS, add deploy/compose/traefik/docker-compose.yml.
@@ -161,7 +172,7 @@ services:
       context: .
       dockerfile: Dockerfile.sandbox
       target: harness-langgraph
-    image: stablehand/harness-langgraph:latest
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-harness-langgraph:${STABLEHAND_IMAGE_TAG:-latest}
     restart: "no"
 
   sandbox-claude-agents:
@@ -169,7 +180,7 @@ services:
       context: .
       dockerfile: Dockerfile.sandbox
       target: harness-claude-agents
-    image: stablehand/harness-claude-agents:latest
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-harness-claude-agents:${STABLEHAND_IMAGE_TAG:-latest}
     restart: "no"
 
   sandbox-pi-agent:
@@ -177,7 +188,7 @@ services:
       context: .
       dockerfile: Dockerfile.sandbox
       target: harness-pi-agent
-    image: stablehand/harness-pi-agent:latest
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-harness-pi-agent:${STABLEHAND_IMAGE_TAG:-latest}
     restart: "no"
 
 volumes:
@@ -189,7 +200,8 @@ volumes:
 
 networks:
   # Internal: sandboxes get no route to the internet except through the egress service.
+  # Set STABLEHAND_SANDBOX_NETWORK to run a second stack on the same Docker host.
   stablehand-agents:
     driver: bridge
-    name: stablehand-agents
+    name: ${STABLEHAND_SANDBOX_NETWORK:-stablehand-agents}
     internal: true
