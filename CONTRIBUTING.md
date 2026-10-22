@@ -109,9 +109,8 @@ GitHub Actions (`.github/workflows/ci.yml`) runs these jobs on every push and PR
 | **audit** | Runs `pnpm audit:prod` against production dependencies |
 | **e2e** | Spins up the Docker stack and runs the required `@smoke` Playwright gate against it (needs `test`) |
 | **images** | Builds the deployable orchestrator, UI, and per-harness sandbox Docker images (needs `test`) |
-| **dev2-deploy** | Gated on `DEV2_DEPLOY_ENABLED`; deploys to the dev2 k3s target and runs the required smoke suite (ADR 009, needs `e2e` + `images`) |
 
-`test`, `audit`, `e2e`, and `images` must pass before merge; `dev2-deploy` runs only when enabled.
+`test`, `audit`, `e2e`, and `images` must pass before merge.
 
 ## Notes on Current Architecture
 
