@@ -433,21 +433,75 @@ describe('Events and Triggers Integration', () => {
         expect(res.json()).toMatchObject({ code: 'invalid_custom_event' });
       });
 
-      it('POST /api/triggers/emit rejects payloads above 32 KiB with a typed 413', async () => {
+      it('POST /api/triggers/emit rejects payloads above 256 KiB with a typed 413 that says what to do', async () => {
+        const content = 'x'.repeat(256 * 1024);
         const res = await app.inject({
           method: 'POST',
           url: '/api/triggers/emit',
           payload: {
             type: 'custom.eval.large',
-            payload: { content: 'x'.repeat(32 * 1024) },
+            payload: { content },
           },
         });
+        const sizeBytes = JSON.stringify({ content }).length;
         expect(res.statusCode).toBe(413);
         expect(res.json()).toEqual({
-          error: `Custom event payload exceeds ${32 * 1024} bytes`,
+          error: `Custom event payload is ${sizeBytes} bytes; the limit is ${256 * 1024} bytes (256 KiB) of `
+            + 'serialized JSON. Put larger content in an artifact or behind a URL and send its id or URL in '
+            + 'the payload instead.',
           code: 'custom_event_payload_too_large',
-          maxBytes: 32 * 1024,
+          maxBytes: 256 * 1024,
+          sizeBytes,
         });
+      });
+
+      it('accepts a campaign-summary-sized payload that the old 32 KiB cap refused (ctx-et0w)', async () => {
+        const summaryAgentId = await createAgent(`Summary Target ${Date.now()}`);
+        const eventType = `custom.campaign.summary-${Date.now().toString(36)}`;
+        const launch = vi.spyOn(container.turnStartupService, 'launchPreparedTurn').mockResolvedValue(undefined);
+        const patch = await app.inject({
+          method: 'PATCH',
+          url: `/api/agents/${summaryAgentId}`,
+          payload: { mode: 'background' },
+        });
+        expect(patch.statusCode).toBe(200);
+        const trigger = await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: {
+            agentId: summaryAgentId,
+            eventType,
+            taskTemplate: 'Review {{payload.campaign}}: {{payload.totals}}',
+          },
+        });
+        expect(trigger.statusCode).toBe(201);
+        const triggerId = trigger.json().id as string;
+        try {
+          const summary = {
+            campaign: 'demo-campaign',
+            totals: { tasks: 12, models: 3, passRate: 0.42 },
+            notes: 'n'.repeat(100 * 1024),
+          };
+          const res = await app.inject({
+            method: 'POST',
+            url: '/api/triggers/emit',
+            payload: { type: eventType, agentId: summaryAgentId, payload: summary },
+          });
+          expect(res.statusCode).toBe(200);
+
+          await vi.waitFor(() => expect(launch).toHaveBeenCalledWith(
+            expect.objectContaining({
+              taskDescription: 'Review demo-campaign: {"tasks":12,"models":3,"passRate":0.42}',
+            }),
+            summaryAgentId,
+            expect.any(Object),
+          ), { timeout: 10_000, interval: 50 });
+          const events = await app.inject({ method: 'GET', url: `/api/events?type=${encodeURIComponent(eventType)}` });
+          expect(JSON.stringify(events.json().events[0])).toContain(summary.notes);
+        } finally {
+          launch.mockRestore();
+          await app.inject({ method: 'DELETE', url: `/api/triggers/${triggerId}` });
+        }
       });
 
       it('persists HTTP custom-event correlation fields for composable event filters', async () => {

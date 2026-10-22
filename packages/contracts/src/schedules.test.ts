@@ -75,7 +75,7 @@ describe('schedule contracts', () => {
       name: 'oversized',
       cronExpression: '* * * * *',
       eventType: 'custom.schedule.oversized',
-      payload: { content: 'x'.repeat(33 * 1024) },
+      payload: { content: 'x'.repeat(257 * 1024) },
     })).toThrow();
   });
 

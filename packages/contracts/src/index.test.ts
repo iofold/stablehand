@@ -622,27 +622,31 @@ describe('@stablehand/contracts', () => {
       expect(() => contracts.CustomEventNameSchema.parse(invalid), invalid).toThrow();
     }
 
+    // ctx-et0w: 256 KiB of serialized JSON (was 32 KiB).
+    expect(contracts.CUSTOM_EVENT_PAYLOAD_MAX_BYTES).toBe(256 * 1024);
     expect(contracts.CustomEventPayloadSchema.parse({
-      content: 'x'.repeat((32 * 1024) - 14),
-    })).toBeDefined();
-    expect(contracts.CustomEventPayloadSchema.parse({
-      content: 'é'.repeat(((32 * 1024) - 14) / 2),
-    })).toBeDefined();
-    expect(() => contracts.CustomEventPayloadSchema.parse({
       content: 'x'.repeat(32 * 1024),
-    })).toThrow();
+    })).toBeDefined();
+    expect(contracts.CustomEventPayloadSchema.parse({
+      content: 'x'.repeat((256 * 1024) - 14),
+    })).toBeDefined();
+    expect(contracts.CustomEventPayloadSchema.parse({
+      content: 'é'.repeat(((256 * 1024) - 14) / 2),
+    })).toBeDefined();
     expect(() => contracts.CustomEventPayloadSchema.parse({
-      content: 'é'.repeat((((32 * 1024) - 14) / 2) + 1),
+      content: 'x'.repeat(256 * 1024),
+    })).toThrow(/256 KiB.*artifact/);
+    expect(() => contracts.CustomEventPayloadSchema.parse({
+      content: 'é'.repeat((((256 * 1024) - 14) / 2) + 1),
     })).toThrow();
     expect(() => contracts.CustomEventPayloadSchema.parse([])).toThrow();
-    expect(contracts.CustomEventPayloadTooLargeErrorSchema.parse({
-      error: 'Custom event payload exceeds 32768 bytes',
+    const tooLarge = contracts.customEventPayloadTooLargeError(300_000);
+    expect(contracts.CustomEventPayloadTooLargeErrorSchema.parse(tooLarge)).toEqual({
+      error: 'Custom event payload is 300000 bytes; the limit is 262144 bytes (256 KiB) of serialized JSON. '
+        + 'Put larger content in an artifact or behind a URL and send its id or URL in the payload instead.',
       code: 'custom_event_payload_too_large',
-      maxBytes: 32 * 1024,
-    })).toEqual({
-      error: 'Custom event payload exceeds 32768 bytes',
-      code: 'custom_event_payload_too_large',
-      maxBytes: 32 * 1024,
+      maxBytes: 256 * 1024,
+      sizeBytes: 300_000,
     });
 
     expect(contracts.WebhookCreateInputSchema.parse({

@@ -1554,13 +1554,22 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
   "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
   "eventType": "turn.completed",
   "selector": { "status": "COMPLETED" },
-  "taskTemplate": "Review output from turn {{turnId}}",
+  "taskTemplate": "Review output from turn {{payload.turnId}}",
   "enabled": true
 }
 ```
 
 - **Query params:** None.
 - **Response:** trigger object.
+- **Task template:** `taskTemplate` becomes the run's task. Placeholders read the
+  matching event's payload; for `custom.*` and `emit-event` events the caller's
+  fields are merged in at the top level, so `{{payload.analysis}}` works either way.
+  - `{{payload}}` renders the whole payload as compact JSON.
+  - `{{payload.field}}` renders one field; dotted paths reach nested fields and
+    array items, e.g. `{{payload.summary.title}}` or `{{payload.items.0.name}}`.
+  - Strings render as-is, numbers and booleans as text, objects and arrays as
+    compact JSON.
+  - A missing or `null` field leaves its placeholder unchanged.
 - **Notes:** Returns `404` if `agentId` does not exist. A matching event starts a
   **background** run on the agent, so its `mode` must be `background` or `both`.
   When the run cannot start, the firing is recorded as failed (see
@@ -1615,7 +1624,7 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
     "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
     "eventType": "turn.completed",
     "selector": { "status": "COMPLETED" },
-    "taskTemplate": "Review output from turn {{turnId}}",
+    "taskTemplate": "Review output from turn {{payload.turnId}}",
     "enabled": true,
     "createdAt": 1712140000000
   }
@@ -1679,9 +1688,10 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
 
 ```json
 {
-  "error": "Custom event payload exceeds 32768 bytes",
+  "error": "Custom event payload is 301234 bytes; the limit is 262144 bytes (256 KiB) of serialized JSON. Put larger content in an artifact or behind a URL and send its id or URL in the payload instead.",
   "code": "custom_event_payload_too_large",
-  "maxBytes": 32768
+  "maxBytes": 262144,
+  "sizeBytes": 301234
 }
 ```
 
@@ -1715,7 +1725,7 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
     (`queue_full`, `dispatch_stalled`): `error` is the human sentence,
     `code` the machine token, and `retryAfterSec` mirrors `Retry-After`.
 
-- **Notes:** `type` must match `^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`. `payload` must be a JSON object and may not exceed 32 KiB (32,768 bytes) after UTF-8 JSON serialization. `agentId` is optional for global trigger events, but must be supplied for delivery to agent-scoped webhook subscriptions. Events are durably persisted before the success response. Bundled clients can call `client.events.emitCustom(...)`.
+- **Notes:** `type` must match `^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`. `payload` must be a JSON object and may not exceed 256 KiB (262,144 bytes) after UTF-8 JSON serialization (raised from 32 KiB). Larger content, such as a full report or dataset, should not ride on the event: upload it as an artifact owned by the trigger's target agent (`POST /api/artifacts/upload` with that `agentId`) and send `{ "artifactId": "…" }`, which the run can fetch with `artifact_download`, or send an HTTPS URL the run can reach. Every event row stores the payload twice and replays read rows in batches, so references keep the event log small. `agentId` is optional for global trigger events, but must be supplied for delivery to agent-scoped webhook subscriptions. Events are durably persisted before the success response. Bundled clients can call `client.events.emitCustom(...)`.
 
 Schedules are clocks over this same custom-event entrypoint. They never start
 runs directly: a scheduled fire is durably emitted, then matching event
@@ -1763,7 +1773,7 @@ history identical for manual and scheduled emissions.
 ```
 
 - **Defaults:** `timezone` is `UTC`, `payload` is `{}`, and `enabled` is `true`.
-- **Validation:** `agentId` is optional; when supplied it must identify an existing agent and scopes webhook routing and lifecycle cleanup, while omission creates a global custom-event clock. `name` is globally unique; `eventType` and `payload` use the canonical custom-event grammar and 32 KiB cap. Cron validation is delegated to Croner, including its standard five-, six-, and seven-part patterns and recurring nicknames, but ISO one-shot dates are rejected. Invalid expressions or IANA timezones return `400`; duplicate names return `409`; oversized payloads return the same typed `413` as `/api/triggers/emit`.
+- **Validation:** `agentId` is optional; when supplied it must identify an existing agent and scopes webhook routing and lifecycle cleanup, while omission creates a global custom-event clock. `name` is globally unique; `eventType` and `payload` use the canonical custom-event grammar and 256 KiB cap. Cron validation is delegated to Croner, including its standard five-, six-, and seven-part patterns and recurring nicknames, but ISO one-shot dates are rejected. Invalid expressions or IANA timezones return `400`; duplicate names return `409`; oversized payloads return the same typed `413` as `/api/triggers/emit`.
 
 #### `GET /api/schedules`
 
@@ -2381,7 +2391,7 @@ Experimental `custom.*` example payload:
 The nested `payload` object is delivered exactly as emitted; custom deliveries
 do not project, rename, or truncate caller fields. The outer envelope carries
 the event and correlation identities used by signature verification and
-routing. The 32 KiB cap applies to the caller's nested `payload` at emission.
+routing. The 256 KiB cap applies to the caller's nested `payload` at emission.
 
 ### Signing / secrets
 

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   CUSTOM_EVENT_PAYLOAD_MAX_BYTES,
+  customEventPayloadTooLargeError,
   ScheduleCreateInputSchema,
   ScheduleListResponseSchema,
   SchedulePatchInputSchema,
@@ -30,11 +31,11 @@ function invalidBody(reply: FastifyReply, issues: { path: PropertyKey[]; message
   });
 }
 
-function payloadTooLarge(value: unknown): boolean {
-  return value !== null
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && serializedJsonByteLength(value) > CUSTOM_EVENT_PAYLOAD_MAX_BYTES;
+/** Serialized size of an oversized object payload, or undefined when it fits. */
+function oversizedPayloadBytes(value: unknown): number | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const bytes = serializedJsonByteLength(value);
+  return bytes > CUSTOM_EVENT_PAYLOAD_MAX_BYTES ? bytes : undefined;
 }
 
 function mapServiceError(error: unknown, reply: FastifyReply) {
@@ -63,11 +64,9 @@ export async function scheduleRoutes(
     reply,
   ) => {
     const raw = request.body as { payload?: unknown } | undefined;
-    if (payloadTooLarge(raw?.payload)) {
-      return reply.status(413).send({
-        error: 'custom_event_payload_too_large',
-        maxBytes: CUSTOM_EVENT_PAYLOAD_MAX_BYTES,
-      });
+    const oversizedBytes = oversizedPayloadBytes(raw?.payload);
+    if (oversizedBytes !== undefined) {
+      return reply.status(413).send(customEventPayloadTooLargeError(oversizedBytes));
     }
     const parsed = ScheduleCreateInputSchema.safeParse(request.body ?? {});
     if (!parsed.success) return invalidBody(reply, parsed.error.issues);
@@ -93,11 +92,9 @@ export async function scheduleRoutes(
     reply,
   ) => {
     const raw = request.body as { payload?: unknown } | undefined;
-    if (payloadTooLarge(raw?.payload)) {
-      return reply.status(413).send({
-        error: 'custom_event_payload_too_large',
-        maxBytes: CUSTOM_EVENT_PAYLOAD_MAX_BYTES,
-      });
+    const oversizedBytes = oversizedPayloadBytes(raw?.payload);
+    if (oversizedBytes !== undefined) {
+      return reply.status(413).send(customEventPayloadTooLargeError(oversizedBytes));
     }
     const parsed = SchedulePatchInputSchema.safeParse(request.body ?? {});
     if (!parsed.success) return invalidBody(reply, parsed.error.issues);

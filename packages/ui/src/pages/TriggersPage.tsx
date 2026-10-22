@@ -651,7 +651,7 @@ export function TriggersPage() {
                 <textarea
                   value={form.taskTemplate}
                   onChange={(e) => setForm({ ...form, taskTemplate: e.target.value })}
-                  placeholder="Task to execute when event fires..."
+                  placeholder="Task for the agent, e.g. Review this report: {{payload.report}}"
                   rows={3}
                   className="input-base resize-none"
                 />

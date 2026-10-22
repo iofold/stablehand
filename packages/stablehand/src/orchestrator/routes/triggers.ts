@@ -2,9 +2,9 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import {
   CUSTOM_EVENT_PAYLOAD_MAX_BYTES,
   CustomEventEmitInputSchema,
+  customEventPayloadTooLargeError,
   emitGrantAllows,
   serializedJsonByteLength,
-  type CustomEventPayloadTooLargeError,
 } from '@stablehand/contracts';
 import { TriggerConflictError, type EventTriggerManager } from '../../events/trigger-manager.js';
 import type { DatabaseRepository } from '../../database/repository.js';
@@ -253,17 +253,9 @@ export async function triggerRoutes(
         payload?: unknown;
       } | undefined;
 
-      if (
-        body
-        && isJsonObject(body.payload)
-        && serializedJsonByteLength(body.payload) > CUSTOM_EVENT_PAYLOAD_MAX_BYTES
-      ) {
-        const error: CustomEventPayloadTooLargeError = {
-          error: `Custom event payload exceeds ${CUSTOM_EVENT_PAYLOAD_MAX_BYTES} bytes`,
-          code: 'custom_event_payload_too_large',
-          maxBytes: CUSTOM_EVENT_PAYLOAD_MAX_BYTES,
-        };
-        return reply.status(413).send(error);
+      const payloadBytes = body && isJsonObject(body.payload) ? serializedJsonByteLength(body.payload) : 0;
+      if (payloadBytes > CUSTOM_EVENT_PAYLOAD_MAX_BYTES) {
+        return reply.status(413).send(customEventPayloadTooLargeError(payloadBytes));
       }
 
       const validated = CustomEventEmitInputSchema.safeParse(body);

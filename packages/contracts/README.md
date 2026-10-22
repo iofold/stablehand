@@ -34,7 +34,7 @@ omitting the field and inheriting the upstream model default.
 
 Schedule CRUD schemas are exported from `@stablehand/contracts/schedules` and
 the package root. They own the stable API shape and reuse the canonical
-`custom.*` event name and 32 KiB payload contracts. Cron parsing and runtime
+`custom.*` event name and 256 KiB payload contracts. Cron parsing and runtime
 clock ownership intentionally remain in the orchestrator, so importing the
 contracts package never loads Croner or scheduler state.
 

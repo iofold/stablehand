@@ -425,7 +425,7 @@ describe('WebhookRelay', () => {
     });
   });
 
-  it('does not enqueue custom webhook payloads outside the canonical 32 KiB contract', async () => {
+  it('does not enqueue custom webhook payloads outside the canonical 256 KiB contract', async () => {
     const eventType = 'custom.eval.oversized' as ValidWebhookEvent;
     const dispatcher = createDispatcher();
     const logger = { warn: vi.fn() };
@@ -439,7 +439,7 @@ describe('WebhookRelay', () => {
     await consumer.handle(rawEvent(44, eventType, {
       type: eventType,
       agentId: 'agent-1',
-      payload: { content: 'x'.repeat(32 * 1024) },
+      payload: { content: 'x'.repeat(256 * 1024) },
       timestamp: 800,
     }));
 

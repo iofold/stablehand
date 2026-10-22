@@ -24,7 +24,16 @@ const UnknownRecordSchema = z.record(z.string(), z.unknown());
 const StringRecordSchema = z.record(z.string(), z.string());
 
 export const ARTIFACT_METADATA_MAX_BYTES = 16 * 1024;
-export const CUSTOM_EVENT_PAYLOAD_MAX_BYTES = 32 * 1024;
+/**
+ * Serialized-JSON cap for a custom event's `payload` (ctx-et0w: raised from
+ * 32 KiB, which could not carry a campaign summary). 256 KiB is the ceiling
+ * the common managed event buses use (EventBridge, SNS, SQS), well under
+ * Fastify's 1 MiB request body limit. Every event row keeps the payload twice
+ * (frame body and source payload) and SSE replay and spine catch-up read rows
+ * in batches, so larger content belongs in an artifact or behind a URL, with
+ * only its id or URL in the event.
+ */
+export const CUSTOM_EVENT_PAYLOAD_MAX_BYTES = 256 * 1024;
 export const CUSTOM_EVENT_NAME_PATTERN_SOURCE = String.raw`^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`;
 export const CUSTOM_EVENT_NAME_PATTERN = new RegExp(CUSTOM_EVENT_NAME_PATTERN_SOURCE);
 
@@ -56,7 +65,8 @@ export function isCustomEventName(value: string): boolean {
 
 export const CustomEventPayloadSchema = UnknownRecordSchema.refine(
   (value) => serializedJsonByteLength(value) <= CUSTOM_EVENT_PAYLOAD_MAX_BYTES,
-  `Custom event payload must not exceed ${CUSTOM_EVENT_PAYLOAD_MAX_BYTES} serialized bytes`,
+  `Custom event payload must not exceed ${CUSTOM_EVENT_PAYLOAD_MAX_BYTES} serialized bytes (256 KiB); `
+  + 'put larger content in an artifact or behind a URL and send its id or URL instead',
 );
 
 export const CustomEventEmitInputSchema = z.strictObject({
@@ -75,7 +85,23 @@ export const CustomEventPayloadTooLargeErrorSchema = z.strictObject({
   error: z.string(),
   code: z.literal('custom_event_payload_too_large'),
   maxBytes: z.literal(CUSTOM_EVENT_PAYLOAD_MAX_BYTES),
+  /** Serialized size of the rejected payload. */
+  sizeBytes: z.number().int().positive().optional(),
 });
+
+/** The typed 413 body for an oversized custom event payload (emit and schedules). */
+export function customEventPayloadTooLargeError(
+  sizeBytes: number,
+): z.infer<typeof CustomEventPayloadTooLargeErrorSchema> {
+  return {
+    error: `Custom event payload is ${sizeBytes} bytes; the limit is ${CUSTOM_EVENT_PAYLOAD_MAX_BYTES} bytes `
+      + '(256 KiB) of serialized JSON. Put larger content in an artifact or behind a URL and send its id '
+      + 'or URL in the payload instead.',
+    code: 'custom_event_payload_too_large',
+    maxBytes: CUSTOM_EVENT_PAYLOAD_MAX_BYTES,
+    sizeBytes,
+  };
+}
 
 export const ArtifactMetadataSchema = UnknownRecordSchema.refine(
   (value) => serializedJsonByteLength(value) <= ARTIFACT_METADATA_MAX_BYTES,

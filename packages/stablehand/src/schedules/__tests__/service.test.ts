@@ -77,7 +77,7 @@ describe('ScheduleService', () => {
     expect(invalidName.jobs.size).toBe(0);
 
     const oversized = harness([row({
-      payload: { content: 'x'.repeat(33 * 1024) },
+      payload: { content: 'x'.repeat(257 * 1024) },
     })]);
     await expect(oversized.service.start()).rejects.toThrow();
     expect(oversized.jobs.size).toBe(0);

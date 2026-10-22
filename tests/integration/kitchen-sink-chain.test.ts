@@ -148,9 +148,15 @@ describe('kitchen-sink event chain', () => {
       },
     );
 
-    // The analyst's emit-event tool call, as the orchestrator tool handler makes it.
+    // The analyst's emit-event tool call, as the orchestrator tool handler makes
+    // it. Models often send structured findings; the writer's
+    // {{payload.analysis}} must render them as JSON, not [object Object]
+    // (ctx-et0w).
     await container.eventBus.emitCustomAsync('analysis.complete', analyst.id, {
-      analysis: 'Revenue grew 12% quarter over quarter; weather risk is low.',
+      analysis: {
+        summary: 'Revenue grew 12% quarter over quarter; weather risk is low.',
+        metrics: { revenueGrowthPct: 12, weatherRisk: 'low' },
+      },
       agentId: analyst.id,
     });
 
@@ -162,7 +168,8 @@ describe('kitchen-sink event chain', () => {
     expect(launches.every((launch) => launch.mode === 'background')).toBe(true);
     expect(launches.find((launch) => launch.agentId === writer.id)?.taskDescription).toBe(
       'Write a polished final report based on this analysis:\n\n'
-      + 'Revenue grew 12% quarter over quarter; weather risk is low.',
+      + '{"summary":"Revenue grew 12% quarter over quarter; weather risk is low.",'
+      + '"metrics":{"revenueGrowthPct":12,"weatherRisk":"low"}}',
     );
     const auditTasks = launches
       .filter((launch) => launch.agentId === auditor.id)

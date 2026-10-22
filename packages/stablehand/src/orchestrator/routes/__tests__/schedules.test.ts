@@ -142,7 +142,7 @@ describe('schedule routes', () => {
       name: 'weekly-canary',
       cronExpression: '0 9 * * 1',
       eventType: 'custom.schedule.weekly-canary',
-      payload: { content: 'x'.repeat(33 * 1024) },
+      payload: { content: 'x'.repeat(257 * 1024) },
     };
 
     const oversized = await tooLarge.app.inject({
@@ -162,9 +162,11 @@ describe('schedule routes', () => {
     });
 
     expect(oversized.statusCode).toBe(413);
-    expect(oversized.json()).toEqual({
-      error: 'custom_event_payload_too_large',
-      maxBytes: 32 * 1024,
+    expect(oversized.json()).toMatchObject({
+      error: expect.stringContaining('the limit is 262144 bytes (256 KiB)'),
+      code: 'custom_event_payload_too_large',
+      maxBytes: 256 * 1024,
+      sizeBytes: expect.any(Number),
     });
     expect(tooLarge.service.create).not.toHaveBeenCalled();
     expect(conflict.statusCode).toBe(409);

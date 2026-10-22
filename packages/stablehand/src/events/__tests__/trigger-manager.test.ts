@@ -63,7 +63,7 @@ describe('EventTriggerManager durable mutations', () => {
     await expect(manager.emitCustomEventAsync(
       'custom.oversized',
       undefined,
-      { content: 'x'.repeat(33 * 1024) },
+      { content: 'x'.repeat(257 * 1024) },
     )).rejects.toThrow();
     expect(emit).not.toHaveBeenCalled();
   });
