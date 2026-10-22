@@ -26,6 +26,7 @@ interface MockTrigger {
 
 interface MockApiOptions {
   agentListStatus?: number;
+  existingAgents?: Array<{ id: string; name: string }>;
   existingTriggers?: MockTrigger[];
   failAgentName?: string;
   triggerStatus?: number;
@@ -66,7 +67,22 @@ async function runSeeder(options: MockApiOptions = {}): Promise<{
 
     if (method === 'GET' && path === '/api/agents') {
       const status = options.agentListStatus ?? 200;
-      sendJson(response, status, status === 200 ? [] : { error: 'agent list seed test failure' });
+      sendJson(
+        response,
+        status,
+        status === 200 ? options.existingAgents ?? [] : { error: 'agent list seed test failure' },
+      );
+      return;
+    }
+
+    if (method === 'PATCH' && path.startsWith('/api/agents/')) {
+      const id = path.slice('/api/agents/'.length);
+      const existing = options.existingAgents?.find((agent) => agent.id === id);
+      if (!existing) {
+        sendJson(response, 404, { error: 'Agent not found' });
+        return;
+      }
+      sendJson(response, 200, existing);
       return;
     }
 
@@ -229,6 +245,30 @@ describe('kitchen-sink seeder', () => {
     expect(JSON.parse(update?.body.toString('utf8') ?? '{}')).toEqual({
       taskTemplate: 'Write a polished final report based on this analysis:\n\n{{payload.analysis}}',
       enabled: true,
+    });
+  });
+
+  it('updates already-seeded agents in place with PATCH', async () => {
+    const existingAgents = [
+      { id: 'existing-writer', name: 'claude-writer' },
+      { id: 'existing-auditor', name: 'pi-auditor' },
+    ];
+    const { requests, stdout } = await runSeeder({ existingAgents });
+
+    expect(stdout).toContain('Seed complete');
+    const updates = requests
+      .filter((request) => request.path === '/api/agents/existing-writer'
+        || request.path === '/api/agents/existing-auditor')
+      .map((request) => `${request.method} ${request.path}`)
+      .sort();
+    expect(updates).toEqual([
+      'PATCH /api/agents/existing-auditor',
+      'PATCH /api/agents/existing-writer',
+    ]);
+    const writerUpdate = requests.find((request) => request.path === '/api/agents/existing-writer');
+    expect(JSON.parse(writerUpdate?.body.toString('utf8') ?? '{}')).toMatchObject({
+      name: 'claude-writer',
+      mode: 'both',
     });
   });
 

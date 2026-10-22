@@ -38,4 +38,7 @@ spec:
       - Bash
       - Grep
       - Glob
-  mode: interactive
+  # Trigger target: the analysis.complete trigger starts a background run here,
+  # and the agent stays available for direct chat. An interactive-only agent
+  # refuses trigger-started runs (agent_mode_not_allowed).
+  mode: both

@@ -512,17 +512,20 @@ OpenAI Agents and Vercel AI SDK columns are planned, not implemented (see
    - Emits: analysis.complete
    - Triggers: None (chain starter)
 
-2. **claude-writer** (Claude Agents, Anthropic claude-sonnet-4-6)
+2. **claude-writer** (Claude Agents, Anthropic claude-sonnet-4-6, `mode: both`)
    - Tools: emit-event
    - Native Tools: Read, Write, Edit, Bash, Grep, Glob
    - Emits: report.ready
    - Triggers: analysis.complete → spawn writer
 
-3. **pi-auditor** (PI Agent, OpenAI gpt-5.4-mini)
+3. **pi-auditor** (PI Agent, OpenAI gpt-5.4-mini, `mode: both`)
    - Tools: emit-event
    - Native Tools: read, bash, edit, write
    - Emits: audit.logged
-   - Triggers: report.ready → spawn auditor
+   - Triggers: analysis.complete and report.ready → spawn auditor
+
+Trigger targets declare `mode: both` because triggers start background runs; an
+`interactive`-only target refuses them with `agent_mode_not_allowed`.
 
 ### Event Chain
 ```

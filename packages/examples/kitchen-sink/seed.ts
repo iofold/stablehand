@@ -75,7 +75,8 @@ async function fetchAgents(): Promise<Array<{ id?: string; name: string }>> {
 
 async function upsertAgent(dir: string, payload: AgentPayload, existingId?: string): Promise<AgentResult> {
   const endpoint = existingId ? `${API_BASE}/api/agents/${existingId}` : `${API_BASE}/api/agents`;
-  const method = existingId ? 'PUT' : 'POST';
+  // Agent updates are PATCH (AgentPatchInputSchema accepts the full create payload).
+  const method = existingId ? 'PATCH' : 'POST';
   const res = await fetch(endpoint, {
     method,
     headers: jsonHeaders(),

@@ -58,9 +58,15 @@ langgraph-analyst  --[analysis.complete]--> claude-writer  --[report.ready]--> p
                    \--[analysis.complete]------------------------------------> pi-auditor
 ```
 
-1. **Analyst** (LangGraph) — Gathers data via calculator/weather/search, emits `analysis.complete`
-2. **Writer** (Claude) — Triggered by `analysis.complete`, writes report, emits `report.ready`
-3. **Auditor** (PI) — Monitors both events, logs audit trail, emits `audit.logged`
+1. **Analyst** (LangGraph, `mode: interactive`) — You start the chain by chatting with it. Gathers data via calculator/weather/search, emits `analysis.complete`
+2. **Writer** (Claude, `mode: both`) — Triggered by `analysis.complete`, writes report, emits `report.ready`
+3. **Auditor** (PI, `mode: both`) — Triggered by both events, logs audit trail, emits `audit.logged`
+
+Triggers start **background** runs, so every trigger target must declare `mode: background` or
+`mode: both`. An `interactive`-only target refuses the run (`agent_mode_not_allowed`). `both`
+keeps the writer and auditor available for direct chat too.
+`tests/integration/kitchen-sink-chain.test.ts` seeds this directory with `seed.ts` against a real
+orchestrator and checks that every trigger-started run is admitted.
 
 Cascade protection: `MAX_TRIGGER_DEPTH=5` prevents infinite loops.
 
@@ -100,7 +106,7 @@ spec:
   nativeToolPolicy:
     policy: allow # all | allow | deny | none
     names: [Read, Write, Edit, Bash] # required only for allow or deny
-  mode: interactive
+  mode: interactive # interactive (chat only) | background (trigger/API runs only) | both
 ```
 
 ## TOOL DEFINITION PATTERN
@@ -135,4 +141,6 @@ npx tsx seed.ts
 API_URL=http://api.example.com npx tsx seed.ts
 ```
 
-Imports all agent manifests via `/api/agents/import`, then registers event triggers via `/api/triggers`.
+Creates each agent manifest with `POST /api/agents` (or updates an already-seeded agent of the same
+name with `PATCH /api/agents/:id`), then registers or reconciles the event triggers via `/api/triggers`.
+Re-run it after pulling manifest changes.

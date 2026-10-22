@@ -7,14 +7,16 @@ import { parseManifestString, validateManifest } from '@stablehand/manifest';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentsDir = join(__dirname, '..', 'agents');
 
+// `triggerTarget`: seed.ts registers event triggers that start background
+// runs on this agent, so its mode must admit background turns (ctx-krrn).
 const agents = [
-  { dir: 'langgraph-agent', expectedHarness: 'langgraph', expectedName: 'langgraph-analyst', provider: 'openai', model: 'gpt-5.4-mini', expectedTools: [{ ref: 'calculator' }, { ref: 'weather' }, { ref: 'emit-event' }, { ref: 'list-directory' }, { ref: 'search-files' }, { ref: 'execute-trade' }] },
-  { dir: 'claude-agent', expectedHarness: 'claude-agents', expectedName: 'claude-writer', provider: 'anthropic', model: 'claude-sonnet-4-6', expectedTools: [{ ref: 'emit-event' }] },
-  { dir: 'pi-agent', expectedHarness: 'pi-agent', expectedName: 'pi-auditor', provider: 'openai', model: 'gpt-5.4-mini', expectedTools: [{ ref: 'emit-event' }] },
+  { dir: 'langgraph-agent', expectedHarness: 'langgraph', expectedName: 'langgraph-analyst', provider: 'openai', model: 'gpt-5.4-mini', triggerTarget: false, expectedTools: [{ ref: 'calculator' }, { ref: 'weather' }, { ref: 'emit-event' }, { ref: 'list-directory' }, { ref: 'search-files' }, { ref: 'execute-trade' }] },
+  { dir: 'claude-agent', expectedHarness: 'claude-agents', expectedName: 'claude-writer', provider: 'anthropic', model: 'claude-sonnet-4-6', triggerTarget: true, expectedTools: [{ ref: 'emit-event' }] },
+  { dir: 'pi-agent', expectedHarness: 'pi-agent', expectedName: 'pi-auditor', provider: 'openai', model: 'gpt-5.4-mini', triggerTarget: true, expectedTools: [{ ref: 'emit-event' }] },
 ];
 
 describe('manifest validation', () => {
-  for (const { dir, expectedHarness, expectedName, provider, model, expectedTools } of agents) {
+  for (const { dir, expectedHarness, expectedName, provider, model, triggerTarget, expectedTools } of agents) {
     describe(dir, () => {
       it('parses and validates correctly', async () => {
         const yamlContent = await readFile(join(agentsDir, dir, 'agent.yaml'), 'utf-8');
@@ -76,6 +78,14 @@ describe('manifest validation', () => {
 
         expect(manifest.metadata.labels?.['chain-role']).toBeTruthy();
         expect(manifest.metadata.labels?.['chain-order']).toBeTruthy();
+      });
+
+      it(triggerTarget ? 'admits trigger-started background runs and chat' : 'admits chat turns that start the chain', async () => {
+        const yamlContent = await readFile(join(agentsDir, dir, 'agent.yaml'), 'utf-8');
+        const parsed = parseManifestString(yamlContent);
+        const manifest = validateManifest(parsed);
+
+        expect(manifest.spec.mode).toBe(triggerTarget ? 'both' : 'interactive');
       });
     });
   }
