@@ -1492,7 +1492,7 @@ describe('createGrpcRoutes', () => {
 
     const defRegistry = new DefaultToolRegistry();
     defRegistry.addProvider({
-      name: 'http-test',
+      name: 'http-agent-04',
       async listTools() {
         return [{
           name: 'detect-column-mapping',
@@ -1526,6 +1526,16 @@ describe('createGrpcRoutes', () => {
 
     expect(resp.error).toBeFalsy();
     expect(JSON.parse(resp.result)).toEqual({ columns: ['date', 'amount'] });
+
+    // Another agent must not reach this agent's HTTP tool (and its secrets).
+    const foreign = await impl.requestTool(create(RequestToolRequestSchema, {
+      turnId: 'run-2',
+      agentId: 'agent-05',
+      toolName: 'detect-column-mapping',
+      argsJson: '{}',
+      requestId: 'req-2',
+    }));
+    expect(foreign.error).toMatch(/Unknown orchestrator tool/);
   });
 
   it('requestTool resolves duplicate HTTP tool names using the requesting agentId', async () => {

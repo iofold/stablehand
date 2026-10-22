@@ -120,8 +120,10 @@ describe('GET /api/catalogs/tools', () => {
     expect(emitEventTool).toHaveProperty('source', 'local');
   });
 
-  it('aggregates and deduplicates tools from multiple provider-style names', async () => {
+  it('aggregates and deduplicates declared tools without guessing a source from the name', async () => {
     const sharedLocalTool = uniqueId('shared-local-tool');
+    // Names that look like MCP or Composio tools are not reported as such:
+    // the source comes from the provider that serves a tool (ctx-z08z).
     const mcpTool = `mcp:server:${uniqueId('search')}`;
     const composioTool = `composio.${uniqueId('gmail-send')}`;
 
@@ -142,8 +144,8 @@ describe('GET /api/catalogs/tools', () => {
 
     expect(sharedMatches).toHaveLength(1);
     expect(catalog).toContainEqual(expect.objectContaining({ name: sharedLocalTool, source: 'local' }));
-    expect(catalog).toContainEqual(expect.objectContaining({ name: mcpTool, source: 'mcp' }));
-    expect(catalog).toContainEqual(expect.objectContaining({ name: composioTool, source: 'composio' }));
+    expect(catalog).toContainEqual(expect.objectContaining({ name: mcpTool, source: 'local' }));
+    expect(catalog).toContainEqual(expect.objectContaining({ name: composioTool, source: 'local' }));
   });
 
   it('keeps HTTP tool definitions separate while registering them in the catalog', async () => {
@@ -184,7 +186,7 @@ describe('GET /api/catalogs/tools', () => {
     const httpTool = catalog.find((item) => item.name === httpToolName);
     expect(httpTool).toBeDefined();
     expect(httpTool!.name).toBe(httpToolName);
-    expect(httpTool!.source).toBe('local');
+    expect(httpTool!.source).toBe('http');
   });
 
   it('returns the same catalog for an empty search query', async () => {

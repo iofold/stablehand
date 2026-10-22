@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 
 type ToolBadgeData = Partial<Pick<
   CatalogTool,
-  'builtin' | 'location' | 'requiresApproval' | 'source'
+  'builtin' | 'location' | 'requiresApproval' | 'source' | 'server'
 >> & { source?: string };
 
 export function sourceBadgeClass(source?: string): string {
@@ -14,7 +14,7 @@ export function sourceBadgeClass(source?: string): string {
       return 'bg-accent-500/10 border-accent-500/20 text-accent-400';
     case 'mcp':
       return 'bg-violet-500/10 border-violet-500/20 text-violet-400';
-    case 'composio':
+    case 'http':
       return 'bg-amber-500/10 border-amber-500/20 text-amber-400';
     default:
       return 'bg-surface-700/30 border-surface-600/30 text-surface-400';
@@ -59,7 +59,9 @@ export function ToolBadges({
         </span>
       ) : null}
       <span className={cn('inline-flex shrink-0 rounded-md border font-medium', badgeClass, sourceBadgeClass(tool.source))}>
-        {tool.source || 'unknown'}
+        {tool.source === 'mcp' && tool.server
+          ? `mcp · ${tool.server}`
+          : tool.source || 'unknown'}
       </span>
       {tool.requiresApproval ? (
         <span className={cn('inline-flex shrink-0 items-center gap-1 rounded-md border border-orange-500/20 bg-orange-500/10 font-medium text-orange-400', compact ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-0.5 text-[11px]')}>

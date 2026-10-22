@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ToolProvider } from '../provider.js';
+import type { ToolProvider, ToolSourceKind } from '../provider.js';
 import type { ToolDefinition, ToolContext } from '@stablehand/sandbox-daemon';
 
 /**
@@ -187,6 +187,8 @@ function resolveSecret(
  */
 export class HTTPToolProvider implements ToolProvider {
   readonly name: string;
+  readonly source: ToolSourceKind = 'http';
+  readonly agentScope?: string;
   private endpoints: HttpEndpointConfig[];
   private cachedTools: ToolDefinition[] | null = null;
   /** Optional pre-resolved secrets map (e.g. from HarnessRunConfig). */
@@ -198,6 +200,8 @@ export class HTTPToolProvider implements ToolProvider {
     endpoints: HttpEndpointConfig[],
     options?: {
       name?: string;
+      /** Agent that owns these endpoints; other agents never see them. */
+      agentScope?: string;
       secrets?: Record<string, string>;
       fetchFn?: typeof fetch;
     },
@@ -216,6 +220,9 @@ export class HTTPToolProvider implements ToolProvider {
 
     this.endpoints = endpoints;
     this.name = options?.name ?? 'http';
+    if (options?.agentScope !== undefined) {
+      this.agentScope = options.agentScope;
+    }
     this.secrets = options?.secrets ?? {};
     this.fetchFn = options?.fetchFn ?? globalThis.fetch;
   }

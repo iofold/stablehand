@@ -68,10 +68,22 @@ export const EventTypesResponseSchema = z.strictObject({
 export type EventTypesResponse = z.infer<typeof EventTypesResponseSchema>;
 
 // ── GET /api/catalogs/tools + POST /api/catalogs/tools/test ──────────
+/**
+ * Where a catalog tool comes from, as its provider reports it (ctx-z08z):
+ * `local` (built into this deployment), `http` (an agent's HTTP endpoint) or
+ * `mcp` (a tool listed by an agent's MCP server).
+ */
+export const CatalogToolSourceSchema = z.enum(['local', 'http', 'mcp']);
+export type CatalogToolSource = z.infer<typeof CatalogToolSourceSchema>;
+
 export const CatalogToolSchema = z.strictObject({
   name: z.string(),
+  /** Plain label for people, e.g. "List meetings". */
+  displayName: z.string().optional(),
   description: z.string().optional(),
-  source: z.enum(['local', 'mcp', 'composio']),
+  source: CatalogToolSourceSchema,
+  /** The MCP server (or other grouping) the tool belongs to, e.g. "granola". */
+  server: z.string().optional(),
   inputSchema: z.record(z.string(), z.unknown()).optional(),
   requiresApproval: z.boolean().optional(),
   secrets: z.array(z.string()).optional(),

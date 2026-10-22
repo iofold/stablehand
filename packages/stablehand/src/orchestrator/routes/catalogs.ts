@@ -18,14 +18,6 @@ interface TestToolRequestBody {
 
 const TOOL_TEST_TIMEOUT_MS = 30_000;
 
-function detectToolSource(name: string): 'local' | 'mcp' | 'composio' {
-  if (name.startsWith('composio.')) {
-    return 'composio';
-  }
-
-  return name.includes(':') ? 'mcp' : 'local';
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -86,25 +78,34 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
 
       for (const name of toolNames) {
         if (!seen.has(name)) {
+          // A declared name no provider serves yet. Its source is unknown, so
+          // report it as local rather than guessing from the name (ctx-z08z).
           seen.set(name, {
             name,
             description: `Tool registered by agent ${agent.name ?? agent.id}`,
-            source: detectToolSource(name),
+            source: 'local',
             requiresApproval: false,
           });
         }
       }
     }
 
-    // Enrich with actual tool definitions from the registry
+    // Enrich with actual tool definitions from the registry. The provider
+    // reports each tool's source; the first entry for a name wins.
     if (app.toolDefinitionRegistry) {
-      const registryTools = app.toolDefinitionRegistry.listAll();
+      const registryEntries = app.toolDefinitionRegistry.listEntries();
+      const enriched = new Set<string>();
 
-      for (const toolDef of registryTools) {
+      for (const registryEntry of registryEntries) {
+        const toolDef = registryEntry.tool;
+        if (enriched.has(toolDef.name)) continue;
+        enriched.add(toolDef.name);
         const entry: CatalogToolResponse = {
           name: toolDef.name,
+          ...(registryEntry.catalog?.displayName ? { displayName: registryEntry.catalog.displayName } : {}),
           description: toolDef.description,
-          source: detectToolSource(toolDef.name),
+          source: registryEntry.source,
+          ...(registryEntry.catalog?.server ? { server: registryEntry.catalog.server } : {}),
           requiresApproval: toolDef.requiresApproval ?? false,
           secrets: toolDef.secrets,
           builtin: builtinToolNames.has(toolDef.name),
@@ -154,6 +155,15 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
       return ToolTestResponseSchema.parse({
         success: false,
         error: !tool || !provider ? `Tool not found: ${toolName}` : `Tool provider does not support execution: ${toolName}`,
+        durationMs: 0,
+      });
+    }
+    if (tool.requiresApproval) {
+      // The tester has no run to pause, so it would skip the approval the
+      // tool asks for. Run gated tools from an agent instead (ctx-9gy9).
+      return ToolTestResponseSchema.parse({
+        success: false,
+        error: `${toolName} asks for approval before each call, so it cannot run from the tool tester. Call it from an agent run.`,
         durationMs: 0,
       });
     }

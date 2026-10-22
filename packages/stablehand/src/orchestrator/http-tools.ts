@@ -168,6 +168,7 @@ export async function registerAgentHttpTools(
 
   toolRegistry.addProvider(new HTTPToolProvider(configs, {
     name: providerName,
+    agentScope: agent.id,
     secrets: await resolveProviderSecrets(agent.id, secretProvider),
     fetchFn,
   }));

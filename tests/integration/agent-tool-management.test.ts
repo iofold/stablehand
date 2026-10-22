@@ -169,7 +169,7 @@ describe('Agent tool management integration', () => {
   });
 
   describe('GET /api/catalogs/tools', () => {
-    it('returns tools aggregated from local, mcp-style, and http-tool providers', async () => {
+    it('reports the source each provider declares, never one inferred from the name', async () => {
       const localAgentRes = await createAgent({
         name: 'catalog-local-tools',
         tools: ['local-tool'],
@@ -200,8 +200,8 @@ describe('Agent tool management integration', () => {
 
       expect(catalog).toEqual(expect.arrayContaining([
         expect.objectContaining({ name: 'local-tool', source: 'local' }),
-        expect.objectContaining({ name: 'remote:lookup', source: 'mcp' }),
-        expect.objectContaining({ name: 'http-ingest', source: 'local' }),
+        expect.objectContaining({ name: 'remote:lookup', source: 'local' }),
+        expect.objectContaining({ name: 'http-ingest', source: 'http' }),
       ]));
     });
   });

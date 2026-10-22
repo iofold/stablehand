@@ -47,6 +47,8 @@ export function ToolRegistryPage() {
     return tools.filter(
       (t) =>
         t.name.toLowerCase().includes(q) ||
+        (t.displayName?.toLowerCase().includes(q) ?? false) ||
+        (t.server?.toLowerCase().includes(q) ?? false) ||
         (t.description?.toLowerCase().includes(q) ?? false),
     );
   }, [tools, search]);
@@ -89,8 +91,8 @@ export function ToolRegistryPage() {
                 { label: 'Total Tools', value: stats.total },
                 { label: 'Builtin', value: stats.builtinCount },
                 { label: 'Local', value: stats.bySource['local'] ?? 0 },
+                { label: 'HTTP', value: stats.bySource['http'] ?? 0 },
                 { label: 'MCP', value: stats.bySource['mcp'] ?? 0 },
-                { label: 'Composio', value: stats.bySource['composio'] ?? 0 },
               ]}
             />
           )}
@@ -137,9 +139,15 @@ export function ToolRegistryPage() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-surface-100 font-mono truncate">
-                            {tool.name}
-                          </span>
+                          {tool.displayName ? (
+                            <span className="text-sm font-semibold text-surface-100 truncate" title={tool.name}>
+                              {tool.displayName}
+                            </span>
+                          ) : (
+                            <span className="text-sm font-semibold text-surface-100 font-mono truncate">
+                              {tool.name}
+                            </span>
+                          )}
                           {isExpanded ? (
                             <ChevronDown className="h-3.5 w-3.5 text-surface-400 flex-shrink-0" />
                           ) : (
