@@ -16,7 +16,8 @@
   },
   "include": [
     "seed.ts",
-    "run-once.ts"
+    "run-once.ts",
+    "tests/**/*.ts"
   ],
   "exclude": [
     "node_modules",

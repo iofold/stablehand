@@ -15,7 +15,7 @@
  *   STABLEHAND_API_TOKEN  master API token        (required unless auth disabled)
  *   ANALYST_SOURCES       sources sentence        (default HN + The Verge)
  *   ANALYST_CRON          cron expression         (default "0 7 * * *")
- *   ANALYST_TZ            IANA timezone           (default "Asia/Kolkata")
+ *   ANALYST_TZ            IANA timezone           (default "UTC")
  *   ANALYST_GALLERY       auto | rotate | off     (default auto)
  *   GALLERY_API_KEY       the gallery's current key, to check it still works
  *
@@ -36,7 +36,7 @@ const API_TOKEN = process.env.STABLEHAND_API_TOKEN;
 const SOURCES = process.env.ANALYST_SOURCES
   ?? 'https://news.ycombinator.com and https://www.theverge.com';
 const CRON = process.env.ANALYST_CRON ?? '0 7 * * *';
-const TIMEZONE = process.env.ANALYST_TZ ?? 'Asia/Kolkata';
+const TIMEZONE = process.env.ANALYST_TZ ?? 'UTC';
 const GALLERY_MODE = (process.env.ANALYST_GALLERY ?? 'auto').trim().toLowerCase();
 const CURRENT_GALLERY_KEY = process.env.GALLERY_API_KEY?.trim() ?? '';
 const AGENT_NAME = 'overnight-analyst';

@@ -18,6 +18,8 @@
  *   COST_WAIT_MS          wait for pricing      (default 180000)
  *   GALLERY_URL           gallery base URL      (optional, e.g. http://gallery:8090)
  *   POLL_MS               poll interval         (default 3000)
+ *   ANALYST_SKIP_IF_BRIEF 1 = do nothing when the agent already has a brief
+ *                         (install.sh uses it so a re-run spends nothing)
  */
 
 export {};
@@ -29,6 +31,7 @@ const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS ?? 900_000);
 const COST_WAIT_MS = Number(process.env.COST_WAIT_MS ?? 180_000);
 const GALLERY_URL = process.env.GALLERY_URL?.replace(/\/+$/, '') ?? '';
 const POLL_MS = Number(process.env.POLL_MS ?? 3_000);
+const SKIP_IF_BRIEF = process.env.ANALYST_SKIP_IF_BRIEF === '1';
 const AGENT_NAME = 'overnight-analyst';
 const EVENT_TYPE = 'custom.overnight.brief';
 const BRIEF_NAME = 'overnight-brief.html';
@@ -109,6 +112,18 @@ async function main(): Promise<number> {
   if (!agent) {
     console.log(`no agent named ${AGENT_NAME}; run seed.ts first`);
     return 1;
+  }
+
+  if (SKIP_IF_BRIEF) {
+    const { artifacts } = await api<{ artifacts: Array<{ id: string; name: string }> }>(
+      `/api/artifacts?agentId=${encodeURIComponent(agent.id)}&limit=100`,
+    );
+    const existing = artifacts.find((artifact) => artifact.name === BRIEF_NAME);
+    if (existing) {
+      console.log(`a brief already exists (${existing.id}); not starting another run`);
+      console.log(`RESULT status=SKIPPED turn=none brief=${existing.id} cost_usd=unknown coverage=none`);
+      return 0;
+    }
   }
 
   const firedAt = Date.now();
