@@ -41,6 +41,7 @@ import {
   validateTurnDeliveryCapabilitySignature,
   type TurnDeliveryCapabilityClaims,
 } from './turn-delivery-capability.js';
+import type { ToolApprovalGate } from '../tool-approval-gate.js';
 
 /**
  * Context passed to each orchestrator-side tool handler when dispatching
@@ -76,7 +77,18 @@ export interface OrchestratorToolRegistry {
 }
 
 export interface ToolRegistryDelegate {
-  getTool(name: string, agentId?: string): { handler: (input: unknown, ctx: import('@stablehand/sandbox-daemon').ToolContext) => Promise<string> } | undefined;
+  getTool(name: string, agentId?: string): {
+    handler: (input: unknown, ctx: import('@stablehand/sandbox-daemon').ToolContext) => Promise<string>;
+    requiresApproval?: boolean;
+  } | undefined;
+}
+
+export interface DefaultOrchestratorToolRegistryOptions {
+  /**
+   * Wraps provider tools that declare `requiresApproval` (ctx-9gy9). Without
+   * it, a gated provider tool refuses to run rather than running unasked.
+   */
+  approvalGate?: ToolApprovalGate;
 }
 
 export type ToolContextFactory = (ctx: ToolHandlerContext) => import('@stablehand/sandbox-daemon').ToolContext;
@@ -220,10 +232,21 @@ export class DefaultOrchestratorToolRegistry implements OrchestratorToolRegistry
   private handlers = new Map<string, OrchestratorToolHandler>();
   private delegate?: ToolRegistryDelegate;
   private makeToolContext?: ToolContextFactory;
+  private approvalGate?: ToolApprovalGate;
 
-  constructor(delegate?: ToolRegistryDelegate, makeToolContext?: ToolContextFactory) {
+  constructor(
+    delegate?: ToolRegistryDelegate,
+    makeToolContext?: ToolContextFactory,
+    options: DefaultOrchestratorToolRegistryOptions = {},
+  ) {
     this.delegate = delegate;
     this.makeToolContext = makeToolContext;
+    this.approvalGate = options.approvalGate;
+  }
+
+  /** Install the approval gate after construction (the CLI builds the registry first). */
+  setApprovalGate(gate: ToolApprovalGate): void {
+    this.approvalGate = gate;
   }
 
   get(toolName: string, agentId?: string): OrchestratorToolHandler | undefined {
@@ -234,7 +257,16 @@ export class DefaultOrchestratorToolRegistry implements OrchestratorToolRegistry
       const tool = this.delegate.getTool(toolName, agentId);
       if (tool) {
         const ctxFactory = this.makeToolContext;
-        return async (args, ctx) => tool.handler(args, ctxFactory(ctx));
+        const run: OrchestratorToolHandler = async (args, ctx) => tool.handler(args, ctxFactory(ctx));
+        if (!tool.requiresApproval) {
+          return run;
+        }
+        if (this.approvalGate) {
+          return this.approvalGate(toolName, run);
+        }
+        return async () => JSON.stringify({
+          error: `${toolName} needs a person to approve each call, and approvals are not available here. The call was not made.`,
+        });
       }
     }
 

@@ -1538,6 +1538,70 @@ describe('createGrpcRoutes', () => {
     expect(foreign.error).toMatch(/Unknown orchestrator tool/);
   });
 
+  it('refuses a provider tool that requires approval when no approval gate is installed', async () => {
+    const { DefaultToolRegistry } = await import('../../../tool/registry.js');
+    const { z } = await import('zod');
+    const handler = vi.fn(async () => 'sent');
+    const defRegistry = new DefaultToolRegistry();
+    defRegistry.addProvider({
+      name: 'http-agent-07',
+      async listTools() {
+        return [{
+          name: 'send-post',
+          description: 'Send a post',
+          input: z.object({}),
+          location: 'orchestrator' as const,
+          requiresApproval: true,
+          handler,
+        }];
+      },
+    });
+    await defRegistry.refresh();
+    const grpcRegistry = new DefaultOrchestratorToolRegistry(defRegistry, (ctx) => ({
+      agentId: ctx.agentId,
+      conversationId: ctx.conversationId ?? '',
+      workspaceDir: '/workspace',
+    }));
+
+    const run = grpcRegistry.get('send-post', 'agent-07');
+    expect(run).toBeDefined();
+    const result = await run!({}, { turnId: 't', agentId: 'agent-07', requestId: 'r' });
+    expect(JSON.parse(result).error).toMatch(/needs a person to approve/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('routes a provider tool that requires approval through the installed gate', async () => {
+    const { DefaultToolRegistry } = await import('../../../tool/registry.js');
+    const { z } = await import('zod');
+    const handler = vi.fn(async () => 'sent');
+    const defRegistry = new DefaultToolRegistry();
+    defRegistry.addProvider({
+      name: 'http-agent-08',
+      async listTools() {
+        return [{
+          name: 'send-post',
+          description: 'Send a post',
+          input: z.object({}),
+          location: 'orchestrator' as const,
+          requiresApproval: true,
+          handler,
+        }];
+      },
+    });
+    await defRegistry.refresh();
+    const gate = vi.fn((_name: string, inner: OrchestratorToolHandler): OrchestratorToolHandler =>
+      async (args, ctx) => `gated:${await inner(args, ctx)}`);
+    const grpcRegistry = new DefaultOrchestratorToolRegistry(
+      defRegistry,
+      (ctx) => ({ agentId: ctx.agentId, conversationId: '', workspaceDir: '/workspace' }),
+      { approvalGate: gate },
+    );
+
+    const result = await grpcRegistry.get('send-post', 'agent-08')!({}, { turnId: 't', agentId: 'agent-08', requestId: 'r' });
+    expect(result).toBe('gated:sent');
+    expect(gate).toHaveBeenCalledWith('send-post', expect.any(Function));
+  });
+
   it('requestTool resolves duplicate HTTP tool names using the requesting agentId', async () => {
     const { DefaultToolRegistry } = await import('../../../tool/registry.js');
     const { z } = await import('zod');

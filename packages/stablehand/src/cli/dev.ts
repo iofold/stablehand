@@ -14,7 +14,13 @@ import type { AgentDefinition } from '@stablehand/sandbox-daemon';
 import type { ToolDefinition } from '@stablehand/sandbox-daemon';
 
 import { ensureAgentWorkspace, seedAgentWorkspace } from '../workspace/ensure.js';
-import { DefaultOrchestratorToolRegistry, registerDefaultToolHandlers } from '../orchestrator/grpc/orchestrator-service.js';
+import {
+  DefaultOrchestratorToolRegistry,
+  registerDefaultToolHandlers,
+  type OrchestratorToolHandler,
+  type ToolHandlerContext,
+} from '../orchestrator/grpc/orchestrator-service.js';
+import { createToolApprovalGate } from '../orchestrator/tool-approval-gate.js';
 import { startRuntimeApi } from './runtime-startup.js';
 
 function agentInputToDefinition(
@@ -178,85 +184,33 @@ export async function startDev() {
 
   console.log(`  \x1b[32m✓\x1b[0m Registered ${agentDefs.length} agent(s), ${toolDefs.length} tool(s)`);
 
+  const makeToolContext = (ctx: ToolHandlerContext) => ({
+    agentId: ctx.agentId,
+    conversationId: ctx.conversationId ?? '',
+    turnId: ctx.turnId,
+    ...(ctx.sandboxSessionId ? { sandboxSessionId: ctx.sandboxSessionId } : {}),
+    requestId: ctx.requestId,
+    workspaceDir: '/workspace',
+    eventBus: container.eventBus,
+  });
+  // One approval gate for every orchestrator-side tool that declares
+  // requiresApproval: project-local tools here, provider tools (HTTP, MCP)
+  // through the registry delegate (ctx-9gy9).
+  const approvalGate = createToolApprovalGate({
+    interruptManager: container.interruptManager,
+    eventBus: container.eventBus,
+  });
   const toolRegistry = new DefaultOrchestratorToolRegistry(
     container.toolRegistry,
-    (ctx) => ({
-      agentId: ctx.agentId,
-      conversationId: ctx.conversationId ?? '',
-      turnId: ctx.turnId,
-      requestId: ctx.requestId,
-      workspaceDir: '/workspace',
-      eventBus: container.eventBus,
-    }),
+    makeToolContext,
+    { approvalGate },
   );
   if (container.eventBus) {
     registerDefaultToolHandlers(toolRegistry, container.eventBus);
   }
   for (const tool of toolDefs) {
-    toolRegistry.set(tool.name, async (args, ctx) => {
-      if (tool.requiresApproval && container.interruptManager && container.sseManager) {
-        if (
-          !ctx.sandboxSessionId
-          || !ctx.deliveryFence
-          || !ctx.activeGeneration
-        ) {
-          throw new Error(
-            'Sandbox callback delivery authority is required for approval persistence',
-          );
-        }
-        const callbackAuthority = {
-          turnId: ctx.turnId,
-          sandboxSessionId: ctx.sandboxSessionId,
-          agentId: ctx.agentId,
-          expectedDeliveryFence: ctx.deliveryFence,
-          expectedActiveGeneration: ctx.activeGeneration,
-        };
-
-        if (container.eventBus) {
-          const didEmit = await container.eventBus.emitAsync(
-            'tool_call.started',
-            {
-              turnId: ctx.turnId,
-              agentId: ctx.agentId,
-              conversationId: ctx.conversationId ?? '',
-              toolCallId: ctx.requestId,
-              toolName: tool.name,
-              args: args as Record<string, unknown>,
-              requiresApproval: true,
-              timestamp: Date.now(),
-            },
-            {
-              deliveryFence: ctx.deliveryFence,
-              sandboxSessionId: ctx.sandboxSessionId,
-              activeGeneration: ctx.activeGeneration,
-            },
-          );
-          if (!didEmit) {
-            throw new Error(
-              'Sandbox callback delivery ownership changed before approval event persistence',
-            );
-          }
-        }
-
-        const resolution = await container.interruptManager.waitForApproval(
-          ctx.turnId,
-          ctx.agentId,
-          ctx.requestId,
-          tool.name,
-          args as Record<string, unknown>,
-          undefined,
-          ctx.sandboxSessionId,
-          ctx.conversationId,
-          callbackAuthority,
-        );
-
-        if (resolution.action !== 'approve') {
-          return JSON.stringify({ error: `Tool call rejected: ${resolution.data ?? resolution.action}` });
-        }
-      }
-
-      return tool.handler(args, {} as Parameters<typeof tool.handler>[1]);
-    });
+    const run: OrchestratorToolHandler = async (args, ctx) => tool.handler(args, makeToolContext(ctx));
+    toolRegistry.set(tool.name, tool.requiresApproval ? approvalGate(tool.name, run) : run);
   }
 
   const server: FastifyInstance = await createServer({

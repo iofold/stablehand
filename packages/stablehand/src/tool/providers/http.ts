@@ -31,6 +31,8 @@ export interface HttpEndpointConfig {
   authentication?: HttpAuthConfig;
   /** Mark this tool as programmatic (default: false). */
   programmatic?: boolean;
+  /** Pause each call for a person's approval before the request is sent. */
+  requiresApproval?: boolean;
 }
 
 const DEFAULT_TIMEOUT = 30_000;
@@ -104,6 +106,9 @@ function assertValidEndpointConfig(ep: HttpEndpointConfig, index: number): void 
   }
   if (ep.programmatic !== undefined && typeof ep.programmatic !== 'boolean') {
     throw new Error(`HTTPToolProvider: ${where} "programmatic" must be boolean when set`);
+  }
+  if (ep.requiresApproval !== undefined && typeof ep.requiresApproval !== 'boolean') {
+    throw new Error(`HTTPToolProvider: ${where} "requiresApproval" must be boolean when set`);
   }
 }
 
@@ -241,6 +246,7 @@ export class HTTPToolProvider implements ToolProvider {
         // Internal ToolDefinition keeps `timeout` (registry-internal, not the public API field).
         timeout: ep.timeoutMs ?? DEFAULT_TIMEOUT,
         programmatic: ep.programmatic ?? false,
+        ...(ep.requiresApproval ? { requiresApproval: true } : {}),
         handler: async (
           input: unknown,
           ctx: ToolContext,

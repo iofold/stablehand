@@ -141,6 +141,8 @@ export const HttpToolDefinitionSchema = z.strictObject({
     allowEnvFallback: z.boolean().optional(),
   }).optional(),
   programmatic: z.boolean().optional(),
+  /** Pause each call on an approval card before the request is sent (ctx-9gy9). */
+  requiresApproval: z.boolean().optional(),
 });
 
 export const AgentCreateInputSchema = z.strictObject({

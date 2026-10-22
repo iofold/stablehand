@@ -369,6 +369,7 @@ export function protoToToolDefs(
       description: t.description,
       input: zodSchema,
       programmatic: t.programmatic,
+      ...(t.requiresApproval ? { requiresApproval: true } : {}),
       handler,
     };
   });

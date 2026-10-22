@@ -783,6 +783,21 @@ describe('protoToToolDefs', () => {
     }).success).toBe(false);
   });
 
+  it('carries requires_approval from the wire onto the tool definition (ctx-9gy9)', () => {
+    const [gated, plain] = protoToToolDefs([
+      create(ToolMetadataSchema, {
+        name: 'schedule_post',
+        description: 'Schedule a post',
+        inputSchemaJson: JSON.stringify({ type: 'object', properties: {} }),
+        location: ToolLocation.SANDBOX,
+        requiresApproval: true,
+      }),
+      makeProtoToolMetadata('read-notes', 'Read notes', { type: 'object', properties: {} }),
+    ]);
+    expect(gated.requiresApproval).toBe(true);
+    expect(plain.requiresApproval).toBeUndefined();
+  });
+
   it('fails fast for disconnected orchestrator tools and direct sandbox handlers', async () => {
     const sandboxDefinitions = protoToToolDefs([
       makeProtoToolMetadata(

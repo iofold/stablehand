@@ -247,6 +247,10 @@ message ToolMetadata {
   string input_schema_json = 3;
   ToolLocation location = 4;
   bool programmatic = 5;
+  // The orchestrator pauses each call for a person's approval before running
+  // it. Enforcement is orchestrator-side for orchestrator-location tools; the
+  // flag travels so the sandbox knows the call may wait (ctx-9gy9).
+  bool requires_approval = 6;
 }
 
 enum ToolLocation {

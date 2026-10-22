@@ -615,6 +615,7 @@ export async function createContainer(
         inputSchemaJson,
         location: LOCATION_TO_PROTO[resolveToolLocation(tool)],
         programmatic: tool.programmatic ?? false,
+        requiresApproval: tool.requiresApproval ?? false,
       };
     });
   };

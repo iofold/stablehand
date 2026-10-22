@@ -19,9 +19,11 @@ import {
   createOrchestratorServiceImpl,
   DefaultOrchestratorToolRegistry,
   registerDefaultToolHandlers,
+  type OrchestratorToolHandler,
   type OrchestratorToolRegistry,
   type ToolHandlerContext,
 } from './orchestrator-service.js';
+import { createToolApprovalGate } from '../tool-approval-gate.js';
 
 export interface GrpcRouterOptions {
   eventBus: TypedEventBus;
@@ -49,16 +51,28 @@ export function createGrpcRoutes(opts: GrpcRouterOptions): (router: ConnectRoute
     eventBus,
   });
 
+  const approvalGate = interruptManager
+    ? createToolApprovalGate({ interruptManager, eventBus })
+    : undefined;
   const toolRegistry = opts.toolRegistry
-    ?? new DefaultOrchestratorToolRegistry(opts.toolDefinitionRegistry, makeToolContext);
+    ?? new DefaultOrchestratorToolRegistry(
+      opts.toolDefinitionRegistry,
+      makeToolContext,
+      approvalGate ? { approvalGate } : {},
+    );
+  if (approvalGate && toolRegistry instanceof DefaultOrchestratorToolRegistry) {
+    toolRegistry.setApprovalGate(approvalGate);
+  }
   registerDefaultToolHandlers(toolRegistry, { eventBus, interruptManager, repository: opts.repository });
 
   if (opts.toolExecutor) {
     for (const tool of opts.toolExecutor.list()) {
       if (!toolRegistry.has(tool.name)) {
-        toolRegistry.set(tool.name, async (args, ctx) => {
-          return tool.handler(args, makeToolContext(ctx));
-        });
+        const run: OrchestratorToolHandler = async (args, ctx) => tool.handler(args, makeToolContext(ctx));
+        toolRegistry.set(
+          tool.name,
+          tool.requiresApproval && approvalGate ? approvalGate(tool.name, run) : run,
+        );
       }
     }
   }

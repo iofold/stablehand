@@ -91,6 +91,9 @@ export function mapAgentHttpToolsToConfigs(agentDef: AgentDefinition): HttpEndpo
     if (tool.programmatic === true) {
       config.programmatic = true;
     }
+    if (tool.requiresApproval === true) {
+      config.requiresApproval = true;
+    }
 
     return [config];
   });
