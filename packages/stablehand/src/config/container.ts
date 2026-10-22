@@ -25,7 +25,12 @@ import { createTurnQueueAdmission } from '../orchestrator/turn-queue-admission.j
 import { TurnDispatcher } from '../orchestrator/turn-dispatcher.js';
 import { TurnSecretEnvelopeCodec } from '../orchestrator/turn-secret-envelope.js';
 import { TurnFinalizer } from '../orchestrator/turn-finalizer.js';
-import { reconcileStrandedTurnsOnStartup } from '../orchestrator/turn-reconciler.js';
+import {
+  reconcileStrandedTurnsOnStartup,
+  type TurnAdoptionSummary,
+} from '../orchestrator/turn-reconciler.js';
+import { TurnTakeoverService } from '../orchestrator/turn-takeover.js';
+import { previousBootTakeover } from '../orchestrator/instance-identity.js';
 import { reconcilePendingMessagePublishesOnStartup } from '../orchestrator/message-publisher.js';
 import { reconcilePendingTerminalPublishesOnStartup } from '../orchestrator/turn-terminal-publisher.js';
 import { CanonicalLog } from '../orchestrator/canonical/canonical-log.js';
@@ -110,12 +115,18 @@ export interface AppContainer {
   modelGatewayReconciler?: ModelGatewayReconciler;
   /** Durable canonical event spine (ADR-015); serves replay when STABLEHAND_CANONICAL_EVENTS=1. */
   canonicalLog: CanonicalLog;
-  /** Startup turn reconciliation (ADR-014/ctx-7e3x): fail stranded turns and replay durable queued turns. */
+  /**
+   * Startup turn reconciliation (ADR-014/ctx-7e3x/ADR 024): take over running
+   * turns whose sandboxes are still executing them, fail the rest, and replay
+   * durable queued turns. Takeovers finish in the background.
+   */
   reconcileStrandedTurns: (bootTimeMs: number) => Promise<{
     failed: number;
     skippedHitlParked: number;
     redispatched: number;
     redispatchComplete: Promise<void>;
+    adopting: number;
+    adoptionComplete: Promise<TurnAdoptionSummary>;
   }>;
   artifactStore?: ArtifactStore;
   /** Sandbox session manager (typed as implementation for reconciliation). */
@@ -664,6 +675,14 @@ export async function createContainer(
     eventBus,
     sessionTurnService,
     ...(sessionGatewayKeys ? { turnSpendCaps: sessionGatewayKeys } : {}),
+    turnProjection: canonicalLog,
+  });
+  // ADR 024: re-adopt turns that were running when the previous process died.
+  const turnTakeoverService = new TurnTakeoverService({
+    db,
+    sessionManager: realSessionManager,
+    executeTurn: (params) => agentTurnService.executeTurn(params),
+    logger: console,
   });
   agentTurnServiceHolder.current = agentTurnService;
   eventBus.on('turn.completed', (payload) => {
@@ -781,8 +800,10 @@ export async function createContainer(
         logger: console,
         resetStrandedSession: (sessionId, lifecycleOperation) =>
           realSessionManager.killSession(sessionId, { lifecycleOperation }),
+        adoptRunningTurn: (turn, lease) => turnTakeoverService.adopt(turn, lease),
       },
       bootTimeMs,
+      { previousBootTakeover: previousBootTakeover() },
     ),
     artifactStore,
     sessionManager: realSessionManager,

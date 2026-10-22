@@ -119,6 +119,23 @@ export class CanonicalLog {
     return persisted;
   }
 
+  /**
+   * Restore the projector's per-turn state from durable frames before a
+   * successor process continues a turn it took over (ADR 024). Runs on the
+   * ingest lane so it cannot interleave with a concurrent ingest.
+   */
+  rehydrateTurnProjection(turnId: string): Promise<void> {
+    const run = this.ingestTail.then(async () => {
+      const rows = await this.deps.db.getTurnFrames(turnId);
+      this.projector.restoreTurnTextState(
+        turnId,
+        rows.map((row) => this.rowToFrame(row)),
+      );
+    });
+    this.ingestTail = run.catch(() => undefined);
+    return run;
+  }
+
   subscribe(subscriber: FrameSubscriber): () => void {
     this.subscribers.add(subscriber);
     return () => this.subscribers.delete(subscriber);

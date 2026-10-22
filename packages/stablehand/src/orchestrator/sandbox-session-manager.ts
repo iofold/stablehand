@@ -32,6 +32,7 @@ import type {
   TurnDeliveryOptions,
 } from './session-manager/types.js';
 import type { TurnDeliveryFence } from './turn-delivery-fence.js';
+import type { SandboxSessionRow } from '../database/repository.js';
 import { resolveGrpcCallbackAuthConfig } from './grpc/callback-auth.js';
 import { mintTurnDeliveryCapability } from './grpc/turn-delivery-capability.js';
 
@@ -231,6 +232,24 @@ export class SandboxSessionManager {
       conversationId,
       record,
     );
+  }
+  /**
+   * Reconnect to a still-running ACTIVE sandbox whose startup adoption was
+   * deferred because a dead owner's turn lease was live (ADR 024 takeover).
+   * The caller holds the turn's delivery lease, which keeps lifecycle work
+   * (suspend, reset, idle reclaim) away from the session meanwhile.
+   */
+  async reconnectActiveSession(
+    session: SandboxSessionRow,
+    agentDef: AgentDefinition,
+  ): Promise<SessionRecord> {
+    const existing = this.findSessionById(session.id);
+    if (existing?.grpcClient) {
+      return existing;
+    }
+    const record = await this.recoveryCoordinator.reconnectToContainer(session, agentDef);
+    this.lifecycleService.onSessionReconnected(session.conversationId, record);
+    return record;
   }
   async onSessionEvicted(sessionId: string, conversationId: string): Promise<void> { await this.lifecycleService.onSessionEvicted(sessionId, conversationId); }
   startTurn(sessionId: string, turnId: string, agentId: string, conversationId: string, mode: 'interactive' | 'background', taskDescription?: string, options?: SessionTurnStartOptions): AbortSignal { return this.turnOrchestrator.startTurn(sessionId, turnId, agentId, conversationId, mode, taskDescription, options); }

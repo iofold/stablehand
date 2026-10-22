@@ -18,6 +18,15 @@ export type TurnFinalStatus = 'completed' | 'error' | 'cancelled';
 export const TURN_ERROR_ORCHESTRATOR_RESTART =
   'Orchestrator restarted while this turn was in flight; the turn was closed by startup reconciliation. Retry the request.';
 
+/**
+ * ADR 024: the orchestrator restarted mid-turn and could not re-attach to the
+ * turn's sandbox (stopped, unreachable, or past its reconnect window).
+ */
+export function turnErrorTakeoverUnavailable(reason: string): string {
+  return 'The orchestrator restarted while this turn was running and could not reconnect to its sandbox '
+    + `(${reason}). Messages saved before the restart are kept; retry to continue from them.`;
+}
+
 /** The sandbox connection dropped mid-turn (container stopped/removed OR idle timeout — cause not observable here). */
 export function turnErrorSandboxConnectionLost(eventCount: number): string {
   return `Connection to sandbox lost during tool execution (${eventCount} events received before drop). `

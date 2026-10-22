@@ -42,6 +42,13 @@ function agentInputToDefinition(
 export async function startDev() {
   const cwd = process.cwd();
 
+  // ctx-tl9r: install the process-level safety net before any runtime work.
+  // Startup reconciliation and crash takeover (ADR 024) talk to Docker while
+  // containers may be disappearing; a stray docker-modem rejection during
+  // boot must be logged, not take the control plane down.
+  process.on('unhandledRejection', (err) => console.error('[UNHANDLED REJECTION]', err));
+  process.on('uncaughtException', (err) => console.error('[UNCAUGHT EXCEPTION]', err));
+
   // Load optional project config. Runtime services only require DATABASE_URL.
   let config: StablehandConfig = {};
   const configPath = join(cwd, 'stablehand.config.ts');
@@ -358,8 +365,6 @@ export async function startDev() {
 
   process.on('SIGINT', () => void shutdown());
   process.on('SIGTERM', () => void shutdown());
-  process.on('unhandledRejection', (err) => console.error('[UNHANDLED REJECTION]', err));
-  process.on('uncaughtException', (err) => console.error('[UNCAUGHT EXCEPTION]', err));
 
   // Keep the process alive
   await new Promise(() => {});

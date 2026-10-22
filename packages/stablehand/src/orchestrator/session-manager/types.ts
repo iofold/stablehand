@@ -83,6 +83,7 @@ export interface TurnQueueEntry {
   messages: Message[];
   turnId: string;
   turnSecrets?: TurnSecrets;
+  attach?: { afterDeliverySeq: number };
   channel: AsyncChannel<SessionEvent>;
   signal?: AbortSignal;
 }
@@ -90,6 +91,8 @@ export interface TurnQueueEntry {
 export interface TurnDeliveryOptions {
   signal?: AbortSignal;
   turnSecrets?: TurnSecrets;
+  /** Re-attach to a running sandbox delivery instead of delivering (ADR 024). */
+  attach?: { afterDeliverySeq: number };
 }
 
 export class AsyncChannel<T> {

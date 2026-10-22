@@ -1,8 +1,7 @@
-import { randomUUID } from 'node:crypto';
-
 import type { DatabaseRepository } from '../database/repository.js';
 import { unrefTimer } from '../util/timing.js';
 import type { TurnDeliveryFence } from './turn-delivery-fence.js';
+import { newDeliveryOwnerId } from './instance-identity.js';
 
 const DEFAULT_LEASE_MS = 60_000;
 const DEFAULT_HEARTBEAT_MS = 20_000;
@@ -41,6 +40,8 @@ export interface TurnDeliveryLeaseOptions {
   leaseMs?: number;
   heartbeatMs?: number;
   now?: () => number;
+  /** ADR 024: also take over a dead earlier boot's unexpired lease. */
+  previousBootTakeover?: { instancePrefix: string; ownBootPrefix: string };
 }
 
 export interface ClaimedTurnDeliveryLeaseOptions {
@@ -60,7 +61,7 @@ export async function acquireTurnDeliveryLease(
   turnId: string,
   options: TurnDeliveryLeaseOptions = {},
 ): Promise<TurnDeliveryLeaseGuard | undefined> {
-  const ownerId = options.ownerId ?? randomUUID();
+  const ownerId = options.ownerId ?? newDeliveryOwnerId();
   const leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
   const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   const now = options.now ?? Date.now;
@@ -72,6 +73,9 @@ export async function acquireTurnDeliveryLease(
     turnId,
     ownerId,
     leaseDurationMs: leaseMs,
+    ...(options.previousBootTakeover
+      ? { previousBootTakeover: options.previousBootTakeover }
+      : {}),
   });
   if (!claimed) {
     return undefined;

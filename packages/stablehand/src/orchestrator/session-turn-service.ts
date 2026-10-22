@@ -16,6 +16,7 @@ import type { SessionEvent } from '@stablehand/sandbox-daemon';
 import type { AgentDefinition, Message } from '@stablehand/sandbox-daemon';
 import type { SandboxSessionManager } from './sandbox-session-manager.js';
 import type { TurnSecrets } from './session-manager/turn-secrets.js';
+import { stampDelivery } from './delivery-stamp.js';
 
 export type { AGUISessionEvent, MessageCommittedSessionEvent, TurnFailedSessionEvent, SessionEvent } from '@stablehand/sandbox-daemon';
 
@@ -54,6 +55,11 @@ export interface SessionTurnExecutionOptions {
   agentId?: string;
   existingSessionId?: string;
   turnSecrets?: TurnSecrets;
+  /**
+   * Re-attach to a delivery that is already running in the sandbox instead
+   * of delivering the turn (crash takeover, ADR 024).
+   */
+  attach?: { afterDeliverySeq: number };
 }
 
 export interface SessionTurnExecutor {
@@ -104,6 +110,7 @@ async function* executeSessionTurn(
     agentId,
     existingSessionId,
     turnSecrets,
+    attach,
   } = options ?? {};
 
   const sessionId = existingSessionId
@@ -119,6 +126,7 @@ async function* executeSessionTurn(
     const deliveryOptions = {
       ...(signal ? { signal } : {}),
       ...(turnSecrets ? { turnSecrets: { ...turnSecrets } } : {}),
+      ...(attach ? { attach } : {}),
     };
     const stream = sessionManager.deliverTurn(
       sessionId,
@@ -135,7 +143,7 @@ async function* executeSessionTurn(
 
       const aguiEvent = convertSessionEvent(sessionEvent, turnId);
       if (aguiEvent !== null) {
-        yield aguiEvent;
+        yield stampDelivery(aguiEvent, sessionEvent.delivery);
       }
     }
   } finally {

@@ -366,6 +366,10 @@ function sandboxEnv(
     'SANDBOX_PORT=50051',
     `STABLEHAND_HARNESS=${options.harnessName}`,
     `ORCHESTRATOR_URL=${orchestratorUrl}`,
+    // ADR 024: how long a turn outlives an unreachable orchestrator.
+    ...(process.env.STABLEHAND_TURN_ORPHAN_GRACE_MS
+      ? [`STABLEHAND_TURN_ORPHAN_GRACE_MS=${process.env.STABLEHAND_TURN_ORPHAN_GRACE_MS}`]
+      : []),
     ...buildSandboxEgressEnv(),
     ...(includeSecrets
       ? Object.entries(options.secrets ?? {}).map(([key, value]) => `${key}=${value}`)

@@ -1,6 +1,16 @@
 import { EventEmitter } from 'node:events';
 import type { TurnSpendCapSource, TurnStopReason, TurnUsage } from '@stablehand/contracts';
 
+/**
+ * Sandbox journal position of the event that produced a bus event (ADR 024).
+ * Persisted in source payloads so a successor orchestrator can tell which
+ * journaled events already have durable effects.
+ */
+export interface EventDeliveryStamp {
+  id: string;
+  seq: number;
+}
+
 export type EventMap = {
   'turn.started': {
     turnId: string;
@@ -17,6 +27,7 @@ export type EventMap = {
     conversationId: string;
     messageId: string;
     delta: string;
+    delivery?: EventDeliveryStamp;
     timestamp: number;
   };
   'tool_call.started': {
@@ -34,6 +45,7 @@ export type EventMap = {
      */
     parentToolCallId?: string;
     agentName?: string;
+    delivery?: EventDeliveryStamp;
     timestamp: number;
   };
   'tool_call.completed': {
@@ -45,6 +57,7 @@ export type EventMap = {
     result: string;
     durationMs: number;
     error?: string;
+    delivery?: EventDeliveryStamp;
     timestamp: number;
   };
   'interrupt.requested': {
@@ -227,6 +240,7 @@ export type EventMap = {
     agentId: string;
     conversationId?: string;
     event: Record<string, unknown>;
+    delivery?: EventDeliveryStamp;
     timestamp: number;
   };
   'user.message': {

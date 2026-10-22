@@ -1,6 +1,14 @@
 import { eq, sql, gt, gte, lt, lte, and, or, desc, asc, inArray, isNotNull, isNull, ilike, type SQL } from 'drizzle-orm';
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+
+/** Bus events AgentTurnService tags with a daemon journal position (ADR 024). */
+export const DELIVERY_TAGGED_SOURCE_TYPES = [
+  'ag_ui.event',
+  'message.delta',
+  'tool_call.started',
+  'tool_call.completed',
+] as const;
 import type { DrizzleDb } from './connection.js';
 import * as pgSchema from './schema-pg.js';
 import { sanitizeDbJsonValue, sanitizeDbText, sanitizeDbValue } from '../util/sanitize.js';
@@ -1124,6 +1132,28 @@ export class DatabaseRepository {
         }
       } else if (expectedDeliveryFence) {
         return undefined;
+      }
+
+      // Re-staging an identical projection (crash-takeover replay, ADR 024)
+      // must not mint a new revision and a duplicate message.updated frame.
+      const [current] = await tx
+        .select()
+        .from(this.schema.messages)
+        .where(eq(this.schema.messages.id, id));
+      const nextToolCalls = toolCalls
+        ? sanitizeTypedDbValue(toolCalls, 'messages.toolCalls')
+        : undefined;
+      const nextParts = parts
+        ? sanitizeTypedDbValue(parts, 'messages.parts')
+        : undefined;
+      const sameJson = (stored: unknown, next: unknown): boolean =>
+        isDeepStrictEqual(stored, JSON.parse(JSON.stringify(next)) as unknown);
+      if (
+        current
+        && (nextToolCalls === undefined || sameJson(current.toolCalls, nextToolCalls))
+        && (nextParts === undefined || sameJson(current.parts, nextParts))
+      ) {
+        return current;
       }
 
       const [updated] = await tx.update(this.schema.messages)
@@ -2649,9 +2679,29 @@ export class DatabaseRepository {
     turnId: string;
     ownerId: string;
     leaseDurationMs: number;
+    /**
+     * ADR 024 fast takeover: also claim an unexpired lease held by a previous
+     * boot of this same orchestrator instance (owner ids start with
+     * `instancePrefix` but not `ownBootPrefix`). That process is dead: the
+     * instance id names a single-process slot such as a container hostname.
+     */
+    previousBootTakeover?: { instancePrefix: string; ownBootPrefix: string };
   }): Promise<TurnDeliveryLeaseRow | undefined> {
     const turnId = sanitizeDbText(input.turnId, 'turnDeliveryLeases.turnId');
     const ownerId = sanitizeDbText(input.ownerId, 'turnDeliveryLeases.ownerId');
+    const takeover = input.previousBootTakeover;
+    const instancePrefix = takeover
+      ? sanitizeDbText(takeover.instancePrefix, 'turnDeliveryLeases.instancePrefix')
+      : undefined;
+    const ownBootPrefix = takeover
+      ? sanitizeDbText(takeover.ownBootPrefix, 'turnDeliveryLeases.ownBootPrefix')
+      : undefined;
+    if (
+      instancePrefix !== undefined
+      && (instancePrefix.length === 0 || !ownBootPrefix?.startsWith(instancePrefix))
+    ) {
+      throw new Error('Previous-boot takeover requires a non-empty instance prefix of the boot prefix');
+    }
     const leaseDurationMs = validateLeaseDurationMs(
       input.leaseDurationMs,
       'turnDeliveryLeases.leaseDurationMs',
@@ -2728,6 +2778,12 @@ export class DatabaseRepository {
           setWhere: or(
             lte(this.schema.turnDeliveryLeases.leaseExpiresAt, nowMs),
             eq(this.schema.turnDeliveryLeases.ownerId, ownerId),
+            ...(instancePrefix !== undefined && ownBootPrefix !== undefined
+              ? [sql<boolean>`(
+                  left(${this.schema.turnDeliveryLeases.ownerId}, ${instancePrefix.length}) = ${instancePrefix}
+                  AND left(${this.schema.turnDeliveryLeases.ownerId}, ${ownBootPrefix.length}) <> ${ownBootPrefix}
+                )`]
+              : []),
           ),
         })
         .returning();
@@ -4111,6 +4167,47 @@ export class DatabaseRepository {
   }
 
   /** All frames of a turn in seq order — reconnect tail replay for in-flight turns. */
+  /**
+   * Newest daemon journal position whose effects are durable for a turn
+   * (ADR 024). Each journaled event's last effect is one emit tagged with
+   * `delivery: { id, seq }` in its source payload, and canonical frames
+   * persist in emission order, so the newest tagged frame is the replay
+   * watermark: events at or before it are rebuilt, later ones re-applied.
+   */
+  async getTurnDeliveryWatermark(
+    turnId: string,
+  ): Promise<{ deliveryId: string; deliverySeq: number } | undefined> {
+    const [row] = await this.db
+      .select({ sourcePayload: this.schema.eventStore.sourcePayload })
+      .from(this.schema.eventStore)
+      .where(and(
+        eq(this.schema.eventStore.turnId, sanitizeDbText(turnId, 'eventStore.watermark.turnId')),
+        inArray(this.schema.eventStore.sourceType, [...DELIVERY_TAGGED_SOURCE_TYPES]),
+      ))
+      .orderBy(desc(this.schema.eventStore.seq))
+      .limit(1);
+    if (!row?.sourcePayload) {
+      return undefined;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.sourcePayload);
+    } catch (error) {
+      throw new Error(`Turn ${turnId} has an unreadable delivery watermark frame`, { cause: error });
+    }
+    const delivery = typeof parsed === 'object' && parsed !== null
+      ? (parsed as { delivery?: unknown }).delivery
+      : undefined;
+    if (typeof delivery !== 'object' || delivery === null) {
+      return undefined;
+    }
+    const { id, seq } = delivery as { id?: unknown; seq?: unknown };
+    if (typeof id !== 'string' || typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 1) {
+      return undefined;
+    }
+    return { deliveryId: id, deliverySeq: seq };
+  }
+
   async getTurnFrames(turnId: string, afterSeq = 0): Promise<EventFrameRow[]> {
     return this.db.query.eventStore.findMany({
       where: and(
@@ -8096,10 +8193,14 @@ export class DatabaseRepository {
       requestId: string;
       toolName: string;
     },
-  ): Promise<'inserted' | 'duplicate' | 'stale'> {
+  ): Promise<'inserted' | 'reclaimed' | 'duplicate' | 'stale'> {
     const requestId = sanitizeDbText(
       input.requestId,
       'toolRequestDedup.admit.requestId',
+    );
+    const fenceToken = validateTurnDeliveryFenceToken(
+      input.expectedDeliveryFence.fenceToken,
+      'toolRequestDedup.admit.fenceToken',
     );
     const turnId = sanitizeDbText(
       input.turnId,
@@ -8126,12 +8227,34 @@ export class DatabaseRepository {
           turnId,
           toolName,
           status: 'in_progress',
+          deliveryFenceToken: fenceToken,
         })
         .onConflictDoNothing({
           target: this.schema.toolRequestDedup.requestId,
         })
         .returning({ requestId: this.schema.toolRequestDedup.requestId });
-      return inserted.length > 0 ? 'inserted' : 'duplicate';
+      if (inserted.length > 0) {
+        return 'inserted';
+      }
+      // ADR 024: an in-progress row admitted under an older fence belongs to
+      // an executor that died with its orchestrator. The live fence (locked
+      // above) re-runs it; the old executor can no longer complete the row
+      // because completion re-checks the exact delivery fence.
+      const reclaimed = await tx
+        .update(this.schema.toolRequestDedup)
+        .set({ deliveryFenceToken: fenceToken })
+        .where(and(
+          eq(this.schema.toolRequestDedup.requestId, requestId),
+          eq(this.schema.toolRequestDedup.turnId, turnId),
+          eq(this.schema.toolRequestDedup.toolName, toolName),
+          eq(this.schema.toolRequestDedup.status, 'in_progress'),
+          or(
+            isNull(this.schema.toolRequestDedup.deliveryFenceToken),
+            lt(this.schema.toolRequestDedup.deliveryFenceToken, fenceToken),
+          ),
+        ))
+        .returning({ requestId: this.schema.toolRequestDedup.requestId });
+      return reclaimed.length > 0 ? 'reclaimed' : 'duplicate';
     });
   }
 
@@ -8187,6 +8310,16 @@ export class DatabaseRepository {
           eq(this.schema.toolRequestDedup.requestId, sanitizedRequestId),
           eq(this.schema.toolRequestDedup.turnId, turnId),
           eq(this.schema.toolRequestDedup.status, 'in_progress'),
+          or(
+            isNull(this.schema.toolRequestDedup.deliveryFenceToken),
+            eq(
+              this.schema.toolRequestDedup.deliveryFenceToken,
+              validateTurnDeliveryFenceToken(
+                input.expectedDeliveryFence.fenceToken,
+                'toolRequestDedup.complete.fenceToken',
+              ),
+            ),
+          ),
         ))
         .returning({ requestId: this.schema.toolRequestDedup.requestId });
       return completed !== undefined;

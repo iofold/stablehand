@@ -340,6 +340,41 @@ export class CanonicalProjector {
     this.textStates.delete(turnId);
   }
 
+  /**
+   * Rebuild a turn's synthesized text-message state from its durable frames
+   * (crash takeover, ADR 024). A successor process then continues an open
+   * `${turnId}-m${n}` message, or opens `m${n + 1}`, instead of reusing an id.
+   */
+  restoreTurnTextState(
+    turnId: string,
+    frames: ReadonlyArray<{ type: string; body: Record<string, unknown> }>,
+  ): void {
+    const prefix = `${turnId}-m`;
+    let counter = 0;
+    let openMessageId: string | null = null;
+    for (const frame of frames) {
+      const messageId = frame.body.messageId;
+      if (typeof messageId !== 'string' || !messageId.startsWith(prefix)) continue;
+      const ordinal = Number(messageId.slice(prefix.length));
+      if (!Number.isSafeInteger(ordinal) || ordinal < 1) continue;
+      if (frame.type === 'TEXT_MESSAGE_START' && frame.body.role === 'assistant') {
+        counter = Math.max(counter, ordinal);
+        openMessageId = messageId;
+      } else if (frame.type === 'TEXT_MESSAGE_END' && openMessageId === messageId) {
+        openMessageId = null;
+      }
+    }
+    if (counter === 0) {
+      this.textStates.delete(turnId);
+      return;
+    }
+    this.textStates.set(turnId, {
+      inProgress: openMessageId !== null,
+      messageId: openMessageId ?? '',
+      counter,
+    });
+  }
+
   private textState(turnId: string): TurnTextState {
     let state = this.textStates.get(turnId);
     if (!state) {

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { TurnSelect } from '../database/types.js';
 import type {
@@ -14,8 +13,11 @@ import type { RedispatchQueuedTurnParams } from './turn-startup-service.js';
 import {
   TOOL_CALL_INTERRUPTED_ERROR,
   TURN_ERROR_ORCHESTRATOR_RESTART,
+  turnErrorTakeoverUnavailable,
   type TurnFinalizer,
 } from './turn-finalizer.js';
+import { newDeliveryOwnerId } from './instance-identity.js';
+import type { TurnTakeoverResult } from './turn-takeover.js';
 import {
   acquireSandboxSessionLifecycleOperation,
   type SandboxSessionLifecycleOperationGuard,
@@ -33,6 +35,7 @@ interface TurnReconcilerDeps {
   db: Pick<
     DatabaseRepository,
     | 'getOpenTurnsStartedBefore'
+    | 'getTurn'
     | 'getPendingInterruptForTurn'
     | 'getMessages'
     | 'stageAssistantMessageUpdate'
@@ -58,6 +61,21 @@ interface TurnReconcilerDeps {
     sessionId: string,
     lifecycleOperation: SandboxSessionLifecycleOperationGuard,
   ) => Promise<void>;
+  /**
+   * Crash takeover (ADR 024): re-attach a running turn to the sandbox that is
+   * still executing it. Called with the turn's delivery lease held. Without
+   * it, running turns are closed with restart copy as before.
+   */
+  adoptRunningTurn?: (
+    turn: TurnSelect,
+    lease: { fence: TurnDeliveryFence; signal: AbortSignal },
+  ) => Promise<TurnTakeoverResult>;
+}
+
+export interface TurnAdoptionSummary {
+  adopted: number;
+  failed: number;
+  skipped: number;
 }
 
 interface TurnReconciliationResult {
@@ -65,6 +83,9 @@ interface TurnReconciliationResult {
   skippedHitlParked: number;
   redispatched: number;
   redispatchComplete: Promise<void>;
+  /** Running turns handed to crash takeover; they finish in the background. */
+  adopting: number;
+  adoptionComplete: Promise<TurnAdoptionSummary>;
 }
 
 interface TurnReconciliationOptions {
@@ -72,6 +93,11 @@ interface TurnReconciliationOptions {
   heartbeatMs?: number;
   ownerId?: string;
   now?: () => number;
+  /** Claim leases of a dead earlier boot of this instance without waiting. */
+  previousBootTakeover?: { instancePrefix: string; ownBootPrefix: string };
+  /** How long takeover keeps trying to claim a lease held elsewhere. */
+  adoptionClaimWaitMs?: number;
+  adoptionPollMs?: number;
 }
 
 interface TurnLeaseContext {
@@ -79,6 +105,7 @@ interface TurnLeaseContext {
   heartbeatMs: number;
   ownerId: string;
   now: () => number;
+  previousBootTakeover?: { instancePrefix: string; ownBootPrefix: string };
 }
 
 export interface ConversationToolCallRepairDeps {
@@ -96,6 +123,9 @@ interface ConversationToolCallRepairOptions {
 const TAG = '[TurnReconciler]';
 const DEFAULT_RECONCILIATION_LEASE_MS = 60_000;
 const DEFAULT_RECONCILIATION_HEARTBEAT_MS = 20_000;
+/** A dead owner's lease lapses within its 60 s lease; allow renewal jitter. */
+const DEFAULT_ADOPTION_CLAIM_WAIT_MS = 90_000;
+const DEFAULT_ADOPTION_POLL_MS = 2_000;
 
 type ToolCallish = { status?: unknown; error?: unknown; type?: unknown };
 
@@ -128,13 +158,18 @@ export function repairRunningEntries(entries: unknown[] | null | undefined, part
 }
 
 /**
- * Startup turn reconciliation (ADR-014, ctx-nm3o). Turn generators are
- * in-process, so any turn open at boot that started before boot is stranded
- * by construction — unless it is parked on a durable HITL interrupt
- * (pending/timed_out row), which the durable resume path (WS-B) owns.
- * Stranded turns are failed with restart error copy, and their persisted
- * messages are repaired so no terminal turn retains 'running' tool calls in
- * either the toolCalls or parts projection.
+ * Startup turn reconciliation (ADR-014, ctx-nm3o, ADR 024). Any turn open at
+ * boot that started before boot lost its in-process owner — unless it is
+ * parked on a durable HITL interrupt (pending/timed_out row), which the
+ * durable resume path (WS-B) owns.
+ *
+ * Running turns whose sandbox may still be executing them are handed to
+ * crash takeover (`adoptRunningTurn`): the successor claims the delivery
+ * lease with a higher fence, re-attaches to the sandbox's delivery journal,
+ * and finishes the turn in the background. Turns that cannot be re-attached,
+ * and every other stranded turn, are failed with cause-accurate copy, and
+ * their persisted messages are repaired so no terminal turn retains
+ * 'running' tool calls in either the toolCalls or parts projection.
  */
 export async function reconcileStrandedTurnsOnStartup(
   deps: TurnReconcilerDeps,
@@ -144,8 +179,11 @@ export async function reconcileStrandedTurnsOnStartup(
   const leaseContext: TurnLeaseContext = {
     leaseMs: options.leaseMs ?? DEFAULT_RECONCILIATION_LEASE_MS,
     heartbeatMs: options.heartbeatMs ?? DEFAULT_RECONCILIATION_HEARTBEAT_MS,
-    ownerId: options.ownerId ?? randomUUID(),
+    ownerId: options.ownerId ?? newDeliveryOwnerId(),
     now: options.now ?? Date.now,
+    ...(options.previousBootTakeover
+      ? { previousBootTakeover: options.previousBootTakeover }
+      : {}),
   };
   if (leaseContext.leaseMs <= 0 || leaseContext.heartbeatMs <= 0) {
     throw new Error('Turn delivery lease and heartbeat durations must be positive');
@@ -159,6 +197,7 @@ export async function reconcileStrandedTurnsOnStartup(
   let skippedHitlParked = 0;
   let redispatched = 0;
   const strandedTurns: TurnSelect[] = [];
+  const adoptionCandidates: TurnSelect[] = [];
   const queuedCandidates: QueuedRedispatchCandidate[] = [];
 
   for (const turn of openTurns) {
@@ -179,6 +218,16 @@ export async function reconcileStrandedTurnsOnStartup(
         continue;
       }
 
+      if (
+        deps.adoptRunningTurn
+        && turn.status === 'running'
+        && turn.sandboxSessionId
+        && turn.conversationId
+      ) {
+        adoptionCandidates.push(turn);
+        continue;
+      }
+
       strandedTurns.push(turn);
     } catch (err) {
       deps.logger.error(`${TAG} failed to reconcile stranded turn ${turn.id}:`, err);
@@ -191,88 +240,13 @@ export async function reconcileStrandedTurnsOnStartup(
         deps,
         turn.id,
         leaseContext,
-        async (signal, fence) => {
-          const shouldResetSession = Boolean(
-            deps.resetStrandedSession
-            && turn.status !== 'queued'
-            && turn.sandboxSessionId,
-          );
-          const observedSession = shouldResetSession
-            ? await deps.db.getSandboxSession(turn.sandboxSessionId!)
-            : undefined;
-          const lifecycleOperation =
-            shouldResetSession
-            && observedSession?.status === 'ACTIVE'
-              ? await acquireSandboxSessionLifecycleOperation(
-                  { db: deps.db, logger: deps.logger },
-                  observedSession.id,
-                  'reset',
-                  {
-                    expectedActiveGeneration: {
-                      restoreFenceToken: observedSession.restoreFenceToken,
-                      containerId: observedSession.containerId,
-                    },
-                    allowedTurnDelivery: {
-                      turnId: turn.id,
-                      fence,
-                    },
-                  },
-                )
-              : undefined;
-          if (
-            shouldResetSession
-            && !lifecycleOperation
-          ) {
-            deps.logger.info(
-              `${TAG} sandbox session ${turn.sandboxSessionId} is owned by ` +
-              'another lifecycle worker; leaving its stranded turn open',
-            );
-            return false;
-          }
-
-          try {
-            const finalized = await failStrandedTurn(
-              deps,
-              turn,
-              TURN_ERROR_ORCHESTRATOR_RESTART,
-              {
-                signal,
-                fence,
-                ...(lifecycleOperation && turn.sandboxSessionId
-                  ? {
-                      lifecycleReset: {
-                        sandboxSessionId: turn.sandboxSessionId,
-                        fence: lifecycleOperation.fence,
-                      },
-                    }
-                  : {}),
-              },
-            );
-            if (finalized && lifecycleOperation && turn.sandboxSessionId) {
-              if (!await lifecycleOperation.markExecuting()) {
-                throw new Error(
-                  `Sandbox lifecycle reset ${turn.sandboxSessionId} ` +
-                  'lost ownership after stranded turn finalization',
-                );
-              }
-              try {
-                await deps.resetStrandedSession!(
-                  turn.sandboxSessionId,
-                  lifecycleOperation,
-                );
-              } catch (err) {
-                deps.logger.error(
-                  `${TAG} failed to reset stranded session ` +
-                  `${turn.sandboxSessionId}:`,
-                  err,
-                );
-              }
-            }
-            return finalized;
-          } finally {
-            await lifecycleOperation?.stop();
-          }
-        },
+        (signal, fence) => failStrandedTurnWithReset(
+          deps,
+          turn,
+          signal,
+          fence,
+          TURN_ERROR_ORCHESTRATOR_RESTART,
+        ),
       );
       if (outcome.claimed && outcome.value) {
         failed++;
@@ -284,6 +258,11 @@ export async function reconcileStrandedTurnsOnStartup(
     }
   }
 
+  const adoptionComplete = adoptRunningTurns(deps, adoptionCandidates, leaseContext, {
+    claimWaitMs: options.adoptionClaimWaitMs ?? DEFAULT_ADOPTION_CLAIM_WAIT_MS,
+    pollMs: options.adoptionPollMs ?? DEFAULT_ADOPTION_POLL_MS,
+  });
+
   const redispatchComplete = processQueuedRedispatches(deps, queuedCandidates, leaseContext, {
     onRedispatched: () => {
       redispatched++;
@@ -294,13 +273,221 @@ export async function reconcileStrandedTurnsOnStartup(
   });
   await redispatchComplete;
 
-  if (failed > 0 || skippedHitlParked > 0 || redispatched > 0) {
+  if (failed > 0 || skippedHitlParked > 0 || redispatched > 0 || adoptionCandidates.length > 0) {
     deps.logger.info(
-      `${TAG} startup reconciliation closed ${failed} stranded turn(s), redispatched ${redispatched} queued turn(s), left ${skippedHitlParked} HITL-parked turn(s) open`,
+      `${TAG} startup reconciliation closed ${failed} stranded turn(s), redispatched ${redispatched} queued turn(s), `
+      + `left ${skippedHitlParked} HITL-parked turn(s) open, taking over ${adoptionCandidates.length} running turn(s)`,
     );
   }
 
-  return { failed, skippedHitlParked, redispatched, redispatchComplete };
+  return {
+    failed,
+    skippedHitlParked,
+    redispatched,
+    redispatchComplete,
+    adopting: adoptionCandidates.length,
+    adoptionComplete,
+  };
+}
+
+/**
+ * Close one stranded turn under its delivery lease: repair running tool
+ * calls, finalize with `error`, then reset its sandbox session so nothing
+ * keeps executing the abandoned turn. Returns true when this call finalized.
+ */
+async function failStrandedTurnWithReset(
+  deps: TurnReconcilerDeps,
+  turn: TurnSelect,
+  signal: AbortSignal,
+  fence: TurnDeliveryFence,
+  error: string,
+): Promise<boolean> {
+  const shouldResetSession = Boolean(
+    deps.resetStrandedSession
+    && turn.status !== 'queued'
+    && turn.sandboxSessionId,
+  );
+  const observedSession = shouldResetSession
+    ? await deps.db.getSandboxSession(turn.sandboxSessionId!)
+    : undefined;
+  const lifecycleOperation =
+    shouldResetSession
+    && observedSession?.status === 'ACTIVE'
+      ? await acquireSandboxSessionLifecycleOperation(
+          { db: deps.db, logger: deps.logger },
+          observedSession.id,
+          'reset',
+          {
+            expectedActiveGeneration: {
+              restoreFenceToken: observedSession.restoreFenceToken,
+              containerId: observedSession.containerId,
+            },
+            allowedTurnDelivery: {
+              turnId: turn.id,
+              fence,
+            },
+          },
+        )
+      : undefined;
+  if (
+    shouldResetSession
+    && !lifecycleOperation
+  ) {
+    deps.logger.info(
+      `${TAG} sandbox session ${turn.sandboxSessionId} is owned by ` +
+      'another lifecycle worker; leaving its stranded turn open',
+    );
+    return false;
+  }
+
+  try {
+    const finalized = await failStrandedTurn(
+      deps,
+      turn,
+      error,
+      {
+        signal,
+        fence,
+        ...(lifecycleOperation && turn.sandboxSessionId
+          ? {
+              lifecycleReset: {
+                sandboxSessionId: turn.sandboxSessionId,
+                fence: lifecycleOperation.fence,
+              },
+            }
+          : {}),
+      },
+    );
+    if (finalized && lifecycleOperation && turn.sandboxSessionId) {
+      if (!await lifecycleOperation.markExecuting()) {
+        throw new Error(
+          `Sandbox lifecycle reset ${turn.sandboxSessionId} ` +
+          'lost ownership after stranded turn finalization',
+        );
+      }
+      try {
+        await deps.resetStrandedSession!(
+          turn.sandboxSessionId,
+          lifecycleOperation,
+        );
+      } catch (err) {
+        deps.logger.error(
+          `${TAG} failed to reset stranded session ` +
+          `${turn.sandboxSessionId}:`,
+          err,
+        );
+      }
+    }
+    return finalized;
+  } finally {
+    await lifecycleOperation?.stop();
+  }
+}
+
+async function adoptRunningTurns(
+  deps: TurnReconcilerDeps,
+  candidates: TurnSelect[],
+  leaseContext: TurnLeaseContext,
+  timing: { claimWaitMs: number; pollMs: number },
+): Promise<TurnAdoptionSummary> {
+  const summary: TurnAdoptionSummary = { adopted: 0, failed: 0, skipped: 0 };
+  if (!deps.adoptRunningTurn || candidates.length === 0) {
+    return summary;
+  }
+  deps.logger.info(
+    `${TAG} taking over ${candidates.length} running turn(s) whose sandboxes may still be executing them`,
+  );
+  const outcomes = await Promise.all(candidates.map(async (turn) => {
+    try {
+      return await adoptRunningTurn(deps, turn, leaseContext, timing);
+    } catch (err) {
+      deps.logger.error(`${TAG} takeover of turn ${turn.id} failed:`, err);
+      return 'skipped' as const;
+    }
+  }));
+  for (const outcome of outcomes) {
+    summary[outcome] += 1;
+  }
+  deps.logger.info(
+    `${TAG} crash takeover finished: adopted=${summary.adopted}, failed=${summary.failed}, skipped=${summary.skipped}`,
+  );
+  return summary;
+}
+
+async function adoptRunningTurn(
+  deps: TurnReconcilerDeps,
+  turn: TurnSelect,
+  leaseContext: TurnLeaseContext,
+  timing: { claimWaitMs: number; pollMs: number },
+): Promise<keyof TurnAdoptionSummary> {
+  const deadline = leaseContext.now() + timing.claimWaitMs;
+  let waitingLogged = false;
+  while (true) {
+    try {
+      const outcome = await withTurnDeliveryLease(
+        deps,
+        turn.id,
+        leaseContext,
+        async (signal, fence): Promise<keyof TurnAdoptionSummary> => {
+          let reason: string;
+          try {
+            const result = await deps.adoptRunningTurn!(turn, { fence, signal });
+            if (result.outcome === 'adopted') {
+              return 'adopted';
+            }
+            reason = result.reason;
+          } catch (err) {
+            if (signal.aborted) {
+              deps.logger.warn(`${TAG} lost the lease while taking over turn ${turn.id}`);
+              return 'skipped';
+            }
+            deps.logger.error(`${TAG} takeover of turn ${turn.id} failed:`, err);
+            reason = err instanceof Error ? err.message : String(err);
+          }
+          deps.logger.warn(`${TAG} turn ${turn.id} cannot be re-attached (${reason}); closing it`);
+          const finalized = await failStrandedTurnWithReset(
+            deps,
+            turn,
+            signal,
+            fence,
+            turnErrorTakeoverUnavailable(reason),
+          );
+          return finalized ? 'failed' : 'skipped';
+        },
+      );
+      if (outcome.claimed) {
+        return outcome.value;
+      }
+    } catch (err) {
+      deps.logger.error(`${TAG} takeover of turn ${turn.id} failed:`, err);
+      return 'skipped';
+    }
+
+    const current = await deps.db.getTurn(turn.id);
+    if (!current || current.completedAt != null || current.status !== 'running') {
+      return 'skipped';
+    }
+    if (leaseContext.now() >= deadline) {
+      deps.logger.info(
+        `${TAG} turn ${turn.id} is still owned elsewhere after ${timing.claimWaitMs}ms; leaving it to its owner`,
+      );
+      return 'skipped';
+    }
+    if (!waitingLogged) {
+      waitingLogged = true;
+      deps.logger.info(
+        `${TAG} turn ${turn.id} is leased by another orchestrator; waiting for the lease to lapse before taking over`,
+      );
+    }
+    await delay(timing.pollMs);
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
 }
 
 export async function repairConversationRunningToolCalls(
@@ -510,6 +697,9 @@ async function withTurnDeliveryLease<T>(
       leaseMs: context.leaseMs,
       heartbeatMs: context.heartbeatMs,
       now: context.now,
+      ...(context.previousBootTakeover
+        ? { previousBootTakeover: context.previousBootTakeover }
+        : {}),
     },
   );
   if (!lease) {

@@ -381,6 +381,15 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
               Code.Unavailable,
             );
           } else {
+            if (admission === 'reclaimed') {
+              // ADR 024 side-effect caveat: the executor admitted under the
+              // previous fence died with its orchestrator before recording a
+              // result, so the tool runs again under the successor.
+              console.warn(
+                `[OrchestratorService] re-executing tool ${toolName} request ${requestId} for turn ${turnId} `
+                + 'after delivery takeover; its first execution never recorded a result',
+              );
+            }
             dedupInserted = true;
           }
         }

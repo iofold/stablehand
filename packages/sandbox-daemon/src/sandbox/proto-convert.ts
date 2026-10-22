@@ -697,6 +697,20 @@ export function protoSessionEventToCustom(
   proto: ProtoSessionEvent,
   turnId: string,
 ): CustomSessionEvent | null {
+  const converted = convertProtoSessionEvent(proto, turnId);
+  if (converted && proto.deliveryId) {
+    converted.delivery = {
+      id: proto.deliveryId,
+      seq: Number(proto.deliverySeq),
+    };
+  }
+  return converted;
+}
+
+function convertProtoSessionEvent(
+  proto: ProtoSessionEvent,
+  turnId: string,
+): CustomSessionEvent | null {
   switch (proto.payload.case) {
     case 'agentEvent': {
       const agui = protoAgentEventToAGUI(proto.payload.value, turnId);

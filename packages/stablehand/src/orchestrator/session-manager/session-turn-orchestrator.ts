@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
 import {
+  AttachTurnRequestSchema,
+  CancelTurnRequestSchema,
   DeliverTurnRequestSchema,
   RenewTurnDeliveryCapabilityRequestSchema,
   type SessionEvent as ProtoSessionEvent,
@@ -36,12 +38,14 @@ import type {
   TurnDeliveryFence,
   TurnDeliveryContext,
 } from '../turn-delivery-fence.js';
+import { TurnAttachUnavailableError } from '../turn-attach-error.js';
 
 const TAG = '[SandboxSessionManager]';
 const MAX_DRAIN_ITERATIONS = 100;
 const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_CAPABILITY_REFRESH_MS = 10_000;
 const MIN_CAPABILITY_REFRESH_MS = 100;
+const CANCEL_TURN_TIMEOUT_MS = 2_000;
 
 function summarizeTurnDeliveryFailure(err: unknown): string {
   if (err instanceof ConnectError) {
@@ -340,6 +344,7 @@ export class SessionTurnOrchestrator {
     const turnSecrets = options?.turnSecrets
       ? { ...options.turnSecrets }
       : undefined;
+    const attach = options?.attach;
     signal?.throwIfAborted();
     const record = this.deps.stateStore.getSessionById(sessionId);
     const conversationId = record?.conversationId;
@@ -368,6 +373,7 @@ export class SessionTurnOrchestrator {
         messages,
         turnId,
         ...(turnSecrets ? { turnSecrets } : {}),
+        ...(attach ? { attach } : {}),
         channel,
         signal,
       };
@@ -412,6 +418,7 @@ export class SessionTurnOrchestrator {
         {
           ...(signal ? { signal } : {}),
           ...(turnSecrets ? { turnSecrets } : {}),
+          ...(attach ? { attach } : {}),
         },
       );
     } finally {
@@ -446,6 +453,7 @@ export class SessionTurnOrchestrator {
   ): AsyncGenerator<CustomSessionEvent> {
     const signal = options?.signal;
     const turnSecrets = options?.turnSecrets;
+    const attach = options?.attach;
     signal?.throwIfAborted();
     const record = this.deps.stateStore.getSessionById(sessionId);
     if (!record) {
@@ -490,6 +498,8 @@ export class SessionTurnOrchestrator {
     if (initialCapability) {
       request.deliveryCapability = initialCapability;
     }
+    let currentCapability = initialCapability;
+    let timedOut = false;
     const capabilityLossController = new AbortController();
     const renewalStopController = new AbortController();
     let capabilityRenewal: Promise<void> | undefined;
@@ -504,13 +514,26 @@ export class SessionTurnOrchestrator {
           ? AbortSignal.any([signal, capabilityLossController.signal])
           : capabilityLossController.signal
         : signal;
-      const stream: AsyncIterable<ProtoSessionEvent> = deliverySignal
-        ? record.grpcClient!.deliverTurn(request, { signal: deliverySignal })
-        : record.grpcClient!.deliverTurn(request);
+      const callOptions = deliverySignal ? { signal: deliverySignal } : undefined;
+      const stream: AsyncIterable<ProtoSessionEvent> = attach
+        ? record.grpcClient!.attachTurn(
+          create(AttachTurnRequestSchema, {
+            sessionId,
+            turnId,
+            ...(initialCapability ? { deliveryCapability: initialCapability } : {}),
+            afterDeliverySeq: BigInt(attach.afterDeliverySeq),
+          }),
+          callOptions,
+        )
+        : record.grpcClient!.deliverTurn(request, callOptions);
       const turnTimeout = this.deps.config.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
       const abortController = new AbortController();
+      const onTurnTimeout = (): void => {
+        timedOut = true;
+        abortController.abort();
+      };
       let timeoutId: ReturnType<typeof setTimeout> | undefined = setTimeout(
-        () => abortController.abort(),
+        onTurnTimeout,
         turnTimeout,
       );
       unrefTimer(timeoutId);
@@ -528,6 +551,9 @@ export class SessionTurnOrchestrator {
             initialCapability,
             stopSignal: renewalStopController.signal,
             lossController: capabilityLossController,
+            onRenewed: (capability) => {
+              currentCapability = capability;
+            },
           });
         }
         const timeoutError = () =>
@@ -635,7 +661,7 @@ export class SessionTurnOrchestrator {
               );
             } else if (interruptActive) {
               interruptActive = false;
-              timeoutId = setTimeout(() => abortController.abort(), turnTimeout);
+              timeoutId = setTimeout(onTurnTimeout, turnTimeout);
               unrefTimer(timeoutId);
               this.deps.logger.debug(
                 `${TAG} interrupt resolved for session ${sessionId}, turn timeout re-armed`,
@@ -649,6 +675,17 @@ export class SessionTurnOrchestrator {
       } finally {
         renewalStopController.abort();
         void capabilityRenewal;
+        // ADR 024: a dropped stream only detaches the sandbox delivery, so an
+        // intentional stop (user cancel, turn timeout) must be explicit. A
+        // lost lease is not a stop: the successor re-attaches.
+        if ((turnAbortSignal?.aborted || timedOut) && currentCapability) {
+          await this.cancelSandboxTurn(
+            record,
+            turnId,
+            currentCapability,
+            timedOut ? `turn timed out after ${turnTimeout}ms` : 'turn cancelled',
+          );
+        }
         if (iterator?.return) {
           void iterator.return().catch((returnErr: unknown) => {
             this.deps.logger.debug(`${TAG} iterator.return() failed for turn ${turnId}:`, returnErr);
@@ -684,9 +721,19 @@ export class SessionTurnOrchestrator {
         return;
       }
 
+      if (attach && eventCount === 0) {
+        throw new TurnAttachUnavailableError(
+          turnId,
+          sessionId,
+          `Could not re-attach to turn ${turnId} in sandbox session ${sessionId}: `
+          + summarizeTurnDeliveryFailure(err),
+          { cause: err },
+        );
+      }
+
       const isAbort = err instanceof ConnectError && err.code === Code.Aborted;
 
-      if (!retried && eventCount === 0 && isAbort) {
+      if (!retried && !attach && eventCount === 0 && isAbort) {
         this.deps.logger.warn(
           `${TAG} stream aborted before any events for turn ${turnId} on session ${sessionId}, retrying once`,
         );
@@ -798,6 +845,7 @@ export class SessionTurnOrchestrator {
           {
             ...(nextEntry.signal ? { signal: nextEntry.signal } : {}),
             ...(nextEntry.turnSecrets ? { turnSecrets: nextEntry.turnSecrets } : {}),
+            ...(nextEntry.attach ? { attach: nextEntry.attach } : {}),
           },
         )) {
           nextEntry.channel.push(event);
@@ -993,6 +1041,34 @@ export class SessionTurnOrchestrator {
     }
   }
 
+  private async cancelSandboxTurn(
+    record: SessionRecord,
+    turnId: string,
+    capability: TurnDeliveryCapability,
+    reason: string,
+  ): Promise<void> {
+    if (!record.grpcClient) {
+      return;
+    }
+    try {
+      await record.grpcClient.cancelTurn(
+        create(CancelTurnRequestSchema, {
+          sessionId: record.sessionId,
+          turnId,
+          deliveryCapability: capability,
+          reason,
+        }),
+        { timeoutMs: CANCEL_TURN_TIMEOUT_MS },
+      );
+    } catch (error) {
+      // Older sandbox images treat the dropped stream as the cancel.
+      this.deps.logger.debug(
+        `${TAG} CancelTurn for turn ${turnId} on session ${record.sessionId} failed: `
+        + summarizeTurnDeliveryFailure(error),
+      );
+    }
+  }
+
   private assertCapabilityUnexpired(
     capability: TurnDeliveryCapability | undefined,
     turnId: string,
@@ -1014,6 +1090,7 @@ export class SessionTurnOrchestrator {
     initialCapability: TurnDeliveryCapability;
     stopSignal: AbortSignal;
     lossController: AbortController;
+    onRenewed?: (capability: TurnDeliveryCapability) => void;
   }): Promise<void> {
     let deadline = Number(input.initialCapability.leaseExpiresAtMs);
     while (!input.stopSignal.aborted && !input.lossController.signal.aborted) {
@@ -1072,6 +1149,7 @@ export class SessionTurnOrchestrator {
           return;
         }
         deadline = Number(capability.leaseExpiresAtMs);
+        input.onRenewed?.(capability);
       } catch (error) {
         if (input.stopSignal.aborted) {
           return;

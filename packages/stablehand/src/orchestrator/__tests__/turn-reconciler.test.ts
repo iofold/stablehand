@@ -5,6 +5,7 @@ import {
   TURN_ERROR_ORCHESTRATOR_RESTART,
   TurnFinalizer,
 } from '../turn-finalizer.js';
+import type { TurnTakeoverResult } from '../turn-takeover.js';
 import { reconcileStrandedTurnsOnStartup, repairRunningEntries } from '../turn-reconciler.js';
 
 const BOOT_TIME = 1_000_000;
@@ -323,3 +324,112 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
     );
   });
 });
+
+describe('crash takeover of running turns (ADR 024)', () => {
+  it('hands a running turn with a sandbox to takeover instead of failing it', async () => {
+    const deps = createDeps({ openTurns: [createTurn()] });
+    const adoptRunningTurn = vi.fn(async (): Promise<TurnTakeoverResult> => ({ outcome: 'adopted' }));
+    const resetStrandedSession = vi.fn().mockResolvedValue(undefined);
+
+    const result = await reconcileStrandedTurnsOnStartup({
+      ...deps,
+      adoptRunningTurn,
+      resetStrandedSession,
+    }, BOOT_TIME);
+
+    expect(result).toEqual(expect.objectContaining({ failed: 0, adopting: 1 }));
+    await expect(result.adoptionComplete).resolves.toEqual({ adopted: 1, failed: 0, skipped: 0 });
+    expect(adoptRunningTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'turn-1' }),
+      expect.objectContaining({
+        fence: expect.objectContaining({ fenceToken: 1 }),
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(deps.db.finalizeTurnIfOpen).not.toHaveBeenCalled();
+    expect(resetStrandedSession).not.toHaveBeenCalled();
+    expect(deps.db.releaseTurnDeliveryLease).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the turn with takeover copy and resets its sandbox when re-attach is impossible', async () => {
+    const deps = createDeps({ openTurns: [createTurn()] });
+    const resetStrandedSession = vi.fn().mockResolvedValue(undefined);
+
+    const result = await reconcileStrandedTurnsOnStartup({
+      ...deps,
+      adoptRunningTurn: async () => ({
+        outcome: 'unavailable',
+        reason: 'the sandbox no longer had the turn running',
+      }),
+      resetStrandedSession,
+    }, BOOT_TIME);
+
+    await expect(result.adoptionComplete).resolves.toEqual({ adopted: 0, failed: 1, skipped: 0 });
+    expect(deps.db.finalizeTurnAndMarkLifecycleDraining).toHaveBeenCalledWith(
+      'turn-1',
+      expect.objectContaining({
+        status: 'error',
+        error: expect.stringContaining('could not reconnect to its sandbox (the sandbox no longer had the turn running)'),
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(resetStrandedSession).toHaveBeenCalledWith('sess-1', expect.anything());
+  });
+
+  it('waits for a lease held by another orchestrator to lapse, then takes over', async () => {
+    const deps = createDeps({ openTurns: [createTurn()] });
+    const claim = deps.db.claimTurnDeliveryLease.getMockImplementation()!;
+    deps.db.claimTurnDeliveryLease
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockImplementation(claim);
+    deps.db.getTurn.mockResolvedValue(createTurn());
+    const adoptRunningTurn = vi.fn(async (): Promise<TurnTakeoverResult> => ({ outcome: 'adopted' }));
+
+    const result = await reconcileStrandedTurnsOnStartup({
+      ...deps,
+      adoptRunningTurn,
+    }, BOOT_TIME, { adoptionPollMs: 1, adoptionClaimWaitMs: 5_000 });
+
+    await expect(result.adoptionComplete).resolves.toEqual({ adopted: 1, failed: 0, skipped: 0 });
+    expect(deps.db.claimTurnDeliveryLease).toHaveBeenCalledTimes(3);
+    expect(adoptRunningTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops waiting once the turn is finalized elsewhere', async () => {
+    const deps = createDeps({ openTurns: [createTurn()] });
+    deps.db.claimTurnDeliveryLease.mockResolvedValue(undefined);
+    deps.db.getTurn.mockResolvedValue(createTurn({ status: 'completed', completedAt: BOOT_TIME + 5 }));
+    const adoptRunningTurn = vi.fn(async (): Promise<TurnTakeoverResult> => ({ outcome: 'adopted' }));
+
+    const result = await reconcileStrandedTurnsOnStartup({
+      ...deps,
+      adoptRunningTurn,
+    }, BOOT_TIME, { adoptionPollMs: 1 });
+
+    await expect(result.adoptionComplete).resolves.toEqual({ adopted: 0, failed: 0, skipped: 1 });
+    expect(adoptRunningTurn).not.toHaveBeenCalled();
+  });
+
+  it('claims leases of a dead earlier boot of this instance without waiting', async () => {
+    const deps = createDeps({ openTurns: [createTurn()] });
+    const previousBootTakeover = {
+      instancePrefix: 'orchestrator-1/',
+      ownBootPrefix: 'orchestrator-1/boot-2/',
+    };
+
+    const result = await reconcileStrandedTurnsOnStartup({
+      ...deps,
+      adoptRunningTurn: async () => ({ outcome: 'adopted' }),
+    }, BOOT_TIME, { previousBootTakeover, ownerId: 'orchestrator-1/boot-2/owner' });
+    await result.adoptionComplete;
+
+    expect(deps.db.claimTurnDeliveryLease).toHaveBeenCalledWith(expect.objectContaining({
+      turnId: 'turn-1',
+      ownerId: 'orchestrator-1/boot-2/owner',
+      previousBootTakeover,
+    }));
+  });
+});
+

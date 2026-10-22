@@ -30,6 +30,9 @@ import {
 import { repairConversationRunningToolCalls } from './turn-reconciler.js';
 import { publishMessageCanonicalState } from './message-publisher.js';
 import type { TurnDeliveryContext } from './turn-delivery-fence.js';
+import type { CanonicalLog } from './canonical/canonical-log.js';
+import { readDeliveryStamp, type DeliveryStamp } from './delivery-stamp.js';
+import { TurnAttachUnavailableError } from './turn-attach-error.js';
 import {
   acquireTurnDeliveryLease,
   type TurnDeliveryLeaseGuard,
@@ -159,6 +162,8 @@ export interface AgentTurnServiceDeps {
    * gateway (or its admin key) is off: budgets then apply at admission only.
    */
   turnSpendCaps?: Pick<SessionGatewayKeyManager, 'prepareTurn' | 'capForTurn' | 'settleTurn'>;
+  /** Restores projector state before a takeover continues a turn (ADR 024). */
+  turnProjection?: Pick<CanonicalLog, 'rehydrateTurnProjection'>;
 }
 
 export interface ExecuteTurnParams {
@@ -179,6 +184,16 @@ export interface ExecuteTurnParams {
   continuationAttemptId?: string;
   /** Cancels delivery when its cross-replica lease is lost. */
   signal?: AbortSignal;
+  /**
+   * Crash takeover (ADR 024): re-attach to the delivery still running in
+   * `sandboxSessionId` instead of delivering the turn. The whole journal is
+   * replayed; events whose effects are already durable only rebuild local
+   * state, later ones are applied (idempotently) as usual. Requires
+   * `deliveryContext` (the successor's fence) and `sandboxSessionId`.
+   * Throws TurnAttachUnavailableError, leaving the turn open, when the
+   * sandbox cannot be re-attached.
+   */
+  takeover?: boolean;
 }
 
 /**
@@ -196,6 +211,7 @@ export class AgentTurnService {
   private turnFinalizer: TurnFinalizer;
   private performance: PerformanceRecorder;
   private turnSpendCaps: AgentTurnServiceDeps['turnSpendCaps'];
+  private turnProjection: AgentTurnServiceDeps['turnProjection'];
 
   constructor(deps: AgentTurnServiceDeps) {
     this.turnSpendCaps = deps.turnSpendCaps;
@@ -204,6 +220,7 @@ export class AgentTurnService {
     this.eventBus = deps.eventBus;
     this.sessionTurnService = deps.sessionTurnService;
     this.performance = deps.performance ?? performanceInstrumentation;
+    this.turnProjection = deps.turnProjection;
     this.turnFinalizer = new TurnFinalizer({ db: deps.db, eventBus: deps.eventBus, logger: console });
   }
 
@@ -238,6 +255,17 @@ export class AgentTurnService {
     let ownedDeliveryLease: TurnDeliveryLeaseGuard | undefined;
     let deliverySignal = params.signal;
     const isInterruptContinuation = params.continuationAttemptId !== undefined;
+    const isTakeover = params.takeover === true;
+    if (isTakeover && (!params.deliveryContext || !params.sandboxSessionId)) {
+      throw new Error(`Turn ${turnId} takeover requires a delivery fence and its sandbox session`);
+    }
+    // ADR 024 replay state: events at or before the watermark already have
+    // durable effects and only rebuild local state; later events are applied.
+    let takeoverWatermark: { deliveryId: string; deliverySeq: number } | undefined;
+    let rebuildingEvent = false;
+    let currentDeliveryStamp: DeliveryStamp | undefined;
+    let takeoverUnavailable: TurnAttachUnavailableError | undefined;
+    let syntheticToolCallCounter = 0;
 
     const startedAt = Date.now();
 
@@ -290,11 +318,17 @@ export class AgentTurnService {
       event: K,
       payload: EventMap[K],
     ): void => {
+      if (rebuildingEvent) {
+        return;
+      }
+      const stampedPayload = currentDeliveryStamp
+        ? { ...payload, delivery: currentDeliveryStamp }
+        : payload;
       const persistenceContext = deliveryPersistenceContext();
       if (persistenceContext) {
-        this.eventBus.emit(event, payload, persistenceContext);
+        this.eventBus.emit(event, stampedPayload, persistenceContext);
       } else {
-        this.eventBus.emit(event, payload);
+        this.eventBus.emit(event, stampedPayload);
       }
     };
 
@@ -398,6 +432,11 @@ export class AgentTurnService {
         || flushedAssistantMessageSeq === null
         || !flushedAssistantProjectionDirty
       ) return;
+      if (rebuildingEvent) {
+        // Already durable: a later live event re-stages the full projection.
+        flushedAssistantProjectionDirty = false;
+        return;
+      }
       const toolCalls = buildPersistedToolCalls();
       const parts = [...streamingParts];
       await assertDeliveryOwnership();
@@ -453,6 +492,12 @@ export class AgentTurnService {
         ? `${turnId}-resume-${params.continuationAttemptId}`
         : turnId;
       const messageId = `canonical-${messageNamespace}-${canonicalMessageCounter++}`;
+      if (rebuildingEvent) {
+        const existing = await this.db.getMessage(messageId);
+        if (existing) {
+          return existing;
+        }
+      }
       await assertDeliveryOwnership();
       const message = await this.db.addCanonicalMessage({
         id: messageId,
@@ -887,7 +932,7 @@ export class AgentTurnService {
           ? {
               suppressEvent: true,
               deliveryContext: deliveryContext,
-              ...(isInterruptContinuation
+              ...(isInterruptContinuation || isTakeover
                 ? { deliveryAdmission: 'continuation' as const }
                 : {}),
             }
@@ -919,6 +964,17 @@ export class AgentTurnService {
       );
       deliveryStarted = true;
 
+      if (isTakeover) {
+        takeoverWatermark = await this.db.getTurnDeliveryWatermark(turnId);
+        await this.turnProjection?.rehydrateTurnProjection(turnId);
+        console.log(
+          `[AgentTurnService] taking over turn ${turnId} on session ${sandboxSessionId}; `
+          + (takeoverWatermark
+            ? `effects durable through delivery ${takeoverWatermark.deliveryId} seq ${takeoverWatermark.deliverySeq}`
+            : 'no journaled effects are durable yet'),
+        );
+      }
+
       const eventSource: AsyncGenerator<AgentSessionEvent> = this.sessionTurnService.executeSessionTurn(
         agentDef,
         conversationId,
@@ -929,6 +985,7 @@ export class AgentTurnService {
           agentId,
           existingSessionId: sandboxSessionId,
           ...(params.turnSecrets ? { turnSecrets: params.turnSecrets } : {}),
+          ...(isTakeover ? { attach: { afterDeliverySeq: 0 } } : {}),
         },
       );
 
@@ -936,7 +993,17 @@ export class AgentTurnService {
         eventObserved = true;
         firstEventMeasurement.end('ok');
         if (signal?.aborted) break;
-        await assertDeliveryOwnership();
+        currentDeliveryStamp = readDeliveryStamp(event);
+        rebuildingEvent = Boolean(
+          isTakeover
+          && currentDeliveryStamp
+          && takeoverWatermark
+          && currentDeliveryStamp.id === takeoverWatermark.deliveryId
+          && currentDeliveryStamp.seq <= takeoverWatermark.deliverySeq,
+        );
+        if (!rebuildingEvent) {
+          await assertDeliveryOwnership();
+        }
 
         if (!INDIVIDUALLY_HANDLED.has(event.type)) {
           emitTurnEvent('ag_ui.event', {
@@ -977,7 +1044,9 @@ export class AgentTurnService {
           sawToolActivity = true;
           currentStreamedMessageId = undefined;
           const e = event as Record<string, unknown>;
-          const tcId = (e.toolCallId as string) || `tc-${Date.now()}`;
+          // Deterministic fallback id: a takeover replay must rebuild the
+          // same projection the original owner persisted (ADR 024).
+          const tcId = (e.toolCallId as string) || `tc-${turnId}-${++syntheticToolCallCounter}`;
           const toolArgs = typeof e.args === 'string'
             ? e.args
             : e.args === undefined
@@ -1226,6 +1295,9 @@ export class AgentTurnService {
         turnError = new Error(lastErrorMessage || 'Turn completed with errors (no detail captured)');
       }
     } catch (err) {
+      if (err instanceof TurnAttachUnavailableError) {
+        takeoverUnavailable = err;
+      }
       turnError = err instanceof Error ? err : new Error(String(err));
       if (isTurnCancelled(turnError.message)) {
         wasCancelled = true;
@@ -1239,9 +1311,16 @@ export class AgentTurnService {
         console.error(`[AgentTurnService] Turn ${turnId} error:`, turnError.stack ?? turnError.message);
       }
     } finally {
+      rebuildingEvent = false;
+      currentDeliveryStamp = undefined;
       releaseReservedConcurrency();
       try {
-        await settleExecution();
+        if (takeoverUnavailable) {
+          // Leave the turn open: the takeover caller owns the fallback.
+          await settleStaleDeliveryRuntime();
+        } else {
+          await settleExecution();
+        }
       } finally {
         try {
           await ownedDeliveryLease?.release();
@@ -1273,6 +1352,9 @@ export class AgentTurnService {
     }
     if (continuationExecutionError) {
       throw continuationExecutionError;
+    }
+    if (takeoverUnavailable) {
+      throw takeoverUnavailable;
     }
   }
 }
