@@ -80,11 +80,26 @@ export function humanizeIdentifier(name: string): string {
     .join(' ');
 }
 
+/**
+ * Tools from an agent's MCP servers are named `<server>__<tool>`
+ * (`granola__list_meetings`, `apify__harvestapi--linkedin-post-search`).
+ */
+const MCP_SERVER_TOOL = /^([a-z][a-z0-9_-]{0,23})__(.+)$/;
+
+function mcpToolLabel(base: string): string | undefined {
+  const match = MCP_SERVER_TOOL.exec(base);
+  if (!match) return undefined;
+  const [, server, tool] = match;
+  // Actor-style names keep only the part after the owner: harvestapi--x → x.
+  const bare = tool!.includes('--') ? tool!.slice(tool!.lastIndexOf('--') + 2) : tool!;
+  return `${humanizeIdentifier(bare)} · ${humanizeIdentifier(server!)}`;
+}
+
 /** Human label for a tool, given its raw reported name. */
 export function toolDisplayName(rawName: string | undefined): string {
   if (isMissingToolName(rawName)) return 'Tool call';
   const base = baseToolName(rawName!.trim());
-  return KNOWN_TOOL_LABELS[base] ?? humanizeIdentifier(base);
+  return KNOWN_TOOL_LABELS[base] ?? mcpToolLabel(base) ?? humanizeIdentifier(base);
 }
 
 /** Label for an a2ui-render card, named after the component it drew. */

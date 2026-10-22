@@ -107,6 +107,34 @@ describe('AgentFormModal', () => {
     expect(payload).not.toHaveProperty('metadata');
   });
 
+  it('saves edited MCP servers and clears them when the last one is removed', async () => {
+    const agent = makeAgent({
+      mcpServers: [
+        { name: 'granola', url: 'https://mcp.granola.ai/mcp', auth: { type: 'oauth' }, tools: ['list_*'] },
+      ],
+    });
+    act(() => root.render(<AgentFormModal open agent={agent} onClose={vi.fn()} />));
+    await flushEffects();
+
+    expect(document.querySelectorAll('[data-testid="mcp-server-row"]')).toHaveLength(1);
+    const save = () => [...document.querySelectorAll('button')]
+      .find((button) => button.textContent?.includes('Save Changes')) as HTMLButtonElement;
+    await act(async () => {
+      save().click();
+      await Promise.resolve();
+    });
+    expect(mocks.updateAgent).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({
+      mcpServers: [{ name: 'granola', url: 'https://mcp.granola.ai/mcp', auth: { type: 'oauth' }, tools: ['list_*'] }],
+    }));
+
+    act(() => (document.querySelector('[aria-label="Remove MCP server granola"]') as HTMLButtonElement).click());
+    await act(async () => {
+      save().click();
+      await Promise.resolve();
+    });
+    expect(mocks.updateAgent).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ mcpServers: null }));
+  });
+
   it('uses a viewport-scale editing workbench', async () => {
     act(() => root.render(
       <AgentFormModal open agent={makeAgent()} onClose={vi.fn()} />,

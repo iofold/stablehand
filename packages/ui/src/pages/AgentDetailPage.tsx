@@ -125,7 +125,7 @@ export function AgentDetailPage() {
   const conversationCount = agent?.conversationCount ?? 0;
   const activeSandboxSessionCount = countActiveSandboxSessions(agent?.sandboxSessionsByStatus);
 
-  const toolsCount = (agent?.tools?.length ?? 0) + (agent?.httpTools?.length ?? 0);
+  const toolsCount = (agent?.tools?.length ?? 0) + (agent?.httpTools?.length ?? 0) + (agent?.mcpServers?.length ?? 0);
 
   const handleStartRun = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -381,6 +381,7 @@ export function AgentDetailPage() {
           <AgentToolsTab
             tools={agent.tools}
             httpTools={agent.httpTools}
+            mcpServerCount={agent.mcpServers?.length ?? 0}
             agentId={id}
             nativeToolPolicy={agent.nativeToolPolicy}
             builtinToolPolicy={agent.builtinToolPolicy}

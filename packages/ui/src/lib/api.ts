@@ -81,6 +81,10 @@ import {
   type Trigger,
   TriggerFiringFailureListResponseSchema,
   type TriggerFiringFailure,
+  McpServerConnectResponseSchema,
+  McpServerStatusListResponseSchema,
+  type McpServerConnectResponse,
+  type McpServerStatus,
 } from '@stablehand/contracts';
 
 const API_BASE = '/api';
@@ -475,6 +479,39 @@ export async function setSecret(
 export async function deleteSecret(agentId: string, key: string, scope?: SecretScope): Promise<void> {
   const query = scope === 'tools' ? '?scope=tools' : '';
   await apiFetch(`${API_BASE}/agents/${agentId}/secrets/${encodeURIComponent(key)}${query}`, { method: 'DELETE' });
+}
+
+// ── Agent MCP servers ─────────────────────────────────────────────────
+
+export type { McpServerStatus, McpServerConnectResponse };
+
+export async function fetchMcpServers(agentId: string): Promise<McpServerStatus[]> {
+  const response = await apiFetch<unknown>(`${API_BASE}/agents/${agentId}/mcp-servers`);
+  return McpServerStatusListResponseSchema.parse(response).servers;
+}
+
+export async function refreshMcpServer(agentId: string, server: string): Promise<McpServerStatus[]> {
+  const response = await apiMutate<unknown>(
+    `${API_BASE}/agents/${agentId}/mcp-servers/${encodeURIComponent(server)}/refresh`,
+    'POST',
+  );
+  return McpServerStatusListResponseSchema.parse(response).servers;
+}
+
+/** Starts an OAuth sign-in; the caller shows the host and opens the URL only on a click. */
+export async function connectMcpServer(agentId: string, server: string): Promise<McpServerConnectResponse> {
+  const response = await apiMutate<unknown>(
+    `${API_BASE}/agents/${agentId}/mcp-servers/${encodeURIComponent(server)}/connect`,
+    'POST',
+    { redirectOrigin: window.location.origin },
+  );
+  return McpServerConnectResponseSchema.parse(response);
+}
+
+export async function disconnectMcpServer(agentId: string, server: string): Promise<void> {
+  await apiFetch(`${API_BASE}/agents/${agentId}/mcp-servers/${encodeURIComponent(server)}/connection`, {
+    method: 'DELETE',
+  });
 }
 
 export async function deleteAgent(id: string): Promise<void> {

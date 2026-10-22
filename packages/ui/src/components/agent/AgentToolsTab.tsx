@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { fetchCatalogTools, type CatalogTool } from '@/lib/api';
 import { ToolBadges, ToolDetailsPanel } from '@/components/tools/ToolPresentation';
+import { McpServersSection } from './McpServersSection';
 import type { Agent, BuiltinToolPolicy, NativeToolPolicy } from '@stablehand/contracts';
 
 type HttpToolDefinition = Agent['httpTools'][number];
@@ -12,12 +13,15 @@ export interface AgentToolsTabProps {
   agentId: string;
   nativeToolPolicy?: NativeToolPolicy | null;
   builtinToolPolicy?: BuiltinToolPolicy | null;
+  /** Number of MCP servers the agent declares; the section loads their status. */
+  mcpServerCount?: number;
 }
 
 export function AgentToolsTab({
   tools = [],
   httpTools = [],
-  agentId: _agentId,
+  agentId,
+  mcpServerCount = 0,
   nativeToolPolicy,
   builtinToolPolicy,
 }: AgentToolsTabProps) {
@@ -81,7 +85,7 @@ export function AgentToolsTab({
     return entries;
   }, [tools, catalogTools, builtinToolPolicy]);
 
-  const hasNoTools = allToolEntries.length === 0 && httpTools.length === 0;
+  const hasNoTools = allToolEntries.length === 0 && httpTools.length === 0 && mcpServerCount === 0;
 
   return (
     <div data-testid="tools-explorer" className="space-y-8">
@@ -166,6 +170,8 @@ export function AgentToolsTab({
           </div>
         )}
       </div>
+
+      {mcpServerCount > 0 && <McpServersSection agentId={agentId} />}
 
       {httpTools.length > 0 && (
         <section data-testid="http-tools-section" className="space-y-4">

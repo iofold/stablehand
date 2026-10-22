@@ -11,6 +11,12 @@ import {
 } from '@/lib/run-spend-cap';
 import { ToolPickerModal } from './ToolPickerModal';
 import {
+  draftToMcpServer,
+  mcpServerToDraft,
+  McpServersEditor,
+  type McpServerDraft,
+} from './McpServersEditor';
+import {
   STABLEHAND_HARNESS_NAMES,
   HARNESS_CONFIG_SCHEMAS,
   type AgentCreateInput,
@@ -84,6 +90,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [tools, setTools] = useState<string[]>([]);
+  const [mcpDrafts, setMcpDrafts] = useState<McpServerDraft[]>([]);
   const [builtinToolPolicy, setBuiltinToolPolicy] = useState<BuiltinToolPolicy>({ policy: 'all' });
   const [builtinTools, setBuiltinTools] = useState<CatalogTool[]>([]);
   const [toolPickerOpen, setToolPickerOpen] = useState(false);
@@ -129,6 +136,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
       setDescription(agent.description ?? '');
       setSystemPrompt(agent.systemPrompt ?? '');
       setTools(agent.tools ?? []);
+      setMcpDrafts((agent.mcpServers ?? []).map(mcpServerToDraft));
       
       setBuiltinToolPolicy(agent.builtinToolPolicy ?? { policy: 'all' });
       const nativePolicy = agent.nativeToolPolicy ?? { policy: 'all' };
@@ -155,6 +163,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
       setDescription('');
       setSystemPrompt('');
       setTools([]);
+      setMcpDrafts([]);
       setBuiltinToolPolicy({ policy: 'all' });
       setNativeToolPolicyMode('all');
       setNativeToolsList([]);
@@ -235,6 +244,13 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
         }
       } catch {
         errs.harnessConfig = 'Harness config must be valid JSON';
+      }
+    }
+    for (const draft of mcpDrafts) {
+      const converted = draftToMcpServer(draft);
+      if (converted.error) {
+        errs.mcpServers = converted.error;
+        break;
       }
     }
     if (parseRunSpendCapInput(spendCapText) === null) {
@@ -319,16 +335,22 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
         builtinToolPolicy,
       };
       const metadataPatch = buildMetadataPayload();
+      const mcpServers = mcpDrafts.flatMap((draft) => {
+        const converted = draftToMcpServer(draft);
+        return converted.server ? [converted.server] : [];
+      });
       if (isEditing && agent) {
         const payload: AgentPatchInput = {
           ...commonInput,
           description: description.length > 0 ? description : null,
           ...(metadataPatch.changed ? { metadata: metadataPatch.metadata } : {}),
+          mcpServers: mcpServers.length > 0 ? mcpServers : null,
         };
         await updateAgent(agent.id, payload);
       } else {
         const payload: AgentCreateInput = {
           ...commonInput,
+          ...(mcpServers.length > 0 ? { mcpServers } : {}),
           ...(description.length > 0 ? { description } : {}),
           ...(metadataPatch.changed && metadataPatch.metadata
             ? { metadata: metadataPatch.metadata }
@@ -679,6 +701,8 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
               )}
             </div>
           </div>
+
+          <McpServersEditor value={mcpDrafts} onChange={setMcpDrafts} error={errors.mcpServers} />
 
           {/* Native SDK Tools */}
           <div>

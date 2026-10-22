@@ -24,6 +24,12 @@ describe('tool display names', () => {
     expect(toolDisplayName('Read')).toBe('Read');
   });
 
+  it('names MCP server tools after the tool and its server', () => {
+    expect(toolDisplayName('granola__list_meetings')).toBe('List meetings · Granola');
+    expect(toolDisplayName('mcp__stablehand__granola__get_meetings')).toBe('Get meetings · Granola');
+    expect(toolDisplayName('apify__harvestapi--linkedin-post-search')).toBe('Linkedin post search · Apify');
+  });
+
   it('sentence-cases unknown tool names', () => {
     expect(toolDisplayName('read_file')).toBe('Read file');
     expect(toolDisplayName('get-weather')).toBe('Get weather');
