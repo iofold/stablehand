@@ -158,7 +158,9 @@ GALLERY_PORT=$(setting GALLERY_PORT 8090)
 REGISTRY=$(setting STABLEHAND_IMAGE_REGISTRY ghcr.io/iofold)
 image_published() { docker manifest inspect "$REGISTRY/stablehand-orchestrator:$1" >/dev/null 2>&1; }
 images_present() {
-  for image in $(STABLEHAND_IMAGE_TAG=$1 docker compose config --images 2>/dev/null); do
+  images=$(STABLEHAND_IMAGE_TAG=$1 docker compose config --images 2>/dev/null) || return 1
+  [ -n "$images" ] || return 1
+  for image in $images; do
     docker image inspect "$image" >/dev/null 2>&1 || return 1
   done
 }
