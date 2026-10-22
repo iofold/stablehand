@@ -119,6 +119,16 @@ const EVENT_MAP_SAMPLES: { [K in EventName]: EventMap[K] } = {
     agentId: 'agent-1',
     timestamp: 1_000,
   },
+  'budget.reached': {
+    turnId: 'turn-1',
+    agentId: 'agent-1',
+    conversationId: 'conv-1',
+    sandboxSessionId: 'sandbox-1',
+    source: 'run_limit',
+    capUsd: 0.05,
+    spentUsd: 0.0512,
+    timestamp: 1_000,
+  },
   'artifact.created': {
     artifactId: 'artifact-1',
     agentId: 'agent-1',

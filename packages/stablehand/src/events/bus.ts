@@ -96,8 +96,8 @@ export type EventMap = {
   };
   /**
    * A run was stopped mid-flight because it reached its spend cap (the
-   * gateway refused further model calls). Emitted just before its terminal
-   * RUN_ERROR; the run's turn carries the same numbers as its stopReason.
+   * gateway refused further model calls). Emitted once the turn is durably
+   * finalized; the turn carries the same numbers as its stopReason.
    */
   'budget.reached': {
     turnId: string;

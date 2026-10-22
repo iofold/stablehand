@@ -756,8 +756,18 @@ export class AgentTurnService {
           await settleStaleDeliveryRuntime();
           return;
         }
-        if (finalStatus === 'error' && stopReason?.code === BUDGET_REACHED_CODE) {
-          emitTurnEvent('budget.reached', {
+        const finalization = await finalizeTurn(finalStatus, finalError);
+        // A terminal run no longer needs its cap; a paused (HITL) run keeps
+        // it so its continuation resumes under the same budget.
+        this.turnSpendCaps?.settleTurn(turnId);
+        if (
+          finalization.finalized
+          && finalStatus === 'error'
+          && stopReason?.code === BUDGET_REACHED_CODE
+        ) {
+          // A system event about a finished turn (like budget.threshold), so
+          // it is not delivery-fenced: the fence closes with the turn.
+          this.eventBus.emit('budget.reached', {
             turnId,
             agentId,
             conversationId,
@@ -771,10 +781,6 @@ export class AgentTurnService {
             timestamp: Date.now(),
           });
         }
-        const finalization = await finalizeTurn(finalStatus, finalError);
-        // A terminal run no longer needs its cap; a paused (HITL) run keeps
-        // it so its continuation resumes under the same budget.
-        this.turnSpendCaps?.settleTurn(turnId);
         if (isInterruptContinuation && !finalization.finalized) {
           continuationExecutionError = new Error(
             `Interrupt continuation ${params.continuationAttemptId} lost delivery ownership during finalization`,

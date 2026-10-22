@@ -2127,8 +2127,10 @@ describe('AgentTurnService spend-cap stops (ctx-ycek)', () => {
         capUsd: 0.05,
         spentUsd: 0.0512,
       }),
-      expectedDeliveryPersistenceContext(),
     ]]);
+    // Published after the turn is durably finalized, so it follows turn.completed.
+    const names = emit.mock.calls.map(([name]) => name);
+    expect(names.indexOf('budget.reached')).toBeGreaterThan(names.indexOf('turn.completed'));
     const completed = emit.mock.calls.filter(([name]) => name === 'turn.completed');
     expect(completed[0]?.[1]).toMatchObject({ status: 'error', stopReason: expectedStop });
     // The partial work before the stop is kept.

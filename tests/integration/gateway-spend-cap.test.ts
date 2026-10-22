@@ -8,6 +8,7 @@
  * unique aliases, and deletion by alias. A key therefore overshoots its cap by
  * at most the one call that crossed it.
  */
+import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -52,9 +53,10 @@ class FakeLiteLLM {
   private counter = 0;
 
   constructor() {
-    this.keys.set('runtime-hash', {
+    const runtimeHash = createHash('sha256').update(RUNTIME_KEY).digest('hex');
+    this.keys.set(runtimeHash, {
       secret: RUNTIME_KEY,
-      token: 'runtime-hash',
+      token: runtimeHash,
       alias: 'stablehand-runtime',
       models: ['gpt-5.4-mini', 'claude-haiku-4-5'],
       maxBudget: null,
@@ -82,7 +84,10 @@ class FakeLiteLLM {
   }
 
   private findKey(keyOrHash: string): FakeKey | undefined {
-    return this.keys.get(keyOrHash) ?? [...this.keys.values()].find((key) => key.secret === keyOrHash);
+    const hash = keyOrHash.startsWith('sk-')
+      ? createHash('sha256').update(keyOrHash).digest('hex')
+      : keyOrHash;
+    return this.keys.get(hash);
   }
 
   private json(res: ServerResponse, status: number, body: unknown): void {
@@ -122,9 +127,10 @@ class FakeLiteLLM {
           return this.json(res, 400, { error: { message: `Key with alias '${alias}' already exists.` } });
         }
         this.counter += 1;
+        const secret = `sk-session-${this.counter}`;
         const key: FakeKey = {
-          secret: `sk-session-${this.counter}`,
-          token: `hash-${this.counter}`,
+          secret,
+          token: createHash('sha256').update(secret).digest('hex'),
           alias,
           models: Array.isArray(body.models) ? body.models as string[] : [],
           maxBudget: typeof body.max_budget === 'number' ? body.max_budget : null,

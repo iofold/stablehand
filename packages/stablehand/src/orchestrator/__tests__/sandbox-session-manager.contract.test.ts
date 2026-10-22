@@ -448,7 +448,7 @@ describe('SandboxSessionManager contract', () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
 
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
-      expect(buildSandboxSecrets).toHaveBeenCalledWith('agent-1');
+      expect(buildSandboxSecrets).toHaveBeenCalledWith('agent-1', { sessionId: session.sessionId });
       expect(grpcClient.openSession).toHaveBeenCalledTimes(1);
       expect(grpcClient.openSession).toHaveBeenCalledWith(expect.objectContaining({
         bootstrap: {
@@ -722,7 +722,7 @@ describe('SandboxSessionManager contract', () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
 
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
-      expect(buildSandboxSecrets).toHaveBeenCalledWith('agent-1');
+      expect(buildSandboxSecrets).toHaveBeenCalledWith('agent-1', { sessionId: 'sess-1' });
       expect(db.claimSandboxSessionRestore).toHaveBeenCalledWith({
         sandboxSessionId: 'sess-1',
         ownerId: expect.any(String),

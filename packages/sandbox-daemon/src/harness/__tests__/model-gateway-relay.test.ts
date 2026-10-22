@@ -177,6 +177,16 @@ describe('ModelGatewayRelay', () => {
     expect(relay.takeBudgetRefusal(toOpaqueTurnCorrelation('turn-7'))).toBeUndefined();
   });
 
+  it('makes an uncorrelated refusal terminal without attributing it to any run', async () => {
+    gateway.handler = (_req, res) => refuseForBudget(res);
+
+    const response = await fetch(`${relayUrl}/v1/chat/completions`, { method: 'POST', body: '{}' });
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get('x-should-retry')).toBe('false');
+    expect(relay.takeBudgetRefusal(toOpaqueTurnCorrelation('any-turn'))).toBeUndefined();
+  });
+
   it('leaves ordinary rate limits and gateway errors untouched', async () => {
     gateway.handler = (_req, res) => {
       res.writeHead(429, { 'content-type': 'application/json', 'retry-after': '2' });

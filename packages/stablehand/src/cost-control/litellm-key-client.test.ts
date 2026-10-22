@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 
 import { LiteLLMKeyAdminError, LiteLLMKeyClient } from './litellm-key-client.js';
@@ -89,7 +90,10 @@ describe('LiteLLMKeyClient', () => {
     }));
 
     await expect(makeClient(fetchImpl).getKeyModels('sk-runtime')).resolves.toEqual(['gpt-5.4-mini']);
-    expect(new URL(call(fetchImpl).url).searchParams.get('key')).toBe('sk-runtime');
+    // The secret travels as LiteLLM's token hash, never in the URL.
+    const sent = new URL(call(fetchImpl).url).searchParams.get('key');
+    expect(sent).toBe(createHash('sha256').update('sk-runtime').digest('hex'));
+    expect(call(fetchImpl).url).not.toContain('sk-runtime');
   });
 
   it('finds a key hash by alias', async () => {

@@ -50,7 +50,6 @@ const HOP_BY_HOP_HEADERS: ReadonlySet<string> = new Set([
   'upgrade',
   'host',
 ]);
-const NO_CORRELATION_KEY = '';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -184,26 +183,26 @@ export class ModelGatewayRelay {
     });
   }
 
-  /** Remove and return the budget refusal recorded for this turn correlation. */
+  /**
+   * Remove and return the budget refusal recorded for this turn correlation.
+   * Only correlated refusals are kept: a refusal without a turn correlation
+   * cannot be attributed to a run (the harness still recognizes it from the
+   * client's error text).
+   */
   takeBudgetRefusal(correlationId: string): GatewayBudgetRefusal | undefined {
     const refusal = this.refusals.get(correlationId);
-    if (refusal) {
-      this.refusals.delete(correlationId);
-      return refusal;
-    }
-    // A client that sent no correlation header can only be matched loosely.
-    const uncorrelated = this.refusals.get(NO_CORRELATION_KEY);
-    if (uncorrelated) this.refusals.delete(NO_CORRELATION_KEY);
-    return uncorrelated;
+    if (refusal) this.refusals.delete(correlationId);
+    return refusal;
   }
 
   /** True when a refusal is recorded for this correlation, without consuming it. */
   hasBudgetRefusal(correlationId: string): boolean {
-    return this.refusals.has(correlationId) || this.refusals.has(NO_CORRELATION_KEY);
+    return this.refusals.has(correlationId);
   }
 
   private recordRefusal(refusal: GatewayBudgetRefusal): void {
-    const key = refusal.correlationId ?? NO_CORRELATION_KEY;
+    if (refusal.correlationId === null) return;
+    const key = refusal.correlationId;
     this.refusals.delete(key);
     this.refusals.set(key, refusal);
     while (this.refusals.size > MAX_TRACKED_REFUSALS) {

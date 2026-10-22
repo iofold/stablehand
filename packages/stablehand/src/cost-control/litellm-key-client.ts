@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 /**
@@ -62,6 +63,11 @@ export interface UpdateSessionKeyInput {
   duration: string;
 }
 
+/** LiteLLM's token hash: SHA-256 hex of an `sk-` key; anything else is already a hash. */
+export function liteLLMKeyHash(key: string): string {
+  return key.startsWith('sk-') ? createHash('sha256').update(key).digest('hex') : key;
+}
+
 export class LiteLLMKeyAdminError extends Error {
   constructor(
     readonly operation: string,
@@ -101,7 +107,9 @@ export class LiteLLMKeyClient {
   constructor(private readonly options: LiteLLMKeyClientOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
-    this.timeoutMs = options.timeoutMs ?? 10_000;
+    // Run start waits on one key update; keep a stalled gateway from
+    // holding a run for long (the cap update then fails open).
+    this.timeoutMs = options.timeoutMs ?? 5_000;
   }
 
   async generateKey(input: GenerateSessionKeyInput): Promise<{ key: string; tokenHash: string | null }> {
@@ -141,9 +149,13 @@ export class LiteLLMKeyClient {
     }
   }
 
-  /** The model allowlist of an existing key (e.g. the shared runtime key). */
+  /**
+   * The model allowlist of an existing key (e.g. the shared runtime key).
+   * A secret key is sent as LiteLLM's own SHA-256 token hash, so the secret
+   * never appears in a URL or an access log.
+   */
   async getKeyModels(key: string): Promise<string[]> {
-    const query = new URLSearchParams({ key });
+    const query = new URLSearchParams({ key: liteLLMKeyHash(key) });
     const body = await this.request('key/info', 'GET', `/key/info?${query}`);
     const parsed = KeyInfoSchema.safeParse(body);
     if (!parsed.success) {
