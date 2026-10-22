@@ -59,7 +59,10 @@ export class DockerContainerDriver {
 
   constructor(options?: ContainerManagerOptions, dockerInstance?: Dockerode) {
     this.docker = dockerInstance ?? new Dockerode();
-    this.networkName = options?.networkName ?? 'stablehand-agents';
+    // STABLEHAND_SANDBOX_NETWORK lets two stacks share a Docker host without
+    // their sandboxes resolving each other's `orchestrator`/`egress` aliases.
+    this.networkName = options?.networkName
+      ?? (process.env.STABLEHAND_SANDBOX_NETWORK?.trim() || 'stablehand-agents');
     this.imagePrefix = options?.imagePrefix ?? process.env.STABLEHAND_IMAGE_PREFIX ?? 'stablehand/harness';
     this.scopeId = resolveContainerScopeId(options?.scopeIdentity);
     this.dataVolume = process.env.STABLEHAND_DATA_VOLUME;
