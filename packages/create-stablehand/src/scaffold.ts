@@ -388,7 +388,7 @@ ANTHROPIC_API_KEY=
     join(projectDir, 'README.md'),
     `# ${packageName}
 
-Built with [Stablehand](https://github.com/stablehand/stablehand) -- the framework for vertical AI products.
+Built with [Stablehand](https://github.com/iofold/stablehand) -- the framework for vertical AI products.
 
 ## Quick Start
 
