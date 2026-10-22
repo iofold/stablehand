@@ -101,13 +101,17 @@ tool-calling.
 
 ## Built-in Providers
 
-`stablehand` ships with five standard providers:
+The default container (`packages/stablehand/src/config/container.ts`) registers these providers:
 
 1.  **Local**: Wraps tools defined directly in TypeScript with a `handler` function.
-2.  **HTTP**: Dynamically creates tools from a list of HTTP endpoints (REST APIs).
-3.  **MCP**: Connects to any Model Context Protocol server (stdio or HTTP).
-4.  **Composio**: Integrates with the Composio tool ecosystem.
-5.  **Artifact**: Provides daemon-location metadata for persistent file storage tools; bytes upload/download at the daemon location rather than through orchestrator byte proxying.
+2.  **HTTP**: Dynamically creates tools from a list of HTTP endpoints (REST APIs). One provider is registered per agent that declares HTTP tools.
+3.  **Artifact**: Provides daemon-location metadata for persistent file storage tools; bytes upload/download at the daemon location rather than through orchestrator byte proxying. Registered only when S3 storage is configured.
+4.  **Browser**: Provides daemon-location `browse` and `screenshot` tools backed by the Chromium in each harness image. Registered alongside Artifact.
+
+Two more provider classes are exported but **not registered by the default stack**, so agents cannot use them without custom wiring:
+
+- **MCP**: Connects to a Model Context Protocol server (stdio or HTTP).
+- **Composio**: Integrates with the Composio tool ecosystem.
 
 ## Step-by-Step: Creating a Custom Provider
 

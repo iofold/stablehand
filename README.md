@@ -26,6 +26,7 @@ Stablehand ships a Docker-first stack with a Fastify orchestrator, PostgreSQL pe
 - The supported workflow in this repo is the Docker stack.
 - Agent harnesses execute inside Docker containers (one per run) via the sandbox subsystem.
 - Firecracker sandbox execution is planned, not shipped.
+- The default container wires the Local, per-agent HTTP, Artifact, and Browser tool providers. MCP and Composio provider classes are exported from `packages/stablehand/src/tool/providers/`, but the default stack does not register them, so agents cannot reach MCP servers or Composio tools out of the box.
 - System persistence uses PostgreSQL. Stablehand does not ship a built-in knowledge/RAG search layer; the previously planned pgvector-backed knowledge search was removed and is not part of the active runtime.
 
 ## Quick Start
@@ -161,7 +162,7 @@ The shipped UI includes:
 | Frontend | React, Vite, Tailwind CSS |
 | State | Zustand |
 | Agent harnesses | LangGraph, Claude Agents, PI Agent |
-| Tool providers | Local, MCP, HTTP, Composio, Artifact (S3) |
+| Tool providers | Local, per-agent HTTP, Artifact and Browser (when S3 is configured) |
 | Testing | Vitest, agent-browser E2E certification |
 | Monorepo | pnpm workspaces |
 
@@ -186,7 +187,7 @@ The shipped UI includes:
 | [AG-UI Compatibility](docs/ag-ui-compat.md) | Drop-in AG-UI renderer support (CopilotKit, agui-hooks, assistant-ui) |
 | [React Chat Integration](docs/integrate-chat-ui.md) | Embed the Stablehand streaming chat UI with A2UI and HITL support |
 | [Embedding in Foreign Stacks](docs/embedding-in-foreign-stacks.md) | Integrating Stablehand into your existing application |
-| [Writing Tool Providers](docs/writing-tool-providers.md) | Adding custom tools (Local, MCP, HTTP, Composio) |
+| [Writing Tool Providers](docs/writing-tool-providers.md) | Adding custom tools and tool providers |
 | [Writing Skills](docs/writing-skills.md) | Current status of SDK-native workspace skills |
 | [Programmatic Tool Calling](docs/programmatic-tool-calling.md) | PTC API for structured tool invocations |
 | [HITL Approval Flow](docs/HITL_APPROVAL_FLOW.md) | Human-in-the-loop approval cards, editable docs, and field requests |
