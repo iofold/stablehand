@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-3 agents (LangGraph, Claude, PI) chained via events, 11 shared tools, HITL approval patterns. Canonical example for building multi-agent workflows in stablehand.
+3 agents (LangGraph, Claude, PI) chained via events, 11 shared tools (10 registered by default; `exec-command` is opt-in), HITL approval patterns. Canonical example for building multi-agent workflows in stablehand.
 
 ## STRUCTURE
 
@@ -22,7 +22,7 @@ tools/
   write-file.ts                 File writing (approval required, blocks .env/.git/.pem/.key)
   write-note.ts                 Note writing to notes/ dir (approval required)
   process-image.ts              Image metadata (no approval)
-  exec-command.ts               Shell execution (approval required, 30s timeout)
+  exec-command.ts               Host shell execution (OFF unless STABLEHAND_ENABLE_EXEC_COMMAND=1; approval required)
   manage-files.ts               FS ops: copy/move/symlink/stat/chmod (approval required)
 tests/
   manifest-validation.test.ts   YAML parsing, harness type, resource limits
@@ -30,6 +30,26 @@ tests/
   manifest-conversion.test.ts   YAML -> AgentDefinition conversion
 seed.ts                         Agent import + trigger registration script
 ```
+
+## HOST SHELL TOOL (`exec-command`) IS OPT-IN
+
+Project tools run inside the orchestrator process, not in the agent's sandbox. The orchestrator
+image ships this directory as its default project (`/app/project/tools`), and the stock compose
+orchestrator runs as root with the Docker socket mounted, so a shell tool there is a root shell
+on the host. `exec-command` therefore:
+
+- is not registered unless the orchestrator's environment sets `STABLEHAND_ENABLE_EXEC_COMMAND=1`
+  (exactly `1`; the module's default export is `undefined` otherwise, so tool discovery skips
+  it, and the handler refuses to run if called anyway);
+- when enabled, runs each command as an unprivileged user (`nobody`, 65534, when the
+  orchestrator is root; override with `STABLEHAND_EXEC_COMMAND_UID` / `_GID`, never `0`) with
+  only `PATH`, `HOME` and `LANG` in its environment;
+- still requires approval for every call.
+
+Enable it only on a disposable local stack, for example with a compose override that adds
+`STABLEHAND_ENABLE_EXEC_COMMAND: "1"` to the `orchestrator` service. `docker-compose.yml` does
+not pass the variable through. For shell access inside an agent's own sandbox, use the
+harness's native tools (Claude `Bash`, PI `bash`) instead.
 
 ## EVENT CHAIN FLOW
 

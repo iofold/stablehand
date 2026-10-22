@@ -77,8 +77,9 @@ test.describe('Error State Rendering Visual QA @extended', () => {
       name: `vqa-error-tool-${Date.now()}`,
       harness: 'langgraph',
       harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
-      systemPrompt: 'You must use the exec-command tool to run: exit 1. This will fail intentionally.',
-      tools: ['exec-command'],
+      // calculator, not exec-command: the host-shell example tool is opt-in and absent by default.
+      systemPrompt: 'You must use the calculator tool to divide 1 by 0. This will fail intentionally.',
+      tools: ['calculator'],
       description: 'VQA error test — tool failure',
     });
     agentId = agent.id;

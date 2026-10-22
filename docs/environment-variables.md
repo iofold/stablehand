@@ -112,6 +112,8 @@ Used for persistent artifact storage (file uploads/downloads).
 | `STABLEHAND_EGRESS_ALLOWLIST` | - | No | Comma-separated hosts allowed to bypass the egress block so agents can reach internal services on purpose. Matches exact host, parent domain, and `*.wildcard` patterns. | `hooks.internal.example.com,*.corp.example` |
 | `STABLEHAND_EGRESS_ALLOWLIST_ONLY` | `false` | No | When `true`, only allowlisted hosts are reachable (deny public destinations by default). | `true` |
 | `STABLEHAND_EGRESS_MAX_REDIRECTS` | `5` | No | Maximum redirects the egress guard follows while re-validating each hop. | `3` |
+| `STABLEHAND_ENABLE_EXEC_COMMAND` | unset (off) | No | Registers the kitchen-sink `exec-command` example tool. It runs shell commands on the orchestrator host, not in a sandbox, so it is off unless this is exactly `1`. Leave unset in any shared or production deployment; the compose stack does not pass it through. | `1` |
+| `STABLEHAND_EXEC_COMMAND_UID` / `STABLEHAND_EXEC_COMMAND_GID` | `65534` | No | User and group `exec-command` switches to when the orchestrator runs as root. `0` is refused. | `1000` |
 
 Scoped `cmk_...` keys are database records, not orchestrator environment
 variables. Create them with **Settings → Access keys**, `stablehand ops keys`, or

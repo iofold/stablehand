@@ -91,16 +91,12 @@ export async function startDev() {
     }
   }
 
-  // Discover tools
+  // Discover tools. A tool module can decline to register by leaving its default export
+  // undefined (the kitchen-sink exec-command does unless explicitly enabled), so list what
+  // was actually loaded rather than the files on disk.
   const toolsDir = join(cwd, 'tools');
-  const tools: string[] = [];
-  if (existsSync(toolsDir)) {
-    for (const entry of readdirSync(toolsDir, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
-        tools.push(entry.name.replace('.ts', ''));
-      }
-    }
-  }
+  const toolDefs: ToolDefinition[] = existsSync(toolsDir) ? await discoverTools(toolsDir) : [];
+  const tools = toolDefs.map((tool) => tool.name);
 
   // Print startup banner
   console.log(`
@@ -126,7 +122,6 @@ export async function startDev() {
   // ── Discover agents & tools from project directories ─
   let agentDefs: AgentDefinition[] = [];
   let manifestProjects: LoadedManifestProject[] = [];
-  let toolDefs: ToolDefinition[] = [];
 
   if (existsSync(agentsDir)) {
     agentDefs = await discoverAgents(agentsDir);
@@ -135,9 +130,6 @@ export async function startDev() {
       agentInputToDefinition(project.agentCreateInput, project.projectDir),
     );
     agentDefs = [...agentDefs, ...manifestDefs];
-  }
-  if (existsSync(toolsDir)) {
-    toolDefs = await discoverTools(toolsDir);
   }
 
   // Register discovered tools with the executor

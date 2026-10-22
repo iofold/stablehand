@@ -17,7 +17,7 @@
 | **list-directory** | I/O | `{path: string}` | Dir listing (100 entries max) | No | Yes | Filters .* and node_modules; shows size/type |
 | **search-files** | I/O | `{pattern: string, directory: string, fileExtensions?: string[]}` | Matches (50 max) | No | Yes | Regex search; depth limit 5; 50 result cap |
 | **manage-files** | I/O | `{operation: enum, source: string, destination?: string, mode?: string}` | JSON result | **Yes** | Yes | copy, move, symlink, stat, chmod; path traversal protected |
-| **exec-command** | Execution | `{command: string, timeout?: number}` | `{exitCode, stdout, stderr}` | **Yes** | Yes | 30s default timeout; 1MB stdout, 5KB stderr cap |
+| **exec-command** | Execution | `{command: string, timeout?: number}` | `{exitCode, stdout, stderr}` | **Yes** | Yes | **Off unless `STABLEHAND_ENABLE_EXEC_COMMAND=1`**: runs on the orchestrator host, not in a sandbox. When enabled: unprivileged uid (`nobody` when the orchestrator is root), no orchestrator env; 30s default timeout; 1MB stdout, 5KB stderr cap |
 | **execute-trade** | Business | `{action: enum, symbol: string, shares: number, orderType?: enum, limitPrice?: number}` | JSON order | **Yes** | N/A | Simulated execution; buy/sell; market/limit orders |
 | **process-image** | Media | `{filePath: string}` | JSON metadata | No | Yes | Size, format, base64 header; supports 8 formats |
 | **write-note** | I/O | `{filename: string, content: string}` | Confirmation | **Yes** | Yes | Restricted to notes/ directory; session-scoped |
@@ -350,7 +350,7 @@ hitl:
 ### Tools Requiring Approval (Kitchen-Sink)
 - `write-file` — file creation/modification
 - `manage-files` — copy, move, symlink, chmod
-- `exec-command` — shell execution
+- `exec-command` — shell execution on the orchestrator host (opt-in, `STABLEHAND_ENABLE_EXEC_COMMAND=1`)
 - `execute-trade` — financial transactions
 - `write-note` — note creation
 

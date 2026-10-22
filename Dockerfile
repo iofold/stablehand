@@ -91,6 +91,8 @@ COPY --from=build /app/packages/sandbox-daemon/dist/ packages/sandbox-daemon/dis
 COPY --from=build /app/packages/proto/dist/ packages/proto/dist/
 COPY --from=build /app/packages/proto/gen/ packages/proto/gen/
 
+# The kitchen-sink example is the default project. Its tools run in this (root) process;
+# exec-command, a host shell, stays unregistered unless STABLEHAND_ENABLE_EXEC_COMMAND=1.
 COPY packages/examples/kitchen-sink/tools/ /app/project/tools/
 COPY packages/examples/kitchen-sink/agents/ /app/project/agents/
 
