@@ -54,6 +54,12 @@ services:
       STABLEHAND_SANDBOX_EGRESS_PROXY_URL: ${STABLEHAND_SANDBOX_EGRESS_PROXY_URL-http://egress:8080}
       STABLEHAND_SANDBOX_EGRESS_CA_VOLUME: ${COMPOSE_PROJECT_NAME:-stablehand}_egress-ca-public
       STABLEHAND_TURN_TIMEOUT_MS: ${STABLEHAND_TURN_TIMEOUT_MS:-}
+      # HTTP tools and MCP servers are called from the orchestrator through the egress guard.
+      # Name internal hosts they may reach (e.g. notes-mcp for the content factory stand-in).
+      STABLEHAND_EGRESS_ALLOWLIST: ${STABLEHAND_EGRESS_ALLOWLIST:-}
+      STABLEHAND_EGRESS_ALLOWLIST_ONLY: ${STABLEHAND_EGRESS_ALLOWLIST_ONLY:-}
+      # Public URL of this deployment; MCP OAuth sign-ins redirect to <url>/api/mcp/oauth/callback.
+      STABLEHAND_PUBLIC_URL: ${STABLEHAND_PUBLIC_URL:-}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:${MINIO_API_PORT:-9000}}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-stablehand}
@@ -91,6 +97,20 @@ services:
         condition: service_healthy
       egress:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Synthetic meeting notes for the content factory example: a stand-in for Granola's MCP server.
+  # docker compose --profile content-factory up -d notes-mcp   (and STABLEHAND_EGRESS_ALLOWLIST=notes-mcp)
+  notes-mcp:
+    image: node:22-alpine
+    profiles: ["content-factory"]
+    command: ["node", "--experimental-strip-types", "/app/server.ts"]
+    working_dir: /app
+    volumes:
+      - ./packages/examples/content-factory/notes-mcp:/app:ro
+    environment:
+      PORT: "8787"
+      NOTES_MCP_TOKEN: ${NOTES_MCP_TOKEN:-}
     restart: unless-stopped
 
   # Sandbox egress broker (ctx-2ctd): mitmproxy with the Stablehand policy addon. Dual-homed so it
