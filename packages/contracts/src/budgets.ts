@@ -237,10 +237,10 @@ export type BudgetExceededResponse = z.infer<typeof BudgetExceededResponseSchema
 export type TurnSpendCapSource = z.infer<typeof TurnSpendCapSourceSchema>;
 export type TurnStopReason = z.infer<typeof TurnStopReasonSchema>;
 
-/** Dollar amount for stop-reason copy: cents above a cent, two significant digits below. */
+/** Dollar amount for stop-reason copy: cents from a cent up, two significant digits below. */
 export function formatSpendUsd(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '$0';
-  if (value < 0.0001) return '<$0.0001';
+  if (value < 0.000001) return '<$0.000001';
   if (value < 0.01) return `$${Number(value.toPrecision(2))}`;
   return `$${value.toFixed(2)}`;
 }

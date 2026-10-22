@@ -92,7 +92,10 @@ function forwardHeaders(
 ): OutgoingHttpHeaders {
   const forwarded: OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(headers)) {
-    if (value === undefined || HOP_BY_HOP_HEADERS.has(name.toLowerCase())) continue;
+    const lower = name.toLowerCase();
+    // Ask for identity encoding so the relay can always read an error body;
+    // the gateway sits on the internal network, compression buys nothing.
+    if (value === undefined || HOP_BY_HOP_HEADERS.has(lower) || lower === 'accept-encoding') continue;
     forwarded[name] = value;
   }
   forwarded.host = upstreamHost;
@@ -262,15 +265,12 @@ export class ModelGatewayRelay {
     status: number,
     correlationId: string | null,
   ): void {
+    // Error bodies are small; buffer the whole body so a non-budget error is
+    // relayed byte for byte, and only parse one of plausible size.
     const chunks: Buffer[] = [];
     let size = 0;
-    let overflowed = false;
     upstreamRes.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_ERROR_BODY_BYTES) {
-        overflowed = true;
-        return;
-      }
       chunks.push(chunk);
     });
     upstreamRes.on('error', (err) => {
@@ -280,7 +280,7 @@ export class ModelGatewayRelay {
     upstreamRes.on('end', () => {
       const raw = Buffer.concat(chunks);
       let parsed: unknown;
-      if (!overflowed) {
+      if (size <= MAX_ERROR_BODY_BYTES) {
         try {
           parsed = JSON.parse(raw.toString('utf8'));
         } catch {

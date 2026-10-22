@@ -1143,7 +1143,7 @@ describe('LangGraphHarness spend-cap stop', () => {
 
       expect(events[errorIndex]).toEqual({
         type: 'error',
-        error: expect.stringContaining('($0.2000 spent of $0.2000)'),
+        error: expect.stringContaining('($0.20 spent of $0.20)'),
         code: 'model_gateway_budget_exceeded',
         details: { spentUsd: 0.2, capUsd: 0.2 },
       });

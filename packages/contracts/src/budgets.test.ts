@@ -151,7 +151,8 @@ describe('turn stop reasons', () => {
     expect(formatSpendUsd(0.05)).toBe('$0.05');
     expect(formatSpendUsd(12.5)).toBe('$12.50');
     expect(formatSpendUsd(0.0012)).toBe('$0.0012');
-    expect(formatSpendUsd(0.00000004)).toBe('<$0.0001');
+    expect(formatSpendUsd(0.000053)).toBe('$0.000053');
+    expect(formatSpendUsd(0.00000004)).toBe('<$0.000001');
     expect(formatSpendUsd(0)).toBe('$0');
   });
 

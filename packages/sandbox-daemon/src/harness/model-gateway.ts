@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { formatSpendUsd } from '@stablehand/contracts';
 import {
   isCertifiedNativeModelGatewayProvider,
   type CanonicalLLMProvider,
@@ -153,9 +154,6 @@ export function isGatewayBudgetRefusalText(text: string): boolean {
   return BUDGET_REFUSAL_TEXT_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-function formatUsdAmount(value: number): string {
-  return `$${value.toFixed(value < 1 ? 4 : 2)}`;
-}
 
 type GatewayBudgetErrorEvent = Extract<AgentEvent, { type: 'error' }>;
 
@@ -163,7 +161,7 @@ export function gatewayBudgetErrorEvent(
   refusal: Pick<GatewayBudgetRefusal, 'spentUsd' | 'capUsd'>,
 ): GatewayBudgetErrorEvent {
   const amounts = refusal.capUsd !== null
-    ? ` (${refusal.spentUsd !== null ? `${formatUsdAmount(refusal.spentUsd)} spent of ` : ''}${formatUsdAmount(refusal.capUsd)})`
+    ? ` (${refusal.spentUsd !== null ? `${formatSpendUsd(refusal.spentUsd)} spent of ` : ''}${formatSpendUsd(refusal.capUsd)})`
     : '';
   return {
     type: 'error',

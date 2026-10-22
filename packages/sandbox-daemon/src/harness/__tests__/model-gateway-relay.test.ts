@@ -191,6 +191,29 @@ describe('ModelGatewayRelay', () => {
     expect(relay.hasBudgetRefusal('ct_none')).toBe(false);
   });
 
+  it('relays a large non-budget error body byte for byte', async () => {
+    const big = JSON.stringify({ error: { type: 'invalid_request_error', message: 'x'.repeat(200_000) } });
+    gateway.handler = (_req, res) => {
+      res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(big) });
+      res.end(big);
+    };
+
+    const response = await fetch(`${relayUrl}/v1/messages`, { method: 'POST', body: '{}' });
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe(big);
+  });
+
+  it('asks the gateway for identity encoding so error bodies stay readable', async () => {
+    await fetch(`${relayUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'accept-encoding': 'gzip, deflate, br' },
+      body: '{}',
+    });
+
+    expect(gateway.requests[0]?.headers['accept-encoding']).toBeUndefined();
+  });
+
   it('answers 502 with a typed body when the gateway is unreachable', async () => {
     await gateway.stop();
 
