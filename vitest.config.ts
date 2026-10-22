@@ -38,6 +38,8 @@ export default defineConfig({
     setupFiles: ['./tests/setup-strict.ts'],
     fileParallelism: false,
     teardownTimeout: 5000,
+    // Test-app teardown waits up to 30s for sandbox cleanup (tests/utils/test-app.ts).
+    hookTimeout: 45_000,
     server: {
       deps: {
         inline: [/@langchain\//, /@earendil-works\//],

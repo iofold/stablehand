@@ -129,9 +129,19 @@ export async function createTestDb(): Promise<TestDb> {
       repo,
       close: async () => {
         try {
-          await activeConn.pgClient`SELECT pg_advisory_unlock(${MIGRATION_ADVISORY_LOCK_ID})`;
+          // Leave nothing behind for the next file: suites built on createTestApp
+          // reuse this database without resetting it, so leftover rows (for
+          // example an enabled turn.started trigger) would leak into them. The
+          // next server boot re-runs migrations.
+          for (const table of ALL_TABLES) {
+            await activeConn.pgClient`DROP TABLE IF EXISTS ${activeConn.pgClient(table)} CASCADE`;
+          }
         } finally {
-          await activeConn.close();
+          try {
+            await activeConn.pgClient`SELECT pg_advisory_unlock(${MIGRATION_ADVISORY_LOCK_ID})`;
+          } finally {
+            await activeConn.close();
+          }
         }
       },
     };

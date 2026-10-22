@@ -34,7 +34,10 @@ interface CreateTestAppOptions {
   containerRetriesOnAlreadyExists?: number;
 }
 
-const TEST_CONTAINER_CLEANUP_TIMEOUT_MS = 5_000;
+// Sandbox starts that are still in flight when a suite ends can take well over
+// 5s to settle on a busy Docker host; cleanup is still asserted, just with a
+// realistic deadline.
+const TEST_CONTAINER_CLEANUP_TIMEOUT_MS = 30_000;
 const TEST_CONTAINER_CLEANUP_POLL_MS = 25;
 
 function buildContainerConfig(options: CreateTestAppOptions): StablehandConfig {
