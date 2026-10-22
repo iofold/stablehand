@@ -11,13 +11,28 @@ import {
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export interface TurnDeliveryContext {
-  readonly identity: TurnDeliveryIdentity;
+  /**
+   * Current delivery authority. Re-attach after an orchestrator takeover
+   * replaces it with the successor's higher fence (ADR 024).
+   */
+  identity: TurnDeliveryIdentity;
   readonly abortController: AbortController;
   readonly turnSecrets?: Readonly<Record<string, string>>;
   capability: TurnDeliveryCapability;
   leaseExpiresAtMs: number;
   expiryTimer?: NodeJS.Timeout;
   ptcToken?: string;
+  /**
+   * How long the turn may keep running without a reachable orchestrator
+   * (ADR 024). Zero keeps the legacy rule: capability expiry aborts the turn.
+   * Above zero, expiry only blocks callbacks until a successor re-attaches.
+   */
+  orphanGraceMs?: number;
+  /** Bumped whenever the capability is renewed or rotated. */
+  capabilityVersion?: number;
+  /** Called (grace mode only) when the capability expires instead of aborting. */
+  onCapabilityExpired?: () => void;
+  capabilityWaiters?: Set<() => void>;
 }
 
 const turnDeliveryStorage = new AsyncLocalStorage<TurnDeliveryContext>();
@@ -87,17 +102,37 @@ export function requireTurnDeliveryContext(
   return context;
 }
 
+function hasOrphanGrace(context: TurnDeliveryContext): boolean {
+  return (context.orphanGraceMs ?? 0) > 0;
+}
+
+/**
+ * Throws once the delivery can no longer make progress. In grace mode an
+ * expired capability does not stop the harness: only an abort does, and the
+ * orphan timer owns that decision (ADR 024).
+ */
 export function assertTurnDeliveryContextCurrent(
   context: TurnDeliveryContext,
   nowMs = Date.now(),
 ): void {
-  if (context.abortController.signal.aborted || nowMs >= context.leaseExpiresAtMs) {
+  if (context.abortController.signal.aborted) {
+    const reason = context.abortController.signal.reason;
+    throw hasOrphanGrace(context) && reason instanceof Error
+      ? reason
+      : expiredError(context.identity.turnId);
+  }
+  if (!hasOrphanGrace(context) && nowMs >= context.leaseExpiresAtMs) {
     const error = expiredError(context.identity.turnId);
-    if (!context.abortController.signal.aborted) {
-      context.abortController.abort(error);
-    }
+    context.abortController.abort(error);
     throw error;
   }
+}
+
+export function isTurnDeliveryCapabilityExpired(
+  context: TurnDeliveryContext,
+  nowMs = Date.now(),
+): boolean {
+  return nowMs >= context.leaseExpiresAtMs;
 }
 
 export function snapshotTurnDeliveryCapability(
@@ -105,7 +140,67 @@ export function snapshotTurnDeliveryCapability(
   nowMs = Date.now(),
 ): TurnDeliveryCapability {
   assertTurnDeliveryContextCurrent(context, nowMs);
+  if (nowMs >= context.leaseExpiresAtMs) {
+    throw expiredError(context.identity.turnId);
+  }
   return cloneTurnDeliveryCapability(context.capability);
+}
+
+/**
+ * Replace the delivery's authority in place (renewal or successor
+ * re-attach) and wake callbacks that were waiting for a usable capability.
+ */
+export function installTurnDeliveryCapability(
+  context: TurnDeliveryContext,
+  next: {
+    identity: TurnDeliveryIdentity;
+    capability: TurnDeliveryCapability;
+    leaseExpiresAtMs: number;
+  },
+): void {
+  context.identity = next.identity;
+  context.capability = next.capability;
+  context.leaseExpiresAtMs = next.leaseExpiresAtMs;
+  context.capabilityVersion = (context.capabilityVersion ?? 0) + 1;
+  armTurnDeliveryExpiry(context);
+  const waiters = context.capabilityWaiters;
+  if (waiters) {
+    context.capabilityWaiters = new Set();
+    for (const wake of waiters) wake();
+  }
+}
+
+/**
+ * Wait until the capability version moves past `afterVersion`, the deadline
+ * passes, or the delivery aborts. Resolves true only on a version change.
+ */
+export async function waitForTurnDeliveryCapabilityChange(
+  context: TurnDeliveryContext,
+  afterVersion: number,
+  deadlineMs: number,
+): Promise<boolean> {
+  if ((context.capabilityVersion ?? 0) > afterVersion) return true;
+  const signal = context.abortController.signal;
+  if (signal.aborted) return false;
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) return false;
+  return await new Promise<boolean>((resolve) => {
+    let timer: NodeJS.Timeout | undefined;
+    const waiters = context.capabilityWaiters ?? new Set<() => void>();
+    context.capabilityWaiters = waiters;
+    const finish = (changed: boolean): void => {
+      if (timer) clearTimeout(timer);
+      context.capabilityWaiters?.delete(onChange);
+      signal.removeEventListener('abort', onAbort);
+      resolve(changed);
+    };
+    const onChange = (): void => finish(true);
+    const onAbort = (): void => finish(false);
+    waiters.add(onChange);
+    signal.addEventListener('abort', onAbort, { once: true });
+    timer = setTimeout(() => finish(false), Math.min(remainingMs, MAX_TIMER_DELAY_MS));
+    timer.unref();
+  });
 }
 
 export function clearTurnDeliveryExpiry(context: TurnDeliveryContext): void {
@@ -133,7 +228,7 @@ export function resolvePtcTurnDeliveryContext(
   if (!context) return undefined;
   if (
     context.abortController.signal.aborted
-    || nowMs >= context.leaseExpiresAtMs
+    || (!hasOrphanGrace(context) && nowMs >= context.leaseExpiresAtMs)
   ) {
     revokePtcTurnDeliveryContext(context);
     return undefined;
@@ -157,6 +252,13 @@ export function armTurnDeliveryExpiry(context: TurnDeliveryContext): void {
   const schedule = (): void => {
     const remainingMs = context.leaseExpiresAtMs - Date.now();
     if (remainingMs <= 0) {
+      if (hasOrphanGrace(context)) {
+        // ADR 024: the orchestrator stopped renewing. Keep the harness
+        // running; callbacks wait for a successor and the orphan timer
+        // decides when to give up.
+        context.onCapabilityExpired?.();
+        return;
+      }
       revokePtcTurnDeliveryContext(context);
       if (!context.abortController.signal.aborted) {
         context.abortController.abort(expiredError(context.identity.turnId));

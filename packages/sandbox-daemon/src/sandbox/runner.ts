@@ -22,6 +22,9 @@ import type {
   OpenSessionRequest,
   OpenSessionResponse,
   DeliverTurnRequest,
+  AttachTurnRequest,
+  CancelTurnRequest,
+  CancelTurnResponse,
   RenewTurnDeliveryCapabilityRequest,
   RenewTurnDeliveryCapabilityResponse,
   SuspendSessionResponse,
@@ -35,6 +38,7 @@ import {
   TurnCompletedSchema,
   TurnFailedSchema,
   RenewTurnDeliveryCapabilityResponseSchema,
+  CancelTurnResponseSchema,
   SuspendSessionResponseSchema,
   KillSessionResponseSchema,
 } from '@stablehand/proto/sandbox/v1';
@@ -78,11 +82,17 @@ import {
   armTurnDeliveryExpiry,
   assertTurnDeliveryContextCurrent,
   clearTurnDeliveryExpiry,
+  installTurnDeliveryCapability,
+  isTurnDeliveryCapabilityExpired,
   registerPtcTurnDeliveryContext,
   revokePtcTurnDeliveryContext,
   runWithTurnDeliveryContext,
   type TurnDeliveryContext,
 } from './turn-delivery-context.js';
+import {
+  resolveTurnOrphanGraceMs,
+  TurnDeliveryJournal,
+} from './turn-delivery-journal.js';
 import { FanoutLimitHarnessTurnEnforcer, resolveTurnFanoutLimits } from '../harness/enforcement/fanout.js';
 
 async function mkdirSafe(dir: string): Promise<void> {
@@ -253,6 +263,8 @@ interface SessionContext {
     daemonPort: number;
   };
   readonly highestDeliveryByTurn: Map<string, TurnDeliveryIdentity>;
+  /** Re-attachable journals: the running delivery and recently finished ones. */
+  readonly journalsByTurn: Map<string, RetainedJournal>;
   activeDelivery: ActiveTurnDelivery | null;
   closing: boolean;
   killPromise?: Promise<KillSessionResponse>;
@@ -263,7 +275,23 @@ interface ActiveTurnDelivery {
   readonly context: TurnDeliveryContext;
   readonly settled: Promise<TurnDeliverySettlement>;
   readonly resolveSettlement: (settlement: TurnDeliverySettlement) => void;
+  readonly journal: TurnDeliveryJournal;
+  /** ADR 024 orphan grace; 0 means a dropped stream cancels the turn. */
+  readonly orphanGraceMs: number;
   settlement?: TurnDeliverySettlement;
+  consumer?: DeliveryConsumer;
+  orphanTimer?: NodeJS.Timeout;
+  pump?: Promise<void>;
+}
+
+interface DeliveryConsumer {
+  readonly controller: AbortController;
+}
+
+interface RetainedJournal {
+  readonly journal: TurnDeliveryJournal;
+  readonly graceMs: number;
+  expiryTimer?: NodeJS.Timeout;
 }
 
 type TurnDeliverySettlement = 'released' | 'poisoned';
@@ -589,6 +617,7 @@ export async function openSession(
       abortController: new AbortController(),
       ptcConfig,
       highestDeliveryByTurn: new Map(),
+      journalsByTurn: new Map(),
       activeDelivery: null,
       closing: false,
       poisoned: false,
@@ -623,19 +652,28 @@ function createActiveTurnDelivery(
   const settled = new Promise<TurnDeliverySettlement>((resolve) => {
     resolveSettlement = resolve;
   });
+  const orphanGraceMs = resolveTurnOrphanGraceMs();
   const context: TurnDeliveryContext = {
     identity: parsed.identity,
     capability: parsed.capability,
     leaseExpiresAtMs: parsed.leaseExpiresAtMs,
     abortController: new AbortController(),
     turnSecrets: Object.freeze({ ...turnSecrets }),
+    orphanGraceMs,
+    capabilityVersion: 0,
   };
 
-  return {
+  const delivery: ActiveTurnDelivery = {
     context,
     settled,
     resolveSettlement,
+    journal: new TurnDeliveryJournal(parsed.identity.turnId),
+    orphanGraceMs,
   };
+  context.onCapabilityExpired = () => {
+    startOrphanTimer(delivery, 'delivery capability expired without renewal');
+  };
+  return delivery;
 }
 
 function releaseActiveTurnDelivery(
@@ -644,6 +682,7 @@ function releaseActiveTurnDelivery(
 ): void {
   if (delivery.settlement) return;
   delivery.settlement = 'released';
+  clearOrphanTimer(delivery);
   clearTurnDeliveryExpiry(delivery.context);
   revokePtcTurnDeliveryContext(delivery.context);
   if (!delivery.context.abortController.signal.aborted) {
@@ -665,6 +704,7 @@ function poisonActiveTurnDelivery(
   if (delivery.settlement) return;
   delivery.settlement = 'poisoned';
   sessionContext.poisoned = true;
+  clearOrphanTimer(delivery);
   clearTurnDeliveryExpiry(delivery.context);
   revokePtcTurnDeliveryContext(delivery.context);
   if (!delivery.context.abortController.signal.aborted) {
@@ -903,9 +943,10 @@ export async function renewTurnDeliveryCapability(
     );
   }
 
-  active.context.capability = parsed.capability;
-  active.context.leaseExpiresAtMs = parsed.leaseExpiresAtMs;
-  armTurnDeliveryExpiry(active.context);
+  installTurnDeliveryCapability(active.context, parsed);
+  if (active.consumer) {
+    clearOrphanTimer(active);
+  }
 
   return create(RenewTurnDeliveryCapabilityResponseSchema, { renewed: true });
 }
@@ -939,12 +980,174 @@ export function agentEventCarriesOutput(event: AgentEvent): boolean {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Delivery consumers and the orphan grace window (ADR 024)                   */
+/* -------------------------------------------------------------------------- */
+
+const CONSUMER_DETACHED = new ConnectError('Turn delivery consumer detached', Code.Canceled);
+
+function abortTurnDelivery(delivery: ActiveTurnDelivery, reason: unknown): void {
+  revokePtcTurnDeliveryContext(delivery.context);
+  if (!delivery.context.abortController.signal.aborted) {
+    delivery.context.abortController.abort(reason);
+  }
+}
+
+function clearOrphanTimer(delivery: ActiveTurnDelivery): void {
+  if (delivery.orphanTimer) {
+    clearTimeout(delivery.orphanTimer);
+    delivery.orphanTimer = undefined;
+  }
+}
+
+/**
+ * The orchestrator is gone (stream dropped or capability lapsed). Keep the
+ * harness running for the grace window; abort only if nobody re-attaches.
+ */
+function startOrphanTimer(delivery: ActiveTurnDelivery, reason: string): void {
+  if (delivery.settlement || delivery.orphanTimer) return;
+  if (delivery.context.abortController.signal.aborted) return;
+  const graceMs = delivery.orphanGraceMs;
+  const turnId = delivery.context.identity.turnId;
+  console.error(
+    `[sandbox] turn ${turnId} lost its orchestrator (${reason}); `
+    + `keeping it running for up to ${graceMs}ms while waiting for a re-attach`,
+  );
+  delivery.orphanTimer = setTimeout(() => {
+    delivery.orphanTimer = undefined;
+    if (delivery.settlement) return;
+    if (
+      delivery.consumer
+      && !isTurnDeliveryCapabilityExpired(delivery.context)
+    ) {
+      return;
+    }
+    console.error(
+      `[sandbox] turn ${turnId}: no orchestrator re-attached within ${graceMs}ms; abandoning the turn`,
+    );
+    abortTurnDelivery(delivery, new ConnectError(
+      `No orchestrator re-attached within ${Math.round(graceMs / 1000)}s after it disconnected (${reason}); the turn was abandoned`,
+      Code.DeadlineExceeded,
+    ));
+  }, graceMs);
+  delivery.orphanTimer.unref();
+}
+
+function attachDeliveryConsumer(delivery: ActiveTurnDelivery): DeliveryConsumer {
+  const previous = delivery.consumer;
+  const consumer: DeliveryConsumer = { controller: new AbortController() };
+  delivery.consumer = consumer;
+  if (previous && !previous.controller.signal.aborted) {
+    previous.controller.abort(new ConnectError(
+      'Turn delivery stream superseded by a re-attached consumer',
+      Code.Aborted,
+    ));
+  }
+  if (!isTurnDeliveryCapabilityExpired(delivery.context)) {
+    clearOrphanTimer(delivery);
+  }
+  return consumer;
+}
+
+function detachDeliveryConsumer(
+  delivery: ActiveTurnDelivery,
+  consumer: DeliveryConsumer,
+  reason: string,
+): void {
+  if (delivery.consumer !== consumer) return;
+  delivery.consumer = undefined;
+  if (delivery.settlement || delivery.orphanGraceMs <= 0) return;
+  startOrphanTimer(delivery, reason);
+}
+
+/** Stream an in-flight delivery's journal to one consumer. */
+async function* streamActiveDelivery(
+  delivery: ActiveTurnDelivery,
+  afterSeq: number,
+  requestSignal?: AbortSignal,
+): AsyncGenerator<SessionEvent> {
+  const consumer = attachDeliveryConsumer(delivery);
+  let detachReason = 'turn stream closed';
+  let unlinkRequestAbort: (() => void) | undefined;
+  if (requestSignal) {
+    const onRequestAbort = (): void => {
+      if (delivery.orphanGraceMs <= 0) {
+        // Legacy contract: dropping the stream cancels the turn; keep reading
+        // so the consumer still receives the terminal frame.
+        abortTurnDelivery(
+          delivery,
+          requestSignal.reason
+            ?? new ConnectError('Turn delivery request cancelled', Code.Canceled),
+        );
+        return;
+      }
+      detachReason = 'turn stream disconnected';
+      if (!consumer.controller.signal.aborted) {
+        consumer.controller.abort(CONSUMER_DETACHED);
+      }
+    };
+    if (requestSignal.aborted) {
+      onRequestAbort();
+    } else {
+      requestSignal.addEventListener('abort', onRequestAbort, { once: true });
+      unlinkRequestAbort = () => requestSignal.removeEventListener('abort', onRequestAbort);
+    }
+  }
+
+  try {
+    for await (const event of delivery.journal.read(afterSeq, consumer.controller.signal)) {
+      yield event;
+    }
+  } catch (error) {
+    if (error === CONSUMER_DETACHED) {
+      return;
+    }
+    throw error;
+  } finally {
+    unlinkRequestAbort?.();
+    detachDeliveryConsumer(delivery, consumer, detachReason);
+  }
+}
+
+function retainJournal(ctx: SessionContext, journal: TurnDeliveryJournal, graceMs: number): void {
+  // Finished journals of other turns are no longer re-attachable targets.
+  for (const [turnId, retained] of ctx.journalsByTurn) {
+    if (turnId !== journal.turnId && retained.journal.finished) {
+      if (retained.expiryTimer) clearTimeout(retained.expiryTimer);
+      ctx.journalsByTurn.delete(turnId);
+    }
+  }
+  const previous = ctx.journalsByTurn.get(journal.turnId);
+  if (previous?.expiryTimer) clearTimeout(previous.expiryTimer);
+  ctx.journalsByTurn.set(journal.turnId, { journal, graceMs });
+}
+
+function expireFinishedJournal(ctx: SessionContext, journal: TurnDeliveryJournal): void {
+  const retained = ctx.journalsByTurn.get(journal.turnId);
+  if (!retained || retained.journal !== journal) return;
+  if (retained.graceMs <= 0) {
+    ctx.journalsByTurn.delete(journal.turnId);
+    return;
+  }
+  // A takeover may still need the terminal frame: the old owner can die
+  // after reading it but before finalizing the turn.
+  retained.expiryTimer = setTimeout(() => {
+    const current = ctx.journalsByTurn.get(journal.turnId);
+    if (current?.journal === journal) {
+      ctx.journalsByTurn.delete(journal.turnId);
+    }
+  }, retained.graceMs);
+  retained.expiryTimer.unref();
+}
+
 /**
  * Deliver a turn to the active session and stream back SessionEvent envelopes.
  *
- * Yields AG-UI events and MessageCommitted frames as they arrive, then yields
- * a TurnCompleted or TurnFailed terminal event. Phase transitions and state
- * collection happen inline so the session can be suspended at any safe point.
+ * The harness runs in a pump that writes every SessionEvent to the delivery
+ * journal; this stream is one consumer of it. With an orphan grace window
+ * (ADR 024) a dropped stream only detaches: the turn keeps running and a
+ * successor orchestrator re-attaches with AttachTurn. Without one, dropping
+ * the stream cancels the turn as before.
  *
  * @param req  - The proto DeliverTurnRequest (sessionId, messages, turnId).
  * @param opts - Optional abort signal and approval callback.
@@ -973,6 +1176,110 @@ export async function* deliverTurn(
     return;
   }
   const delivery = await admitTurnDelivery(ctx, req, opts?.signal);
+  retainJournal(ctx, delivery.journal, delivery.orphanGraceMs);
+  delivery.pump = runTurnPump(ctx, delivery, req, opts?.onApprovalNeeded)
+    .finally(() => expireFinishedJournal(ctx, delivery.journal));
+  yield* streamActiveDelivery(delivery, 0, opts?.signal);
+}
+
+/**
+ * Re-attach to a delivery that outlived its consumer (ADR 024). The caller
+ * presents a capability whose fence is at least the delivery's current one;
+ * a higher fence becomes the delivery's authority for every later callback.
+ * Events after `after_delivery_seq` are replayed from the journal, then the
+ * stream continues live.
+ */
+export async function* attachTurn(
+  req: AttachTurnRequest,
+  opts?: { signal?: AbortSignal },
+): AsyncGenerator<SessionEvent> {
+  const ctx = await getContextForSession(req.sessionId, 'attachTurn');
+  const turnId = req.turnId;
+  const retained = ctx.journalsByTurn.get(turnId);
+  if (!retained) {
+    throw new ConnectError(
+      `[sandbox] attachTurn: no delivery of turn ${turnId} is running or retained in session ${ctx.sessionId}`,
+      Code.NotFound,
+    );
+  }
+  const parsed = parseTurnDeliveryCapability(
+    req.deliveryCapability,
+    {
+      turnId,
+      sandboxSessionId: req.sessionId,
+      agentId: ctx.agentId,
+    },
+  );
+  assertMonotonicTurnDelivery(ctx.highestDeliveryByTurn.get(turnId), parsed.identity);
+  const afterSeq = Number(req.afterDeliverySeq);
+  if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) {
+    throw new ConnectError('[sandbox] attachTurn: invalid after_delivery_seq', Code.InvalidArgument);
+  }
+  ctx.highestDeliveryByTurn.set(turnId, parsed.identity);
+
+  const journal = retained.journal;
+  const active = ctx.activeDelivery;
+  console.error(
+    `[sandbox] turn ${turnId} re-attached by owner ${parsed.identity.ownerId} `
+    + `(fence ${parsed.identity.fenceToken}) after seq ${afterSeq}/${journal.lastSeq}`
+    + `${journal.finished ? ' (delivery already finished)' : ''}`,
+  );
+  if (active && active.journal === journal && !active.settlement) {
+    installTurnDeliveryCapability(active.context, parsed);
+    yield* streamActiveDelivery(active, afterSeq, opts?.signal);
+    return;
+  }
+
+  const readSignal = opts?.signal ?? new AbortController().signal;
+  yield* journal.read(afterSeq, readSignal);
+}
+
+/**
+ * Explicitly cancel a running delivery. Required because dropping a stream
+ * no longer cancels the turn when an orphan grace window is configured.
+ */
+export async function cancelTurn(req: CancelTurnRequest): Promise<CancelTurnResponse> {
+  const ctx = await getContextForSession(req.sessionId, 'cancelTurn');
+  const active = ctx.activeDelivery;
+  if (!active || active.settlement || active.context.identity.turnId !== req.turnId) {
+    return create(CancelTurnResponseSchema, { cancelled: false });
+  }
+  // Expiry does not matter for cancellation; the fence does: a superseded
+  // owner must not cancel the turn its successor adopted.
+  const parsed = parseTurnDeliveryCapability(
+    req.deliveryCapability,
+    {
+      turnId: req.turnId,
+      sandboxSessionId: req.sessionId,
+      agentId: ctx.agentId,
+    },
+    0,
+  );
+  if (parsed.identity.fenceToken < active.context.identity.fenceToken) {
+    throw new ConnectError(
+      'Stale turn delivery fence cannot cancel the current delivery',
+      Code.FailedPrecondition,
+    );
+  }
+  const reason = req.reason.trim() || 'cancelled by the orchestrator';
+  console.error(`[sandbox] turn ${req.turnId} cancelled: ${reason}`);
+  abortTurnDelivery(active, new ConnectError(`Turn cancelled: ${reason}`, Code.Canceled));
+  return create(CancelTurnResponseSchema, { cancelled: true });
+}
+
+/**
+ * Run one delivery's harness turn, writing every SessionEvent to the
+ * delivery journal. Ends with a TurnCompleted or TurnFailed frame (or no
+ * terminal frame when suspending at a safe point) and finishes the journal.
+ */
+async function runTurnPump(
+  ctx: SessionContext,
+  delivery: ActiveTurnDelivery,
+  req: DeliverTurnRequest,
+  onApprovalNeeded?: ApprovalCallback,
+): Promise<void> {
+  const turnId = req.turnId;
+  const journal = delivery.journal;
   let seq = 0;
   let sawSemanticEnd = false;
   let attemptSawOutput = false;
@@ -986,27 +1293,6 @@ export async function* deliverTurn(
   let iteratorClosePromise: Promise<void> | undefined;
   let deliveryReleased = false;
   const pendingTurnRequests = new Map<string, string>();
-  let unlinkRequestAbort: (() => void) | undefined;
-
-  if (opts?.signal) {
-    const abortFromRequest = (): void => {
-      revokePtcTurnDeliveryContext(delivery.context);
-      if (!delivery.context.abortController.signal.aborted) {
-        delivery.context.abortController.abort(
-          opts.signal?.reason
-            ?? new ConnectError('Turn delivery request cancelled', Code.Canceled),
-        );
-      }
-    };
-    if (opts.signal.aborted) {
-      abortFromRequest();
-    } else {
-      opts.signal.addEventListener('abort', abortFromRequest, { once: true });
-      unlinkRequestAbort = () => {
-        opts.signal?.removeEventListener('abort', abortFromRequest);
-      };
-    }
-  }
 
   const releaseDelivery = (): void => {
     if (deliveryReleased) return;
@@ -1108,206 +1394,204 @@ export async function* deliverTurn(
   };
 
   try {
-    if (ctx.stateCollector.hasCompletedTurn(turnId)) {
-      console.error(
-        `[sandbox] turn ${turnId} already completed — acknowledging duplicate delivery without invoking harness`,
-      );
-      releaseDelivery();
-      yield create(SessionEventSchema, {
-        payload: {
-          case: 'turnCompleted',
-          value: create(TurnCompletedSchema, { turnId }),
-        },
-      });
-      return;
-    }
-
-    delivery.context.abortController.signal.throwIfAborted();
-
-    const ptcToken = registerPtcTurnDeliveryContext(delivery.context);
-    await generatePtcScripts({
-      ...ctx.ptcConfig,
-      token: ptcToken,
-    });
-    assertTurnDeliveryContextCurrent(delivery.context);
-
-    ctx.phaseTracker.startTurn(turnId);
-    phaseStarted = true;
-    ctx.stateCollector.startTurn(turnId);
-    stateStarted = true;
-
-    const input = protoDeliverTurnToInput(req);
-    const turnSignals = [
-      ctx.abortController.signal,
-      delivery.context.abortController.signal,
-      ...(opts?.signal ? [opts.signal] : []),
-    ];
-    const turnSignal = AbortSignal.any(turnSignals);
-    turnSignal.throwIfAborted();
-    const context = {
-      signal: turnSignal,
-      onApprovalNeeded: opts?.onApprovalNeeded,
-      turnSecrets: delivery.context.turnSecrets,
-    };
-
-    // The capability deadline is checked once immediately before obtaining the
-    // harness iterator and again before every state-advancing next() call.
-    const obtainIterator = () => {
-      assertTurnDeliveryContextCurrent(delivery.context);
-      const iterable = runWithTurnDeliveryContext(
-        delivery.context,
-        () => ctx.session.deliverTurn(input, context),
-      );
-      return runWithTurnDeliveryContext(
-        delivery.context,
-        () => iterable[Symbol.asyncIterator](),
-      );
-    };
-    iterator = obtainIterator();
-
-    while (true) {
-      assertTurnDeliveryContextCurrent(delivery.context);
-      const next = await runWithTurnDeliveryContext(
-        delivery.context,
-        () => iterator!.next(),
-      );
-      if (turnSignal.aborted) {
-        console.error(`[sandbox] turn ${turnId} aborted mid-stream after ${seq} events`);
-        abortBreak = true;
-        if (next.done) iteratorDone = true;
-        break;
-      }
-      if (next.done) {
-        // ctx-w03u: a stream that ended cleanly but provably produced nothing
-        // (no text, no tool or approval activity, no committed message, no
-        // usage) gets exactly one in-place re-delivery. Nothing external has
-        // happened, so retrying cannot double a side effect; the retried
-        // attempt continues the same gRPC stream.
-        if (
-          !emptyRetryUsed
-          && sawSemanticEnd
-          && !attemptSawOutput
-          && pendingTurnRequests.size === 0
-        ) {
-          emptyRetryUsed = true;
-          sawSemanticEnd = false;
-          console.error(
-            `[sandbox] turn ${turnId} model stream completed provably empty after ${seq} events — retrying delivery once`,
-          );
-          iterator = obtainIterator();
-          continue;
-        }
-        iteratorDone = true;
-        break;
-      }
-      const event = next.value;
-      if (!event || !event.type) continue;
-
-      seq++;
-      if (agentEventCarriesOutput(event)) {
-        attemptSawOutput = true;
-      }
-
-      if (event.type === 'tool_call_start' && typeof event.id === 'string') {
-        ctx.phaseTracker.noteToolSpanStart(event.id);
-      } else if (event.type === 'tool_call_end' && typeof event.id === 'string') {
-        ctx.phaseTracker.noteToolSpanEnd(event.id);
-      }
-      const newPhase = phaseForEvent(event);
-      if (newPhase) {
-        ctx.phaseTracker.setPhase(newPhase);
-      }
-
-      ctx.stateCollector.processTurnEvent(event);
-      updatePendingTurnRequests(pendingTurnRequests, event);
-      if (event.type === 'done' || event.type === 'error') {
-        sawSemanticEnd = true;
-      }
-
-      if (event.type === 'message_committed') {
-        yield messageToCommittedEvent(event, turnId, seq);
-      } else {
-        yield agentEventToSessionEvent(event);
-      }
-
-      if (ctx.phaseTracker.checkSuspendAtSafePoint()) {
+    try {
+      if (ctx.stateCollector.hasCompletedTurn(turnId)) {
         console.error(
-          `[sandbox] turn ${turnId} suspending at phase="${ctx.phaseTracker.getPhase()}" after event #${seq}`,
+          `[sandbox] turn ${turnId} already completed — acknowledging duplicate delivery without invoking harness`,
         );
-        suspendBreak = true;
-        break;
+        releaseDelivery();
+        journal.append(create(SessionEventSchema, {
+          payload: {
+            case: 'turnCompleted',
+            value: create(TurnCompletedSchema, { turnId }),
+          },
+        }));
+        return;
       }
-    }
 
-    await closeIterator();
+      delivery.context.abortController.signal.throwIfAborted();
 
-    let terminalEvent: SessionEvent | undefined;
-    if (sawSemanticEnd && pendingTurnRequests.size === 0 && !abortBreak) {
-      // Record acceptance before yielding the terminal acknowledgement. If the
-      // orchestrator disappears after receiving this frame but before marking
-      // its durable resume attempt complete, a retry with the same turn ID
-      // must stop here rather than invoke the model twice.
-      ctx.stateCollector.endTurn(true);
-      stateStarted = false;
-      terminalEvent = create(SessionEventSchema, {
-        payload: {
-          case: 'turnCompleted',
-          value: create(TurnCompletedSchema, { turnId }),
-        },
+      const ptcToken = registerPtcTurnDeliveryContext(delivery.context);
+      await generatePtcScripts({
+        ...ctx.ptcConfig,
+        token: ptcToken,
       });
+      assertTurnDeliveryContextCurrent(delivery.context);
 
-      console.error(`[sandbox] turn ${turnId} completed — ${seq} events emitted`);
-    } else if (suspendBreak && !abortBreak) {
-      console.error(
-        `[sandbox] turn ${turnId} suspended after ${seq} events — no terminal frame emitted`,
-      );
-    } else {
-      const abortReason = turnSignal.reason instanceof Error
-        ? turnSignal.reason.message
-        : 'delivery aborted';
-      const cause = abortBreak
-        ? abortReason
-        : 'harness stream ended without done event';
-      const pendingSummary = pendingTurnRequestSummary(pendingTurnRequests);
-      terminalEvent = create(SessionEventSchema, {
+      ctx.phaseTracker.startTurn(turnId);
+      phaseStarted = true;
+      ctx.stateCollector.startTurn(turnId);
+      stateStarted = true;
+
+      const input = protoDeliverTurnToInput(req);
+      const turnSignal = AbortSignal.any([
+        ctx.abortController.signal,
+        delivery.context.abortController.signal,
+      ]);
+      turnSignal.throwIfAborted();
+      const context = {
+        signal: turnSignal,
+        onApprovalNeeded,
+        turnSecrets: delivery.context.turnSecrets,
+      };
+
+      // The capability deadline is checked once immediately before obtaining the
+      // harness iterator and again before every state-advancing next() call.
+      const obtainIterator = () => {
+        assertTurnDeliveryContextCurrent(delivery.context);
+        const iterable = runWithTurnDeliveryContext(
+          delivery.context,
+          () => ctx.session.deliverTurn(input, context),
+        );
+        return runWithTurnDeliveryContext(
+          delivery.context,
+          () => iterable[Symbol.asyncIterator](),
+        );
+      };
+      iterator = obtainIterator();
+
+      while (true) {
+        assertTurnDeliveryContextCurrent(delivery.context);
+        const next = await runWithTurnDeliveryContext(
+          delivery.context,
+          () => iterator!.next(),
+        );
+        if (turnSignal.aborted) {
+          console.error(`[sandbox] turn ${turnId} aborted mid-stream after ${seq} events`);
+          abortBreak = true;
+          if (next.done) iteratorDone = true;
+          break;
+        }
+        if (next.done) {
+          // ctx-w03u: a stream that ended cleanly but provably produced nothing
+          // (no text, no tool or approval activity, no committed message, no
+          // usage) gets exactly one in-place re-delivery. Nothing external has
+          // happened, so retrying cannot double a side effect; the retried
+          // attempt continues the same journal.
+          if (
+            !emptyRetryUsed
+            && sawSemanticEnd
+            && !attemptSawOutput
+            && pendingTurnRequests.size === 0
+          ) {
+            emptyRetryUsed = true;
+            sawSemanticEnd = false;
+            console.error(
+              `[sandbox] turn ${turnId} model stream completed provably empty after ${seq} events — retrying delivery once`,
+            );
+            iterator = obtainIterator();
+            continue;
+          }
+          iteratorDone = true;
+          break;
+        }
+        const event = next.value;
+        if (!event || !event.type) continue;
+
+        seq++;
+        if (agentEventCarriesOutput(event)) {
+          attemptSawOutput = true;
+        }
+
+        if (event.type === 'tool_call_start' && typeof event.id === 'string') {
+          ctx.phaseTracker.noteToolSpanStart(event.id);
+        } else if (event.type === 'tool_call_end' && typeof event.id === 'string') {
+          ctx.phaseTracker.noteToolSpanEnd(event.id);
+        }
+        const newPhase = phaseForEvent(event);
+        if (newPhase) {
+          ctx.phaseTracker.setPhase(newPhase);
+        }
+
+        ctx.stateCollector.processTurnEvent(event);
+        updatePendingTurnRequests(pendingTurnRequests, event);
+        if (event.type === 'done' || event.type === 'error') {
+          sawSemanticEnd = true;
+        }
+
+        if (event.type === 'message_committed') {
+          journal.append(messageToCommittedEvent(event, turnId, seq));
+        } else {
+          journal.append(agentEventToSessionEvent(event));
+        }
+
+        if (ctx.phaseTracker.checkSuspendAtSafePoint()) {
+          console.error(
+            `[sandbox] turn ${turnId} suspending at phase="${ctx.phaseTracker.getPhase()}" after event #${seq}`,
+          );
+          suspendBreak = true;
+          break;
+        }
+      }
+
+      await closeIterator();
+
+      let terminalEvent: SessionEvent | undefined;
+      if (sawSemanticEnd && pendingTurnRequests.size === 0 && !abortBreak) {
+        // Record acceptance before writing the terminal acknowledgement. If the
+        // orchestrator disappears after receiving this frame but before marking
+        // its durable resume attempt complete, a retry with the same turn ID
+        // must stop here rather than invoke the model twice.
+        ctx.stateCollector.endTurn(true);
+        stateStarted = false;
+        terminalEvent = create(SessionEventSchema, {
+          payload: {
+            case: 'turnCompleted',
+            value: create(TurnCompletedSchema, { turnId }),
+          },
+        });
+
+        console.error(`[sandbox] turn ${turnId} completed — ${seq} events emitted`);
+      } else if (suspendBreak && !abortBreak) {
+        console.error(
+          `[sandbox] turn ${turnId} suspended after ${seq} events — no terminal frame emitted`,
+        );
+      } else {
+        const abortReason = turnSignal.reason instanceof Error
+          ? turnSignal.reason.message
+          : 'delivery aborted';
+        const cause = abortBreak
+          ? abortReason
+          : 'harness stream ended without done event';
+        const pendingSummary = pendingTurnRequestSummary(pendingTurnRequests);
+        terminalEvent = create(SessionEventSchema, {
+          payload: {
+            case: 'turnFailed',
+            value: create(TurnFailedSchema, {
+              turnId,
+              errorMessage: `${cause}; pending requests: ${pendingSummary}`,
+            }),
+          },
+        });
+
+        console.error(
+          `[sandbox] turn ${turnId} failed — ${cause}; pending requests: ${pendingSummary}; ${seq} events emitted`,
+        );
+      }
+
+      releaseDelivery();
+      if (terminalEvent) {
+        journal.append(terminalEvent);
+      }
+    } catch (err: unknown) {
+      try {
+        await closeIterator();
+      } catch (closeError) {
+        poisonDelivery(closeError);
+      }
+      releaseDelivery();
+      journal.append(create(SessionEventSchema, {
         payload: {
           case: 'turnFailed',
           value: create(TurnFailedSchema, {
             turnId,
-            errorMessage: `${cause}; pending requests: ${pendingSummary}`,
+            errorMessage: err instanceof Error ? err.message : String(err),
           }),
         },
-      });
+      }));
 
-      console.error(
-        `[sandbox] turn ${turnId} failed — ${cause}; pending requests: ${pendingSummary}; ${seq} events emitted`,
-      );
-    }
-
-    releaseDelivery();
-    if (terminalEvent) {
-      yield terminalEvent;
-    }
-  } catch (err: unknown) {
-    try {
-      await closeIterator();
-    } catch (closeError) {
-      poisonDelivery(closeError);
-    }
-    releaseDelivery();
-    yield create(SessionEventSchema, {
-      payload: {
-        case: 'turnFailed',
-        value: create(TurnFailedSchema, {
-          turnId,
-          errorMessage: err instanceof Error ? err.message : String(err),
-        }),
-      },
-    });
-
-    console.error(`[sandbox] turn ${turnId} failed:`, err);
-  } finally {
-    try {
+      console.error(`[sandbox] turn ${turnId} failed:`, err);
+    } finally {
       if (!deliveryReleased && delivery.settlement !== 'poisoned') {
         try {
           await closeIterator();
@@ -1316,9 +1600,14 @@ export async function* deliverTurn(
         }
         releaseDelivery();
       }
-    } finally {
-      unlinkRequestAbort?.();
     }
+    journal.finish();
+  } catch (fatal: unknown) {
+    // Only an unprovable teardown (poisoned session) reaches here; surface it
+    // to every consumer instead of a terminal frame.
+    journal.fail(fatal);
+  } finally {
+    journal.finish();
   }
 }
 
@@ -1508,6 +1797,10 @@ async function killSessionContext(ctx: SessionContext): Promise<KillSessionRespo
   }
   openingContext = null;
   setSessionTools([]);
+  for (const retained of ctx.journalsByTurn.values()) {
+    if (retained.expiryTimer) clearTimeout(retained.expiryTimer);
+  }
+  ctx.journalsByTurn.clear();
 
   return create(KillSessionResponseSchema, { finalStatus: 'killed' });
 }

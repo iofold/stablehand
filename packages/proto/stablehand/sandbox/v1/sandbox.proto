@@ -6,6 +6,13 @@ import "google/protobuf/struct.proto";
 service HarnessService {
   rpc OpenSession(OpenSessionRequest) returns (OpenSessionResponse);
   rpc DeliverTurn(DeliverTurnRequest) returns (stream SessionEvent);
+  // Re-attach to a turn delivery that outlived its consumer (orchestrator
+  // crash takeover, ADR 024). Replays the delivery journal after
+  // after_delivery_seq, then streams live events.
+  rpc AttachTurn(AttachTurnRequest) returns (stream SessionEvent);
+  // Explicitly stop a turn delivery. Dropping a DeliverTurn/AttachTurn stream
+  // only detaches; cancellation must be requested with this RPC.
+  rpc CancelTurn(CancelTurnRequest) returns (CancelTurnResponse);
   rpc RenewTurnDeliveryCapability(RenewTurnDeliveryCapabilityRequest) returns (RenewTurnDeliveryCapabilityResponse);
   rpc SuspendSession(SuspendSessionRequest) returns (SuspendSessionResponse);
   rpc KillSession(KillSessionRequest) returns (KillSessionResponse);
@@ -70,6 +77,24 @@ message TurnDeliveryCapability {
   string signature = 7;
 }
 
+message AttachTurnRequest {
+  string session_id = 1;
+  string turn_id = 2;
+  TurnDeliveryCapability delivery_capability = 3;
+  uint64 after_delivery_seq = 4;
+}
+
+message CancelTurnRequest {
+  string session_id = 1;
+  string turn_id = 2;
+  TurnDeliveryCapability delivery_capability = 3;
+  string reason = 4;
+}
+
+message CancelTurnResponse {
+  bool cancelled = 1;
+}
+
 message RenewTurnDeliveryCapabilityRequest {
   string session_id = 1;
   string turn_id = 2;
@@ -87,6 +112,10 @@ message SessionEvent {
     TurnCompleted turn_completed = 3;
     TurnFailed turn_failed = 4;
   }
+  // Daemon-assigned identity of the delivery journal that produced this
+  // event, and the event's 1-based position in it. Stable across re-attach.
+  string delivery_id = 5;
+  uint64 delivery_seq = 6;
 }
 
 message MessageCommitted {

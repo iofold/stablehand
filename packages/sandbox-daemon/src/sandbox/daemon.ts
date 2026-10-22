@@ -30,6 +30,8 @@ import {
   type OpenSessionRequest,
   OpenSessionResponseSchema,
   type DeliverTurnRequest,
+  type AttachTurnRequest,
+  type CancelTurnRequest,
   type RenewTurnDeliveryCapabilityRequest,
   type SuspendSessionRequest,
   type KillSessionRequest,
@@ -39,6 +41,8 @@ import {
 import {
   openSession,
   deliverTurn,
+  attachTurn,
+  cancelTurn,
   renewTurnDeliveryCapability,
   suspendSession,
   killSession,
@@ -316,6 +320,26 @@ export async function* handleDeliverTurn(
 }
 
 /**
+ * AttachTurn — server-streaming RPC (ADR 024).
+ * Re-attaches a successor orchestrator to a delivery that outlived its
+ * original stream, replaying journaled events after the given cursor.
+ */
+export async function* handleAttachTurn(
+  req: AttachTurnRequest,
+  context: HandlerContext,
+) {
+  yield* attachTurn(req, { signal: context.signal });
+}
+
+/**
+ * CancelTurn — unary RPC. Dropping a turn stream only detaches it, so an
+ * orchestrator that means to stop the turn must say so explicitly.
+ */
+export async function handleCancelTurn(req: CancelTurnRequest) {
+  return await cancelTurn(req);
+}
+
+/**
  * RenewTurnDeliveryCapability — extends only the exact active delivery
  * authority. The request is authenticated by the runtime-instance interceptor.
  */
@@ -391,6 +415,8 @@ function registerRoutes(router: ConnectRouter) {
   router.service(HarnessService, {
     openSession: handleOpenSession,
     deliverTurn: handleDeliverTurn,
+    attachTurn: handleAttachTurn,
+    cancelTurn: handleCancelTurn,
     renewTurnDeliveryCapability: handleRenewTurnDeliveryCapability,
     suspendSession: handleSuspendSession,
     killSession: handleKillSession,

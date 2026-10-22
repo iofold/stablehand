@@ -24,6 +24,7 @@ import {
 } from '@stablehand/proto/sandbox/v1';
 
 import { retryWithBackoff } from '../util/retry.js';
+import { callWithinOrchestratorWindow } from './callback-window.js';
 import { stringifyJsonWithBigInts } from './json-serialization.js';
 import {
   requireTurnDeliveryContext,
@@ -113,6 +114,32 @@ export function createToolProxy(
       });
     const requestId = generateRequestId();
     const argsJson = typeof input === 'string' ? input : stringifyJsonWithBigInts(input ?? {});
+
+    if ((deliveryContext.orphanGraceMs ?? 0) > 0) {
+      // ADR 024: keep the same request id across an orchestrator restart so
+      // its dedup row returns a result that was produced but never delivered.
+      const response = await callWithinOrchestratorWindow(
+        deliveryContext,
+        `tool "${toolName}"`,
+        (deliveryCapability, signal) => orchestratorClient.requestTool(
+          create(RequestToolRequestSchema, {
+            turnId: deliveryContext.identity.turnId,
+            sandboxSessionId: deliveryContext.identity.sandboxSessionId,
+            agentId: deliveryContext.identity.agentId,
+            toolName,
+            argsJson,
+            requestId,
+            deliveryCapability,
+          }),
+          { timeoutMs, signal },
+        ),
+        { attemptTimeoutMs: timeoutMs },
+      );
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      return response.result;
+    }
 
     try {
       return await retryWithBackoff(

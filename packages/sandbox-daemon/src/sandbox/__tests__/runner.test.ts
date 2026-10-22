@@ -199,6 +199,7 @@ describe('runner openSession PTC bootstrap', () => {
     const { killSession, resetOrchestratorClient } = await importRunner();
     await killSession();
     resetOrchestratorClient();
+    vi.unstubAllEnvs();
   });
 
   it('uses the fresh workspaceDir when generating PTC scripts', async () => {
@@ -910,7 +911,8 @@ describe('runner openSession PTC bootstrap', () => {
     });
   });
 
-  it('aborts an in-flight harness when its unrenewed delivery capability expires', async () => {
+  it('[orphan grace off] aborts an in-flight harness when its unrenewed delivery capability expires', async () => {
+    vi.stubEnv('STABLEHAND_TURN_ORPHAN_GRACE_MS', '0');
     const { deliverTurn, openSession } = await importRunner();
     const harnessSawSignal = createDeferred<AbortSignal>();
     mocks.harnessOpenSession.mockResolvedValue({
@@ -1125,7 +1127,8 @@ describe('runner openSession PTC bootstrap', () => {
     expect(harnessCalls).toBe(1);
   });
 
-  it('drains cleanup yielded by a real async generator before releasing the turn', async () => {
+  it('[orphan grace off] drains cleanup yielded by a real async generator before releasing the turn', async () => {
+    vi.stubEnv('STABLEHAND_TURN_ORPHAN_GRACE_MS', '0');
     const { deliverTurn, openSession } = await importRunner();
     const harnessStarted = createDeferred<void>();
     const cleanupYielded = createDeferred<void>();
@@ -1667,7 +1670,8 @@ describe('runner openSession PTC bootstrap', () => {
     await killSession();
   });
 
-  it('propagates Connect request cancellation through the runner to the harness', async () => {
+  it('[orphan grace off] propagates Connect request cancellation through the runner to the harness', async () => {
+    vi.stubEnv('STABLEHAND_TURN_ORPHAN_GRACE_MS', '0');
     const { handleDeliverTurn } = await import('../daemon.js');
     const { openSession } = await importRunner();
     const harnessSawSignal = createDeferred<AbortSignal>();
