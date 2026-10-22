@@ -69,7 +69,8 @@ interface TextContentEvent {
 
 interface ToolCallStartEvent {
   type: 'TOOL_CALL_START';
-  toolName: string;
+  toolCallName?: string;
+  toolName?: string;
   toolCallId?: string;
   args?: Record<string, unknown>;
 }
@@ -78,8 +79,25 @@ interface ToolCallResultEvent {
   type: 'TOOL_CALL_RESULT';
   result: unknown;
   toolCallId?: string;
+  toolCallName?: string;
   toolName?: string;
   durationMs?: number;
+}
+
+/**
+ * Tool name carried by a TOOL_CALL_START/TOOL_CALL_RESULT event. The daemon
+ * converter (protoAgentEventToAGUI) emits the AG-UI protocol key
+ * `toolCallName`; `toolName` is accepted as a fallback for emitters that use
+ * the internal spelling (ctx-sub0). Empty strings count as absent.
+ */
+function eventToolName(event: { toolCallName?: unknown; toolName?: unknown }): string | undefined {
+  if (typeof event.toolCallName === 'string' && event.toolCallName.length > 0) {
+    return event.toolCallName;
+  }
+  if (typeof event.toolName === 'string' && event.toolName.length > 0) {
+    return event.toolName;
+  }
+  return undefined;
 }
 
 interface InterruptRequestedEvent {
@@ -887,16 +905,17 @@ export class AgentTurnService {
           // flat with a parent pointer; the UI computes nesting.
           const parentToolCallId = typeof e.parentToolCallId === 'string' ? e.parentToolCallId : undefined;
           const subagentName = typeof e.agentName === 'string' ? e.agentName : undefined;
+          const startedToolName = eventToolName(e) ?? 'unknown';
           pendingToolCalls.set(tcId, {
             id: tcId,
-            name: (e.toolName as string) || 'unknown',
+            name: startedToolName,
             args: toolArgs,
             status: 'running',
           });
           streamingParts.push({
             type: 'tool_call',
             id: tcId,
-            name: (e.toolName as string) || 'unknown',
+            name: startedToolName,
             args: toolArgs,
             status: 'running',
             ...(parentToolCallId ? { parentToolCallId } : {}),
@@ -1067,7 +1086,10 @@ export class AgentTurnService {
           });
         }
 
-        if (event.type === 'TOOL_CALL_START' && 'toolName' in event) {
+        const toolStartName = event.type === 'TOOL_CALL_START'
+          ? eventToolName(event as unknown as ToolCallStartEvent)
+          : undefined;
+        if (toolStartName !== undefined) {
           const toolStart = event as unknown as ToolCallStartEvent;
           const rawStart = event as Record<string, unknown>;
           emitTurnEvent('tool_call.started', {
@@ -1075,7 +1097,7 @@ export class AgentTurnService {
             agentId,
             conversationId,
             toolCallId: toolStart.toolCallId ?? '',
-            toolName: toolStart.toolName,
+            toolName: toolStartName,
             args: toolStart.args ?? {},
             ...(typeof rawStart.parentToolCallId === 'string'
               ? { parentToolCallId: rawStart.parentToolCallId }
@@ -1091,9 +1113,7 @@ export class AgentTurnService {
           const toolResult = event as unknown as ToolCallResultEvent;
           const toolCallId = toolResult.toolCallId ?? '';
           const knownToolName = toolCallId ? pendingToolCalls.get(toolCallId)?.name : undefined;
-          const toolName = toolResult.toolName && toolResult.toolName.length > 0
-            ? toolResult.toolName
-            : knownToolName ?? '';
+          const toolName = eventToolName(toolResult) ?? knownToolName ?? '';
           emitTurnEvent('tool_call.completed', {
             turnId,
             agentId,

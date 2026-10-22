@@ -7,8 +7,15 @@ import type {
 import { TypedEventBus } from '../../packages/stablehand/src/events/bus.js';
 import type { EventMap } from '../../packages/stablehand/src/events/bus.js';
 import type { DatabaseRepository } from '../../packages/stablehand/src/database/repository.js';
-import type { SessionTurnExecutor } from '../../packages/stablehand/src/orchestrator/session-turn-service.js';
-import type { AgentDefinition, Message } from '@stablehand/sandbox-daemon';
+import {
+  createSessionTurnExecutor,
+  type SessionTurnExecutor,
+} from '../../packages/stablehand/src/orchestrator/session-turn-service.js';
+import {
+  agentEventToSessionEvent,
+  protoSessionEventToCustom,
+} from '../../packages/stablehand/src/sandbox/proto-convert.js';
+import type { AgentDefinition, AgentEvent, Message, SessionEvent } from '@stablehand/sandbox-daemon';
 import type { AgentSessionEvent, MessageCommittedEvent } from '../../packages/shared/src/events.js';
 import { TURN_CANCELLED_MESSAGE } from '../../packages/stablehand/src/orchestrator/turn-cancellation.js';
 import { CanonicalLog } from '../../packages/stablehand/src/orchestrator/canonical/canonical-log.js';
@@ -1954,5 +1961,82 @@ describe('AgentTurnService', () => {
       expect(forwardedPayload.event.customField).toBe('should-be-preserved');
       expect(forwardedPayload.event.timestamp).toBe(12345);
     });
+  });
+});
+
+describe('AgentTurnService — daemon-converted tool events (ctx-sub0)', () => {
+  /**
+   * Drive the turn loop with events built exactly the way production builds
+   * them: the daemon's agentEventToSessionEvent() produces the proto frame,
+   * the orchestrator's protoSessionEventToCustom() decodes it, and the real
+   * SessionTurnExecutor unwraps it for AgentTurnService. No field renaming is
+   * stubbed in between.
+   */
+  async function executeDaemonEvents(agentEvents: AgentEvent[]) {
+    const sessionEvents: SessionEvent[] = [];
+    for (const agentEvent of agentEvents) {
+      const converted = protoSessionEventToCustom(agentEventToSessionEvent(agentEvent), 'run-1');
+      if (converted) sessionEvents.push(converted);
+    }
+    sessionEvents.push({
+      type: 'message_committed',
+      role: 'assistant',
+      content: 'Done',
+      turnId: 'run-1',
+      messageSeq: 1,
+    } as SessionEvent);
+
+    const executor = createSessionTurnExecutor({
+      sessionManager: {
+        ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
+        deliverTurn: vi.fn(async function* () {
+          yield* sessionEvents;
+        }) as unknown as Parameters<typeof createSessionTurnExecutor>[0]['sessionManager']['deliverTurn'],
+      },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    });
+    const eventBus = new TypedEventBus();
+    const toolStarted = collectEvents(eventBus, 'tool_call.started');
+    const toolCompleted = collectEvents(eventBus, 'tool_call.completed');
+    const ctx = createDeps({
+      eventBus,
+      sessionTurnService: {
+        executeSessionTurn: vi.fn((...args: Parameters<SessionTurnExecutor['executeSessionTurn']>) =>
+          executor.executeSessionTurn(...args)),
+      },
+    });
+    const service = new AgentTurnService(ctx.deps);
+    await service.executeTurn(makeParams());
+    return { ...ctx, toolStarted, toolCompleted };
+  }
+
+  it('carries the converter\'s toolCallName into tool_call.started, tool parts, and tool_call.completed', async () => {
+    const { db, toolStarted, toolCompleted } = await executeDaemonEvents([
+      { type: 'tool_call_start', id: 'tc-1', name: 'web_search', args: { query: 'alpha' } },
+      { type: 'tool_call_end', id: 'tc-1', result: 'Found 3 results', durationMs: 7 },
+    ]);
+
+    expect(toolStarted).toEqual([
+      expect.objectContaining({
+        turnId: 'run-1',
+        agentId: 'agent-1',
+        toolCallId: 'tc-1',
+        toolName: 'web_search',
+        args: { query: 'alpha' },
+      }),
+    ]);
+    expect(toolCompleted).toEqual([
+      expect.objectContaining({ toolCallId: 'tc-1', toolName: 'web_search' }),
+    ]);
+
+    const assistantWithTools = db.addMessage.mock.calls
+      .map(([message]) => message as Record<string, unknown>)
+      .find((message) => message.role === 'assistant' && Array.isArray(message.toolCalls));
+    expect(assistantWithTools?.toolCalls).toEqual([
+      expect.objectContaining({ id: 'tc-1', name: 'web_search' }),
+    ]);
+    expect(assistantWithTools?.parts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'tool_call', id: 'tc-1', name: 'web_search' }),
+    ]));
   });
 });
