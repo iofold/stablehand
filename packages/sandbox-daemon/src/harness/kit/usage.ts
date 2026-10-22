@@ -29,7 +29,12 @@ export function normalizeTokenUsage(usage: Record<string, unknown> | undefined):
     return undefined;
   }
 
-  const inputTokens = readNumber(usage, ['inputTokens', 'input', 'input_tokens']) ?? 0;
+  // Anthropic's API (Claude Agent SDK result usage) and pi-ai report cache
+  // reads and writes beside an input count that excludes them; LangChain's
+  // usage_metadata already folds them into input_tokens and has no such keys.
+  const cachedInputTokens = (readNumber(usage, ['cache_read_input_tokens', 'cacheRead']) ?? 0)
+    + (readNumber(usage, ['cache_creation_input_tokens', 'cacheWrite']) ?? 0);
+  const inputTokens = (readNumber(usage, ['inputTokens', 'input', 'input_tokens']) ?? 0) + cachedInputTokens;
   const outputTokens = readNumber(usage, ['outputTokens', 'output', 'output_tokens']) ?? 0;
   const totalTokens = readNumber(usage, ['totalTokens', 'total', 'total_tokens']) ?? inputTokens + outputTokens;
   const costUsd = readCost(usage);

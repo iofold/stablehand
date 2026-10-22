@@ -192,6 +192,35 @@ describe('harness adapter kit', () => {
     });
   });
 
+  it('counts cache reads and writes as input when the provider reports them separately', () => {
+    // Claude Agent SDK result usage (Anthropic API shape).
+    expect(normalizeTokenUsage({
+      input_tokens: 6,
+      cache_creation_input_tokens: 1200,
+      cache_read_input_tokens: 48000,
+      output_tokens: 1586,
+      cost: 0.0788,
+    })).toEqual({
+      inputTokens: 49206,
+      outputTokens: 1586,
+      totalTokens: 50792,
+      costUsd: 0.0788,
+    });
+    // pi-ai: totalTokens already includes the cache counts.
+    expect(normalizeTokenUsage({ input: 10, output: 5, cacheRead: 100, cacheWrite: 20, totalTokens: 135 })).toEqual({
+      inputTokens: 130,
+      outputTokens: 5,
+      totalTokens: 135,
+    });
+    // LangChain usage_metadata folds cache into input_tokens already.
+    expect(normalizeTokenUsage({
+      input_tokens: 500,
+      output_tokens: 20,
+      total_tokens: 520,
+      input_token_details: { cache_read: 400 },
+    })).toEqual({ inputTokens: 500, outputTokens: 20, totalTokens: 520 });
+  });
+
   it('links abort signals and returns a cleanup function', () => {
     const controller = new AbortController();
     const abort = vi.fn();
