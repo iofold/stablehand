@@ -398,18 +398,37 @@ export function SessionPage() {
   }, [id, clearInterrupt, interrupt?.interruptId]);
 
   const handleDocSubmit = useCallback(
-    async (content: string) => {
+    async (content: string, note?: string) => {
       if (!id || !interrupt?.interruptId) return;
       setError(null);
       try {
         await sendInterrupt(id, {
           interruptId: interrupt.interruptId,
           action: 'approve',
-          data: { content },
+          data: { content, ...(note ? { note } : {}) },
         });
         clearInterrupt();
       } catch (err) {
         console.debug('[Session] Failed to submit document:', err);
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [id, clearInterrupt, interrupt?.interruptId],
+  );
+
+  const handleDocReject = useCallback(
+    async (note?: string) => {
+      if (!id || !interrupt?.interruptId) return;
+      setError(null);
+      try {
+        await sendInterrupt(id, {
+          interruptId: interrupt.interruptId,
+          action: 'reject',
+          ...(note ? { data: { note } } : {}),
+        });
+        clearInterrupt();
+      } catch (err) {
+        console.debug('[Session] Failed to send rejection:', err);
         setError(err instanceof Error ? err.message : String(err));
       }
     },
@@ -477,7 +496,9 @@ export function SessionPage() {
       <EditableDocument
         title={(interrupt.args.title as string) ?? 'Review document'}
         content={(interrupt.args.content as string) ?? ''}
+        format={typeof interrupt.args.format === 'string' ? interrupt.args.format : undefined}
         onSubmit={handleDocSubmit}
+        onReject={handleDocReject}
         onCancel={() => clearInterrupt()}
       />
     ) : interruptToolName === 'request_fields' ? (

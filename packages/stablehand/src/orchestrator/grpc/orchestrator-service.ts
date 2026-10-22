@@ -42,6 +42,11 @@ import {
   type TurnDeliveryCapabilityClaims,
 } from './turn-delivery-capability.js';
 import type { ToolApprovalGate } from '../tool-approval-gate.js';
+import {
+  EDIT_DOCUMENT_TOOL_NAME,
+  editDocumentInputSchema,
+  editDocumentResult,
+} from '../../tool/builtin/edit-document.js';
 
 /**
  * Context passed to each orchestrator-side tool handler when dispatching
@@ -896,6 +901,61 @@ export function registerDefaultToolHandlers(
   });
 
   if (interruptManager) {
+    const approvalAuthority = async (ctx: ToolHandlerContext) => {
+      const turn = repository ? await repository.getTurn(ctx.turnId) : undefined;
+      const sandboxSessionId = ctx.sandboxSessionId ?? turn?.sandboxSessionId ?? undefined;
+      const callbackAuthority = repository
+        ? (
+          ctx.deliveryFence
+          && ctx.activeGeneration
+          && sandboxSessionId
+            ? {
+              turnId: ctx.turnId,
+              sandboxSessionId,
+              agentId: ctx.agentId,
+              expectedDeliveryFence: ctx.deliveryFence,
+              expectedActiveGeneration: ctx.activeGeneration,
+            }
+            : undefined
+        )
+        : undefined;
+      if (repository && !callbackAuthority) {
+        throw new ConnectError(
+          'Sandbox callback delivery authority is required for approval persistence',
+          Code.FailedPrecondition,
+        );
+      }
+      return {
+        sandboxSessionId,
+        conversationId: ctx.conversationId ?? turn?.conversationId ?? undefined,
+        callbackAuthority,
+      };
+    };
+
+    // Opt-in review tool: approve, approve with edits, or reject with a note.
+    registry.set(EDIT_DOCUMENT_TOOL_NAME, async (args, ctx) => {
+      const parsed = editDocumentInputSchema.safeParse(args);
+      if (!parsed.success) {
+        return JSON.stringify({ error: 'edit_document needs a title and the full content as strings' });
+      }
+      const authority = await approvalAuthority(ctx);
+      const resolution = await interruptManager.waitForApproval(
+        ctx.turnId,
+        ctx.agentId,
+        ctx.requestId,
+        EDIT_DOCUMENT_TOOL_NAME,
+        parsed.data,
+        300_000,
+        authority.sandboxSessionId,
+        authority.conversationId,
+        authority.callbackAuthority,
+      );
+      if (resolution.action === 'suspend') {
+        return JSON.stringify({ approved: false });
+      }
+      return editDocumentResult(parsed.data.content, resolution);
+    });
+
     registry.set('request-approval', async (args, ctx) => {
       const reason = typeof args.reason === 'string' ? args.reason : 'Tool requires approval';
 

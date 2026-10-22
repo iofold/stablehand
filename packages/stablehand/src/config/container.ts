@@ -38,6 +38,7 @@ import { PostgresSecretProvider } from '../secrets/postgres-provider.js';
 import { deriveKey } from '../secrets/crypto.js';
 import { resolveSecretMasterKeyPassphrase } from '../secrets/master-key.js';
 import type { SecretProvider } from '../secrets/types.js';
+import { editDocumentTool } from '../tool/builtin/edit-document.js';
 import { readSandboxScopeSecrets } from '../secrets/scopes.js';
 import { ContainerManager, type SandboxContainerManager } from '../sandbox/container-manager.js';
 import { KubernetesContainerManager } from '../sandbox/kubernetes-container-manager.js';
@@ -260,6 +261,8 @@ export async function createContainer(
     listTools: () => toolExecutor.list(),
   });
   toolExecutor.register(stablehandGuideTool);
+  // Opt-in (not a builtin): agents that list edit_document get the review card.
+  toolExecutor.register(editDocumentTool);
   const toolRegistry = new DefaultToolRegistry();
   toolRegistry.addProvider(new LocalToolProvider(toolExecutor));
   const turnStartupService = new TurnStartupService({
