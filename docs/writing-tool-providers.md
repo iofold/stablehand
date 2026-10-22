@@ -108,10 +108,9 @@ The default container (`packages/stablehand/src/config/container.ts`) registers 
 3.  **Artifact**: Provides daemon-location metadata for persistent file storage tools; bytes upload/download at the daemon location rather than through orchestrator byte proxying. Registered only when S3 storage is configured.
 4.  **Browser**: Provides daemon-location `browse` and `screenshot` tools backed by the Chromium in each harness image. Registered alongside Artifact.
 
-Two more provider classes are exported but **not registered by the default stack**, so agents cannot use them without custom wiring:
+5.  **MCP**: One `McpServerToolProvider` per server an agent declares in `mcpServers` (`packages/stablehand/src/mcp/`), registered and kept in sync by `McpServerManager`. The client runs in the orchestrator; see [mcp-servers.md](mcp-servers.md).
 
-- **MCP**: Connects to a Model Context Protocol server (stdio or HTTP).
-- **Composio**: Integrates with the Composio tool ecosystem.
+Providers set `source` (`local`, `http` or `mcp`) for the catalog, and may set `agentScope` (the provider's tools belong to one agent), `attachAll` (offer every listed tool without naming it in `tools`) and `catalogInfo()` (plain display names). A tool with `requiresApproval: true` pauses on the orchestrator's approval gate before its handler runs. Composio is not wired.
 
 ## Step-by-Step: Creating a Custom Provider
 

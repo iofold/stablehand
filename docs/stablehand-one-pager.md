@@ -33,7 +33,7 @@ Agent loops. Each agent chooses LangGraph, the Claude Agent SDK or Pi in its YAM
 
 Front ends. Runs stream as AG-UI events, so AG-UI renderers such as CopilotKit can display them, and `@stablehand/react` embeds the chat in your own app. A built-in render tool lets agents draw 15 kinds of chart, table and metric card in the reply.
 
-Tools. Local TypeScript tools with Zod schemas, per-agent HTTP tools, artifact upload and download, and a browser tool. MCP and Composio provider classes exist in the code but are not registered yet.
+Tools. Local TypeScript tools with Zod schemas, per-agent HTTP tools, remote MCP servers (bearer, header or OAuth sign-in, client in the orchestrator), artifact upload and download, and a browser tool. Composio is not wired.
 
 ## An agent manifest
 

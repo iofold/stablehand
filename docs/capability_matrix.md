@@ -42,17 +42,16 @@
 | Provider | Transport | Discovery | Execution | Auth | Caching | Notes |
 |----------|-----------|-----------|-----------|------|---------|-------|
 | **Local** | In-process | Registry | Direct call | N/A | N/A | Wraps LocalFunctionExecutor; 12 kitchen-sink tools |
-| **MCP** | stdio/HTTP | listTools() | callTool() | Optional | Yes (tools) | Model Context Protocol; JSON Schema → Zod conversion |
-| **HTTP** | REST | Static config | fetch() | Bearer/API-Key | Yes (tools) | Custom headers; timeout 30s; X-Agent-Id injection |
-| **Composio** | REST | Session-based | executeSessionTool() | API key | Yes (session) | 500+ SaaS integrations; session lifecycle |
+| **MCP** | Streamable HTTP (remote only) | listTools() per agent server | callTool() from the orchestrator | none, bearer, header (`$secret:` tools-only secrets) or OAuth (DCR + PKCE, stored tokens) | Yes (listed on save, connect, refresh) | Per-agent servers; `<server>__<tool>` names; egress guard plus host pin; see docs/mcp-servers.md |
+| **HTTP** | REST | Static config | fetch() | Bearer/API-Key | Yes (tools) | Custom headers; timeout 30s; X-Agent-Id injection; `requiresApproval` honored |
+| **Composio** | n/a | n/a | n/a | n/a | n/a | Not wired; planned as an MCP server |
 
 Artifact upload/download are daemon tools, not provider-managed HTTP uploads: `artifact_upload` and `artifact_download` stream directly to object storage and bypass orchestrator-side byte proxying.
 
 **Stress Test Coverage**:
-- MCP stdio transport failure (command not found)
+- MCP server down, refused token, OAuth sign-in missing (covered by `packages/stablehand/src/mcp/__tests__`)
 - MCP HTTP transport timeout
 - HTTP auth secret resolution (missing, invalid)
-- Composio session creation failure
 - Tool discovery caching invalidation
 - Concurrent tool execution across providers
 - Large JSON Schema → Zod conversion
@@ -444,10 +443,9 @@ OpenAI Agents and Vercel AI SDK columns are planned, not implemented (see
 - [ ] Tool result size limits
 
 ### Tool Providers
-- [ ] MCP stdio transport failure
+- [x] MCP server unreachable, refused token, OAuth sign-in missing
 - [ ] MCP HTTP timeout
 - [ ] HTTP auth secret resolution
-- [ ] Composio session creation failure
 - [ ] Provider fallback/retry
 - [ ] Concurrent tool execution across providers
 

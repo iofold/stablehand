@@ -100,6 +100,12 @@ Turn and conversation lifecycle statuses were always served SCREAMING_CASE by RE
 | GET | `/api/agents/:id/secrets` | List secret keys |
 | POST | `/api/agents/:id/secrets` | Set secret |
 | DELETE | `/api/agents/:id/secrets/:key` | Delete secret |
+| **MCP servers** |  |  |
+| GET | `/api/agents/:id/mcp-servers` | State and tools of each declared MCP server |
+| POST | `/api/agents/:id/mcp-servers/:server/refresh` | List a server's tools again |
+| POST | `/api/agents/:id/mcp-servers/:server/connect` | Start an OAuth sign-in (master token) |
+| DELETE | `/api/agents/:id/mcp-servers/:server/connection` | Forget a server's OAuth sign-in (master token) |
+| GET | `/api/mcp/oauth/callback` | OAuth redirect target (public; authorized by the single-use state) |
 | **Webhooks** |  |  |
 | GET | `/api/agents/:id/webhooks` | List webhooks |
 | POST | `/api/agents/:id/webhooks` | Create webhook |
@@ -1169,10 +1175,10 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
 - **Response:**
 
 ```json
-{ "keys": ["OPENAI_API_KEY", "CRM_TOKEN"] }
+{ "keys": ["OPENAI_API_KEY"], "toolKeys": ["CRM_TOKEN"] }
 ```
 
-- **Notes:** Secret values are never returned.
+- **Notes:** Secret values are never returned. `keys` are sandbox-scope secrets (injected into the agent's sandbox env); `toolKeys` are tools-only secrets, read by the orchestrator for HTTP tools and MCP servers and never placed in the sandbox.
 
 #### `POST /api/agents/:id/secrets`
 
@@ -1182,7 +1188,8 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
 ```json
 {
   "key": "CRM_TOKEN",
-  "value": "secret-value"
+  "value": "secret-value",
+  "scope": "tools"
 }
 ```
 
@@ -1193,14 +1200,55 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
 { "key": "CRM_TOKEN" }
 ```
 
-- **Notes:** Returns `501` if secret storage is not configured.
+- **Notes:** `scope` is `sandbox` (default) or `tools`. Returns `501` if secret storage is not configured.
 
 #### `DELETE /api/agents/:id/secrets/:key`
 
 - **Description:** Deletes a secret.
-- **Query params:** None.
+- **Query params:** `scope` (`sandbox` default, or `tools`).
 - **Response:** no body.
 - **Notes:** Returns `204` on success.
+
+### i2. MCP servers
+
+Agents declare remote MCP servers in `mcpServers` on create or patch (see [mcp-servers.md](mcp-servers.md)). Each entry: `name`, `url`, optional `auth` (`{type: "none"}`, `{type: "bearer", token: "$secret:NAME"}`, `{type: "header", name, value: "$secret:NAME"}` or `{type: "oauth", scopes?}`), `tools` (glob allowlist), `requireApproval` (`true`, `false` or a glob list) and `timeoutMs`. Saving fails with `400 mcp_server_blocked` when the egress policy would refuse the URL.
+
+#### `GET /api/agents/:id/mcp-servers`
+
+```json
+{
+  "servers": [{
+    "name": "granola",
+    "url": "https://mcp.granola.ai/mcp",
+    "authType": "oauth",
+    "state": "ready",
+    "connected": true,
+    "toolCount": 3,
+    "lastListedAt": 1792700000000,
+    "tools": [
+      { "name": "granola__list_meetings", "mcpName": "list_meetings", "displayName": "List meetings", "requiresApproval": false }
+    ]
+  }]
+}
+```
+
+`state` is `connecting`, `ready`, `needs_auth` or `error`; `message` explains the last two in plain words.
+
+#### `POST /api/agents/:id/mcp-servers/:server/refresh`
+
+Reconnects and lists the server's tools again. Returns the same body as the GET.
+
+#### `POST /api/agents/:id/mcp-servers/:server/connect`
+
+Starts an OAuth sign-in for an `oauth` server: discovery, dynamic client registration when needed, PKCE. Body: `{ "redirectOrigin"?: "https://stablehand.example.com" }` (ignored when `STABLEHAND_PUBLIC_URL` is set). Returns `{ "authorizationUrl", "host", "expiresAt" }`; show the host and open the URL only when a person clicks. Master token only.
+
+#### `DELETE /api/agents/:id/mcp-servers/:server/connection`
+
+Forgets the stored sign-in. The server's tools disappear until someone connects again. Master token only.
+
+#### `GET /api/mcp/oauth/callback`
+
+The redirect target the provider sends the browser to. Public: the single-use `state` (10 minutes) authorizes it. Returns a small HTML page and never shows tokens.
 
 ### j. Webhooks
 

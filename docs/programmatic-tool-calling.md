@@ -60,16 +60,7 @@ const config: HttpEndpointConfig = {
 ```
 
 ### MCP Tools
-Set `programmaticTools` on the provider configuration to apply the flag to specific tools from an MCP server:
-```typescript
-const config: MCPProviderConfig = {
-  transport: { type: 'stdio', command: 'npx', args: ['mcp-server'] },
-  programmaticTools: ['large-data-tool'],
-};
-```
-
-### Composio Tools
-Composio tools also support the `programmaticTools` list in their provider configuration.
+Tools from an agent's MCP servers (see [mcp-servers.md](mcp-servers.md)) are not flagged programmatic yet: `mcpServers` has no field for it. Their results are capped at 100,000 characters instead.
 
 ### Which tools benefit?
 - Tools returning large JSON responses (data fetching, search results, match candidates).
@@ -100,7 +91,7 @@ console.log(`Found ${data.length} candidates`);
 - `POST /tools/:name`: Calls a specific tool and returns the JSON result.
 
 ### How routing works
-The daemon calls the `toolDef.handler()` function, which already encapsulates the provider-specific logic. This means PTC works uniformly across HTTP, MCP, and Composio tools without per-provider changes in the daemon.
+The daemon calls the `toolDef.handler()` function, which already encapsulates the provider-specific logic. This means PTC works the same for HTTP and MCP tools without per-provider changes in the daemon.
 
 ### Error handling
 PTC scripts are designed to be safe. They never dump raw payloads to stdout on error. Errors are sent to stderr, and the daemon returns 404 for unknown tools or 500 for handler failures.
@@ -121,8 +112,8 @@ is tracked in `ctx-s6o`.
 | Provider | Handler Location | PTC Works? | Notes |
 |----------|-----------------|------------|-------|
 | HTTP | orchestrator (gRPC proxy) | Yes | Primary use case for large payloads |
-| MCP | orchestrator (gRPC proxy) | Yes | Ideal for structured data tools |
-| Composio | orchestrator (gRPC proxy) | Yes | SaaS integration with large responses |
+| MCP | orchestrator (gRPC proxy) | Mechanism yes, flag not exposed | No `programmatic` field on `mcpServers` yet |
+| Composio | n/a | n/a | Not wired |
 | Local | sandbox (in-process) | No | Already in SDK scope; no context benefit |
 | Artifact | daemon (S3) | Partial | Best for download-then-process workflows |
 | Built-in | orchestrator | No benefit | Payloads are typically small |

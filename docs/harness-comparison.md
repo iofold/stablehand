@@ -13,7 +13,7 @@ This document provides a comprehensive comparison of the three agent harnesses s
 | **Hooks** | ❌ (Planned) | ❌ (Planned) | ❌ (Planned) |
 | **Middleware** | ✅ (Tool blocklist) | ❌ | ❌ |
 | **Native Tools** | `LocalShellBackend` | SDK-provided (MCP) | SDK-provided |
-| **MCP Support** | ❌ | ✅ | ❌ |
+| **Remote MCP servers** | ✅ (via the orchestrator) | ✅ (via the orchestrator) | ✅ (via the orchestrator) |
 | **LangSmith Tracing** | ✅ (Native) | ✅ (Shared AgentEvent tracer) | ✅ (Shared AgentEvent tracer) |
 | **HITL/Approval** | ✅ | ✅ (Queued) | ✅ |
 | **Streaming** | ✅ | ✅ | ✅ |
@@ -30,10 +30,10 @@ This document provides a comprehensive comparison of the three agent harnesses s
 - Best for general-purpose agents using OpenAI, Anthropic, or Google models via LangChain.
 
 ### Claude Agents
-**Best for:** Claude-native workflows, high-fidelity code generation, and MCP-heavy environments.
+**Best for:** Claude-native workflows and high-fidelity code generation.
 - Use if you want the official **Anthropic Agent SDK** experience.
 - Use for **Subagents** defined via `harnessConfig.subagents` (passed to the SDK `agents` option).
-- Use if your agent relies heavily on **MCP (Model Context Protocol)** servers.
+- Remote MCP servers work the same on every harness: the orchestrator runs the client (see [mcp-servers.md](mcp-servers.md)). The Claude SDK's own `mcpServers` option is not exposed, so tokens stay out of the sandbox.
 - Use for tasks requiring deep filesystem access and complex code editing (via native `Edit` and `Bash` tools).
 - Best for agents exclusively using Claude models (`claude-sonnet-4-6`, `claude-opus-4-6`).
 
@@ -56,7 +56,7 @@ The LangGraph harness uses the `deepagents` SDK, a pure TypeScript implementatio
 - **Streaming Behavior**: Emits `text_delta` from model streams and `tool_call_*` events from LangChain's `on_tool_*` events.
 - **Session Lifecycle**: Stateless at the SDK level; Stablehand manages the conversation transcript and passes the full history to the SDK on each turn.
 - **Resource Requirements**: Smallest image footprint as it avoids Python and heavy CLI dependencies.
-- **Known Limitations**: No native MCP support; knowledge lookup is currently a stub.
+- **Known Limitations**: Knowledge lookup is currently a stub. Remote MCP servers come through the orchestrator, not a LangChain MCP adapter.
 
 ### Claude Agents
 The Claude Agents harness wraps the official `@anthropic-ai/claude-agent-sdk`. It provides a high-fidelity experience for Claude models.

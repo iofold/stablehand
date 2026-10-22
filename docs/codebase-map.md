@@ -48,7 +48,7 @@ HTTP/UI request
 | HITL | Durable pending interrupts, approve/reject/timeout/suspend outcomes, restart-safe resume attempts. |
 | Checkpoint/restore | Harness state plus orchestrator-captured workspace tar. Manual restore route resets retry budget and supports async restore. |
 | Queued turns | Durable queue (ctx-z5k0): admission rejects 429 queue_full/503 dispatch_stalled before any write; queued rows are the queue; a single-flight dispatcher claims via delivery lease with claim-time warm/slot lanes and least-recently-served-agent fairness; queue-expired turns finalize honestly. Startup fails stranded running turns unless HITL-parked; queued rows drain post-listen. |
-| Tools | Local, HTTP, MCP, Composio, and Artifact providers. Built-ins include `emit-event`, `request-approval`, `a2ui-render`, and `stablehand-guide`. |
+| Tools | Local, per-agent HTTP, per-agent MCP (`mcp/`), Artifact and Browser providers. Built-ins include `emit-event`, `request-approval`, `a2ui-render`, and `stablehand-guide`; `edit_document` is opt-in. |
 | Programmatic tools | Eligible `programmatic: true` tools generate helper scripts in `/workspace/.tools` that call the daemon-local API. |
 | Artifacts | S3/MinIO metadata in Postgres; daemon-location upload/download avoids gRPC byte proxying. |
 | Cost control | Budget policies (per-agent/tag), model-gateway routing via LiteLLM, spend reconciliation with watermarked ingestion, quarantine, and auto-settlement of turns whose spend evidence is permanently lost (coverage=unpriced, detector stays armed). |

@@ -127,6 +127,7 @@ Open http://localhost:3200, paste the token, and open Overnight Analyst to see t
 | Example | What it does | Where |
 |---|---|---|
 | Overnight Analyst | Opens your sources in a sandboxed browser every morning, screenshots each one, writes a one-page HTML brief and publishes it to a gallery page. We have run it daily since August 2026. | [packages/examples/overnight-analyst](packages/examples/overnight-analyst) and [extensions/artifact-gallery](extensions/artifact-gallery) |
+| Content factory | Each week reads what is working in your niche (Apify) and what came up in your meetings (Granola), drafts a LinkedIn post, an X thread and a blog outline in your voice, and waits for you to approve, edit or reject each one from your phone. Six agents chained by events under one campaign budget. | [packages/examples/content-factory](packages/examples/content-factory) |
 | Inbox agent | Gives each incoming email its own sandboxed run, pulls out the fields and shows where in the email each one came from, and drafts a reply that a person approves before it is sent. When the sender answers, the same thread picks up again. | Rebuilding on synthetic email |
 | Folder review | Takes a folder of documents, reads every file and returns findings that cite the document and page they came from. Follow-up questions run in the same thread. | Rebuilding on synthetic documents |
 | Experiment loop | Runs a benchmark task, reads the graded result, keeps or discards the change and queues the next run, all inside one campaign budget. | Rebuilding on [extensions/gdpval-bench](extensions/gdpval-bench) |
@@ -170,7 +171,7 @@ Each of these ships as an extension, and each has a thread asking what you would
 - If the orchestrator dies, a running turn keeps going in its sandbox for 120 seconds (`STABLEHAND_TURN_ORPHAN_GRACE_MS`) and the restarted orchestrator picks it up. A tool that runs inside the orchestrator and was cut off by the crash runs again, so give tools with side effects an idempotency key. If the sandbox died too, the turn ends in an error.
 - Approval gates cover local tools you mark and the built-in `request-approval` tool. HTTP tools ignore the flag today, and the Claude Agent SDK's own Bash, Write and Edit tools run without asking; the container is the boundary.
 - The default install sends model calls through the LiteLLM gateway, so runs show their full cost. Agents whose manifest sets `apiKeyRef` call the provider directly and may show as unpriced, and Claude Agent SDK usage is under-counted.
-- MCP and Composio provider classes exist in `packages/stablehand/src/tool/providers/` but are not registered, so agents cannot reach MCP servers or Composio tools yet.
+- Agents reach remote MCP servers over Streamable HTTP, with bearer, header or OAuth sign-in handled by the orchestrator ([docs/mcp-servers.md](docs/mcp-servers.md)). Local stdio servers, per-user sign-in and Composio are not supported yet.
 - There is no built-in knowledge or RAG search.
 - The npm packages (`stablehand`, `create-stablehand`, `@stablehand/*`) are ready to publish but not on npm yet, so `npx create-stablehand` does not work today.
 

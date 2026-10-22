@@ -72,7 +72,7 @@ Relevant code:
 
 ### 3. Tool Execution
 
-Tools are registered centrally and executed through the local tool executor. The default container registers the Local, per-agent HTTP, Artifact and Browser providers. MCP and Composio provider classes exist in `tool/providers/` but are not registered, so agents cannot reach MCP servers or Composio tools out of the box.
+Tools are registered centrally and executed through the local tool executor. The default container registers the Local, Artifact and Browser providers, and each agent gets its own HTTP tool provider and one provider per declared MCP server (`mcp/`). MCP clients run in the orchestrator, so server tokens stay out of sandboxes; see [mcp-servers.md](mcp-servers.md). Tools that declare `requiresApproval` pause on a durable approval in the orchestrator before they run. Composio is not wired.
 
 Relevant code:
 
