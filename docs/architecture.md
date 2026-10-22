@@ -1,44 +1,44 @@
 # Stablehand Architecture
 
-> Status: Current shipped architecture as of 2026-08-14.
-> The sandbox execution migration shipped.
+> Describes the architecture shipped on `master`. Last full review: 2026-08-14.
 
 ## Purpose
 
-Stablehand is a self-hosted framework for running tool-using agents behind a Fastify API and a React UI. The current repo ships a Docker-first stack with:
+Stablehand runs tool-using agents, on a schedule or on demand, behind a Fastify API and a React UI. The repository ships a Docker Compose stack with:
 
-- A Node.js orchestrator process
-- PostgreSQL persistence
-- Operator master token plus revocable, capability-scoped API keys for `/api/*` (fail-closed: unannotated routes are master-only)
-- A multi-harness agent runtime
-- Durable canonical SSE streaming to the UI
-- Durable HITL interrupt handling
-- Event-triggered background runs
-- Session-scoped workspace snapshots
+- a Node.js orchestrator
+- PostgreSQL for agents, turns, messages, events, approvals, budgets and secrets
+- an operator master token plus revocable, capability-scoped API keys for `/api/*` (routes without a capability annotation are master-only)
+- three agent loops (harnesses): LangGraph, the Claude Agent SDK and Pi
+- an event log that is written before it is streamed, so clients replay it after a reload
+- approvals stored in the database, so they survive restarts
+- schedules and triggers that start background runs
+- session workspaces that are snapshotted and restored with each checkpoint
+- an egress proxy that is each sandbox's only route to the internet
 
-Agent harnesses execute inside Docker containers managed by the sandbox subsystem. The orchestrator creates a container per run, communicates with the in-container gRPC daemon, and streams events back to the UI. Firecracker-based sandboxing is not implemented yet.
+Agent loops run inside Docker containers managed by the sandbox subsystem. The orchestrator starts a container per agent session, talks to the gRPC daemon inside it, and streams its events to clients. Sandboxes are containers; there is no microVM (Firecracker) runtime.
 
 ## Deploy Shape
 
-The supported workflow in this repo is `docker compose`.
+The supported install is `docker compose`.
 
 ```text
 +---------------------------+       HTTP/SSE       +----------------------+
 | UI (React, nginx)         | <------------------> | Orchestrator         |
 | - dashboard               |                      | - Fastify API        |
-| - chat                    |                      | - SSE + HITL         |
-| - agent management        |                      | - triggers / runs    |
+| - chat                    |                      | - SSE + approvals    |
+| - agent management        |                      | - schedules/triggers |
 | - triggers / flow / files |                      +----------+-----------+
 +---------------------------+                      |          |
-                                                   | postgres | Docker socket
+                                                   | postgres | Docker socket, gRPC
                                                    v          v
-                                        +----------------+  +-------------------+
-                                        | PostgreSQL     |  | Sandbox Containers|
-                                        | - agents       |  | - one per run     |
-                                        | - runs / msgs  |  | - gRPC daemon     |
-                                        | - events       |  | - harness code    |
-                                        | - triggers     |  | - tool proxy      |
-                                        | - secrets      |  | - workspace       |
+                                        +----------------+  +-------------------+     +--------------+
+                                        | PostgreSQL     |  | Sandbox Containers|---->| Egress proxy |--> allowed hosts
+                                        | - agents       |  | - one per session |     | (mitmproxy)  |
+                                        | - turns / msgs |  | - gRPC daemon     |     +--------------+
+                                        | - events       |  | - agent loop      |
+                                        | - triggers     |  | - tool proxy      |---->  S3-compatible
+                                        | - secrets      |  | - workspace       |       artifact store
                                         +----------------+  +-------------------+
 ```
 
@@ -60,9 +60,9 @@ Relevant code:
 
 Agents are executed through a harness registry. The shipped harness adapters are:
 
-- LangGraph
-- Claude Agents
-- PI Agent
+- LangGraph (`langgraph`, built on deepagents)
+- Claude Agent SDK (`claude-agents`)
+- Pi (`pi-agent`)
 
 Relevant code:
 
@@ -72,7 +72,7 @@ Relevant code:
 
 ### 3. Tool Execution
 
-Tools are registered centrally and executed through the local tool executor. The repo also ships provider abstractions for local, MCP, Composio, and HTTP-backed tools.
+Tools are registered centrally and executed through the local tool executor. The default container registers the Local, per-agent HTTP, Artifact and Browser providers. MCP and Composio provider classes exist in `tool/providers/` but are not registered, so agents cannot reach MCP servers or Composio tools out of the box.
 
 Relevant code:
 

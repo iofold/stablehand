@@ -30,9 +30,9 @@ Browser `EventSource` cannot set custom headers, so `GET /api/agents/:id/stream`
 
 Capability scoping is not resource or tenant isolation. Keep reverse-proxy auth, network allowlists, TLS, and rate limits in front of any shared deployment. Sandbox ConnectRPC callbacks are additionally protected by session-scoped HMAC credentials derived from `STABLEHAND_CALLBACK_TOKEN_SECRET` or `STABLEHAND_API_TOKEN`, but the ConnectRPC surface should still remain on private networks.
 
-### Breaking changes — 2026-08-19 contract normalization
+### Breaking changes: 2026-08-19 contract normalization
 
-One breaking cut, no deprecated aliases (ctx-iqzy). Integrators — including Pilot — update in a single step:
+This was one breaking change with no deprecated aliases. Integrators update in a single step:
 
 - `GET /health` / `GET /api/health`: `timestamp` is now an epoch-milliseconds integer (was the API's sole ISO string); `sandbox` keys are camelCase (`executionMode`, `totalCreated`, `maxGlobalContainers`).
 - `GET /api/sandbox/metrics`: camelCase keys — `executionMode`, `totalCreated`, `byHarness`, `averageLifetimeMs`, `maxGlobalContainers`.

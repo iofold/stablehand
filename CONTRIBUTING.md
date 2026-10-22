@@ -8,40 +8,19 @@
 
 ## Getting Started
 
-```bash
-git clone <repo-url>
-cd stablehand
-cp .env.example .env
-# Add the API keys you need
+Follow the [quickstart in the README](README.md#quickstart) to configure `.env` and start the stack. It fills `SECRET_MASTER_KEY` and `STABLEHAND_API_TOKEN` in place, which the production-mode compose stack requires.
 
-docker compose up --build -d
-```
-
-> Sandbox harness images are included in the default compose stack. They build automatically with `docker compose up --build -d`.
-
-The UI is available at `http://localhost:3200` and the API at `http://localhost:3002`.
+The UI is at `http://localhost:3200` and the API at `http://localhost:3002`.
 
 ## Development Workflow
 
-Start the stack:
-
 ```bash
-docker compose up --build -d
+docker compose up --build -d   # rebuild and start, including the three sandbox harness images
+docker compose logs -f         # follow logs
+docker compose down            # stop
 ```
 
-> Sandbox harness images are included in the default compose stack. They build automatically with `docker compose up --build -d`.
-
-View logs:
-
-```bash
-docker compose logs -f
-```
-
-Stop the stack:
-
-```bash
-docker compose down
-```
+Changes under `packages/sandbox-daemon` only reach agents after the harness images are rebuilt; `docker compose up --build -d` does that.
 
 ## Project Layout
 
@@ -54,7 +33,10 @@ packages/
   shared/            Shared API and event types
   client/            Typed browser client for AG-UI streaming integrations
   react/             React components and hooks for AG-UI chat integrations
-  create-stablehand/    Starter-project scaffold
+  egress-proxy/      mitmproxy allowlist proxy, the sandboxes' only route out
+  contracts/         Strict API and event schemas
+  manifest/          YAML agent manifest parser
+  create-stablehand/    Starter-project scaffold (not on npm yet)
   examples/          Example projects
 ```
 
@@ -115,8 +97,8 @@ GitHub Actions (`.github/workflows/ci.yml`) runs these jobs on every push and PR
 ## Notes on Current Architecture
 
 - The repo is Docker-first today.
-- Agent harnesses execute inside Docker containers via the sandbox subsystem (`packages/stablehand/src/sandbox/`). The orchestrator creates a container per run, communicates via gRPC, and supports checkpoint/resume, timeout enforcement, and orphan cleanup.
-- The maintained example project is `packages/examples/kitchen-sink`.
+- Agent harnesses execute inside Docker containers via the sandbox subsystem (`packages/stablehand/src/sandbox/`). The orchestrator creates a container per agent session, communicates via gRPC, and supports checkpoint/resume, timeout enforcement, and orphan cleanup.
+- `packages/examples/kitchen-sink` is the default project baked into the orchestrator image; `packages/examples/overnight-analyst` is the scheduled-agent example the README quickstart runs.
 
 ## Pull Request Guidelines
 
