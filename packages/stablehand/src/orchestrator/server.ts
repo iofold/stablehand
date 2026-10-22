@@ -122,6 +122,20 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     },
   });
 
+  // Many HTTP clients send Content-Type: application/json on every request, including a
+  // DELETE or POST with no body, which Fastify rejects with FST_ERR_CTP_EMPTY_JSON_BODY.
+  // Drop the content type when the request has no body so it is handled as body-less.
+  // Requests with a body (including ConnectRPC calls) are untouched.
+  app.addHook('onRequest', async (request) => {
+    const contentType = request.headers['content-type'];
+    if (!contentType || !contentType.toLowerCase().startsWith('application/json')) return;
+    const contentLength = request.headers['content-length'];
+    const chunked = request.headers['transfer-encoding'] !== undefined;
+    if (!chunked && (contentLength === undefined || contentLength.trim() === '0')) {
+      delete request.headers['content-type'];
+    }
+  });
+
   // Allow binary uploads (application/gzip, application/x-gzip) for workspace tarball endpoint.
   // The route handler reads from request.raw directly, so we skip body parsing.
   app.addContentTypeParser(
