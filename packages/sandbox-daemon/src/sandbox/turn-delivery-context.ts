@@ -185,21 +185,20 @@ export async function waitForTurnDeliveryCapabilityChange(
   const remainingMs = deadlineMs - Date.now();
   if (remainingMs <= 0) return false;
   return await new Promise<boolean>((resolve) => {
-    let timer: NodeJS.Timeout | undefined;
     const waiters = context.capabilityWaiters ?? new Set<() => void>();
     context.capabilityWaiters = waiters;
     const finish = (changed: boolean): void => {
-      if (timer) clearTimeout(timer);
+      clearTimeout(timer);
       context.capabilityWaiters?.delete(onChange);
       signal.removeEventListener('abort', onAbort);
       resolve(changed);
     };
     const onChange = (): void => finish(true);
     const onAbort = (): void => finish(false);
+    const timer = setTimeout(() => finish(false), Math.min(remainingMs, MAX_TIMER_DELAY_MS));
+    timer.unref();
     waiters.add(onChange);
     signal.addEventListener('abort', onAbort, { once: true });
-    timer = setTimeout(() => finish(false), Math.min(remainingMs, MAX_TIMER_DELAY_MS));
-    timer.unref();
   });
 }
 
