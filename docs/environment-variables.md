@@ -97,7 +97,7 @@ Used for persistent artifact storage (file uploads/downloads).
 | Name | Default | Required? | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
 | `CORS_ORIGINS` | `http://localhost:3200` | No | Comma-separated list of allowed CORS origins. | `https://app.example.com` |
-| `STABLEHAND_DOMAIN` | `stablehand.localhost` | No | Host the Traefik router in `docker-compose.yml` serves the UI and API on. Only matters behind Traefik. | `stablehand.example.com` |
+| `STABLEHAND_DOMAIN` | — | With the Traefik overlay | Hostname Traefik routes to the UI when `deploy/compose/traefik/docker-compose.yml` is in the compose file list. The overlay also adds `https://$STABLEHAND_DOMAIN` to the default `CORS_ORIGINS`. | `stablehand.example.com` |
 | `LITELLM_DOMAIN` | `litellm.localhost` | No | Host the Traefik router in `deploy/compose/model-gateway/docker-compose.yml` serves the LiteLLM admin UI on. | `litellm.example.com` |
 
 ## Security

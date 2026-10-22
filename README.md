@@ -52,6 +52,14 @@ docker compose up --build -d
 
 > Sandbox harness images are included in the default compose stack. They build automatically with `docker compose up --build -d`.
 
+The base stack needs no external networks or reverse proxy. To publish the UI on your own domain through an existing Traefik instance, add the optional overlay in [deploy/compose/traefik](deploy/compose/traefik/docker-compose.yml) and set `STABLEHAND_DOMAIN`:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:deploy/compose/traefik/docker-compose.yml \
+STABLEHAND_DOMAIN=stablehand.example.com \
+  docker compose up --build -d
+```
+
 ### Common Commands
 
 ```bash

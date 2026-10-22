@@ -1,0 +1,33 @@
+# Optional overlay: publish the UI through an existing Traefik reverse proxy with
+# Let's Encrypt TLS. The base docker-compose.yml does not need it; the UI is always
+# reachable on http://localhost:${UI_PORT:-3200}.
+#
+# Requirements:
+#   - a Traefik instance with a `websecure` entrypoint and a `letsencrypt` cert resolver
+#   - an external Docker network named `web` that Traefik watches
+#     (create it once with `docker network create web` if your Traefik setup has not)
+#   - STABLEHAND_DOMAIN set to the hostname Traefik should route to the UI
+#
+# Use it by adding it to the compose file list, for example in .env:
+#   COMPOSE_FILE=docker-compose.yml:deploy/compose/traefik/docker-compose.yml
+services:
+  ui:
+    networks:
+      - default
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.stablehand.rule=Host(`${STABLEHAND_DOMAIN:?set STABLEHAND_DOMAIN to the hostname Traefik should route to the UI}`)"
+      - "traefik.http.routers.stablehand.entrypoints=websecure"
+      - "traefik.http.routers.stablehand.tls.certresolver=letsencrypt"
+      - "traefik.http.services.stablehand.loadbalancer.server.port=80"
+
+  orchestrator:
+    environment:
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://${STABLEHAND_DOMAIN},http://localhost:3200}
+
+networks:
+  web:
+    name: web
+    external: true

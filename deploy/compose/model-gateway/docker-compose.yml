@@ -72,3 +72,11 @@ services:
 
 volumes:
   litellm-data:
+
+# The admin UI is published through Traefik on the external `web` network (see
+# deploy/compose/traefik/docker-compose.yml). Create it with `docker network create web`
+# on hosts without Traefik.
+networks:
+  web:
+    name: web
+    external: true

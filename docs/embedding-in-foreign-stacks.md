@@ -311,6 +311,6 @@ Point any AG-UI renderer at that URL, or use the Stablehand React wrapper docume
 | **"1 events emitted"** | Harness crashed immediately. | Check `docker logs <container-id>` for the sandbox. |
 | **Agent hangs on start** | `ORCHESTRATOR_CALLBACK_URL` is wrong. | Ensure it points to the orchestrator's service name. |
 | **"No space left on device"** | Docker root partition is full. | Prune unused images or increase disk size. |
-| **"network web not found"** | External network missing. | Create it manually: `docker network create web`. |
+| **"network web not found"** | The Traefik or model-gateway overlay expects the external `web` network your Traefik instance uses. | Create it once with `docker network create web`, or leave those overlays out of `COMPOSE_FILE`; the base stack does not need it. |
 | **CORS errors in browser** | `CORS_ORIGINS` missing your domain. | Add your UI domain to the environment variable. |
 | **Secrets not found in agent** | Arbitrary host env var is not in `SANDBOX_SECRET_ALLOWLIST`, or the key was never added to the agent's Secret Store. | Add the key to the agent Secret Store for current behavior, or widen the host allowlist intentionally. |

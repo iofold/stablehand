@@ -122,7 +122,9 @@ docker compose \
 ```
 
 The overlay exposes LiteLLM only on host loopback at port 4400 and on the
-internal `stablehand-agents` network. Message/response logging is disabled.
+internal `stablehand-agents` network. Its admin UI is also published through
+Traefik on the external `web` network, so that network must exist
+(`docker network create web` on hosts without Traefik). Message/response logging is disabled.
 STABLEHAND polls sanitized spend records asynchronously; gateway or metering
 failure never causes a synchronous budget API dependency or silent direct
 fallback.
@@ -136,7 +138,7 @@ ingestion turns off silently while turns keep running (ctx-fpi1). On dev1 this
 is prevented by pinning the full file list in `.env`:
 
 ```
-COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:deploy/compose/model-gateway/docker-compose.yml
+COMPOSE_FILE=docker-compose.yml:deploy/compose/traefik/docker-compose.yml:docker-compose.override.yml:deploy/compose/model-gateway/docker-compose.yml
 ```
 
 If ingestion is ever off with gateway turns waiting, `/api/model-gateway/status`
