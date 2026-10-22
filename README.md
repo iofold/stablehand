@@ -25,7 +25,7 @@
   Keep a static PNG of frame 3 as the fallback. The 60-90 s captioned cut goes to X, YouTube and the Show HN text.
 -->
 
-Stablehand is for agents that run unattended. You describe an agent in YAML, give it a schedule or an event to react to, and it runs in its own Docker container on your machine. Tool calls you mark as risky wait for a person to approve them, from any open browser tab or a phone. Budgets per agent and per tag stop spending at the limit you set. Every turn records the model, tokens, cost and approvals next to the files the agent produced.
+Stablehand is for agents that run unattended. You describe an agent in YAML, give it a schedule or an event to react to, and it runs in its own Docker container on your machine. Tool calls you mark as risky wait for a person to approve them, from any open browser tab or a phone. Budgets per agent and per tag stop spending at the limit you set, and a per-run cap stops a looping agent in the middle of its run. Every turn records the model, tokens, cost and approvals next to the files the agent produced.
 
 Each agent picks its own loop: LangGraph, the Claude Agent SDK or Pi. MIT licensed.
 
@@ -122,7 +122,7 @@ The inbox agent, folder review and experiment loop started as client and researc
 
 An orchestrator (Node.js, Fastify, PostgreSQL) holds everything that has to outlive a run: agents, schedules, triggers, approvals, budgets and the event log. Each agent session runs in its own Docker container, where a small daemon drives the agent loop and talks to the orchestrator over gRPC. The loop runs inside the sandbox; approvals, budgets and schedules stay outside it, where the agent cannot edit them. The container's only route to the internet is an egress proxy that allows listed hosts and nothing else.
 
-Every event the agent produces is written to PostgreSQL before any browser sees it. A reload, a second tab or a phone replays from the same log and then follows it live. Approvals are database rows, so a pending approval survives an orchestrator restart. Schedules fire events, triggers turn events into background runs, and files the agent publishes go to S3-compatible storage with a signed webhook to anything that subscribes. An optional LiteLLM gateway prices every model call, and the budgets count against those prices.
+Every event the agent produces is written to PostgreSQL before any browser sees it. A reload, a second tab or a phone replays from the same log and then follows it live. Approvals are database rows, so a pending approval survives an orchestrator restart. So does a running turn: the sandbox keeps working while the orchestrator is down, and the restarted process picks the turn back up and replays what it missed. Schedules fire events, triggers turn events into background runs, and files the agent publishes go to S3-compatible storage with a signed webhook to anything that subscribes. An optional LiteLLM gateway prices every model call, and the budgets count against those prices.
 
 Clients receive runs as [AG-UI](https://docs.ag-ui.com) events, the open streaming protocol for agent front ends, so AG-UI renderers can display them. Agents draw charts and tables with a built-in render tool that emits [A2UI](https://a2ui.org) blocks, Google's open format for agent-drawn UI. The full design is in [docs/architecture.md](docs/architecture.md).
 
@@ -150,8 +150,8 @@ Each of these ships as an extension, and each has a thread asking what you would
 
 - Docker Compose is the supported install. Sandboxes are Docker containers, not microVMs.
 - Sandboxes receive the model-provider keys and S3 credentials they use. A credential broker in the egress proxy is planned; until then, see [SECURITY.md](SECURITY.md) for the threat model.
-- Budgets are checked when a turn starts. Stopping a turn mid-run when its budget runs out is being built now.
-- A turn that is running when the orchestrator dies ends in an error. Pending approvals and queued turns survive the restart. Taking over running turns is being built now.
+- Per-run spend caps need the LiteLLM gateway. The gateway checks the cap before each model call, so the call that crosses the cap finishes and the run stops before the next one. Agents that call a provider directly are only checked when a turn starts.
+- If the orchestrator dies, a running turn keeps going in its sandbox for 120 seconds (`STABLEHAND_TURN_ORPHAN_GRACE_MS`) and the restarted orchestrator picks it up. A tool that runs inside the orchestrator and was cut off by the crash runs again, so give tools with side effects an idempotency key. If the sandbox died too, the turn ends in an error.
 - Approval gates cover local tools you mark and the built-in `request-approval` tool. HTTP tools ignore the flag today, and the Claude Agent SDK's own Bash, Write and Edit tools run without asking; the container is the boundary.
 - Turns priced through the LiteLLM gateway show their full cost. Turns that call a provider directly may show as unpriced, and Claude Agent SDK usage is under-counted.
 - MCP and Composio provider classes exist in `packages/stablehand/src/tool/providers/` but are not registered, so agents cannot reach MCP servers or Composio tools yet.
