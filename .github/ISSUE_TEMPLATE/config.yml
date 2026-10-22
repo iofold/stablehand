@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/iofold/stablehand/security/advisories/new
+    about: Report vulnerabilities privately, not as a public issue. See SECURITY.md for details.
+  - name: Documentation
+    url: https://github.com/iofold/stablehand/tree/master/docs
+    about: Architecture, API reference, and operating guides.

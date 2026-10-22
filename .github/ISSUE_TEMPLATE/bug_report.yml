@@ -1,0 +1,86 @@
+name: Bug report
+description: Something in Stablehand is broken or does not match the docs.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this.
+
+        **Security issues do not belong here.** Report them privately as described in
+        [SECURITY.md](https://github.com/iofold/stablehand/blob/master/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected to see instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps, agent manifest, or request that shows the problem.
+      placeholder: |
+        1. Start the stack with `docker compose up --build -d`
+        2. Create an agent with ...
+        3. Send ...
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Stablehand commit
+      description: Output of `git rev-parse --short HEAD`.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Harness
+      options:
+        - LangGraph
+        - Claude Agents
+        - PI Agent
+        - Not harness-specific / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running Stablehand?
+      options:
+        - Docker Compose stack from this repo
+        - Kubernetes
+        - Embedded in another application
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Docker and Node versions, model provider and model, anything non-default in `.env`.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output from `docker compose logs orchestrator` or the sandbox container. Remove tokens, keys, and private data first.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: This report contains no API keys, tokens, private hostnames, or customer data.
+          required: true

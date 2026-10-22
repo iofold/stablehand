@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest a new capability or an improvement to an existing one.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation and what is hard or impossible today. Start from the use case, not the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+      description: The behavior, API, or configuration you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds
+      description: Other approaches you considered, and how you work around this today.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Orchestrator / API
+        - Sandboxes and harnesses
+        - Tools and extensions
+        - UI
+        - Client and React packages
+        - Deployment and operations
+        - Documentation
+        - Other
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this has not been requested already.
+          required: true
