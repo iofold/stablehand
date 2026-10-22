@@ -224,4 +224,44 @@ describe('useSSE', () => {
     });
     expect(container.textContent).toBe('connected');
   });
+
+  it('reopens a stream the server closed for good from the last event it delivered', () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    const first = createFakeEventSource() as FakeEventSource & { readyState?: number };
+    const second = createFakeEventSource();
+    vi.mocked(createSSEConnection)
+      .mockReturnValueOnce(first as unknown as EventSource)
+      .mockReturnValueOnce(second as unknown as EventSource);
+    useConversationStore.setState({ handleSSEEvent: vi.fn() });
+
+    act(() => {
+      root.render(<Harness />);
+    });
+    act(() => {
+      first.onopen?.(new Event('open'));
+      first.onmessage?.(new MessageEvent('message', {
+        data: JSON.stringify({ type: 'RUN_STARTED', runId: 'turn-1', threadId: 'conv-1', timestamp: 1 }),
+        lastEventId: '000000000042',
+      }));
+    });
+
+    // A proxy 502 while the orchestrator restarts closes the EventSource.
+    first.readyState = 2;
+    act(() => {
+      first.onerror?.(new Event('error'));
+    });
+    expect(createSSEConnection).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(first.close).toHaveBeenCalled();
+    expect(createSSEConnection).toHaveBeenLastCalledWith('agent-1', '000000000042');
+
+    act(() => {
+      second.onopen?.(new Event('open'));
+    });
+    expect(container.textContent).toBe('connected');
+  });
 });

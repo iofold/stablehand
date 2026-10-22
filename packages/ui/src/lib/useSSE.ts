@@ -11,6 +11,10 @@ import { createSSEConnection } from '@/lib/api';
 export type SSEStatus = 'connecting' | 'connected' | 'disconnected';
 
 const SSE_DISCONNECT_GRACE_MS = 5_000;
+const SSE_RECONNECT_BASE_MS = 1_000;
+const SSE_RECONNECT_MAX_MS = 10_000;
+/** EventSource.CLOSED; spelled out so non-browser test doubles need no global. */
+const EVENT_SOURCE_CLOSED = 2;
 
 interface SSEStatusStore {
   status: SSEStatus;
@@ -121,57 +125,95 @@ export function useSSE(
     setStatus('connecting');
     useSSEStatusStore.getState().adjustActive(1);
     useConversationStore.getState().seenEventIds?.clear();
-    const es = createSSEConnection(agentId, eventCursor);
     let hasOpened = false;
+    let disposed = false;
     let disconnectStatusTimer: ReturnType<typeof setTimeout> | null = null;
-    eventSourceRef.current = es;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectAttempts = 0;
+    let lastSeenEventId: string | undefined;
 
-    es.onopen = () => {
-      if (!mountedRef.current || eventSourceRef.current !== es) return;
-      if (disconnectStatusTimer !== null) {
-        clearTimeout(disconnectStatusTimer);
-        disconnectStatusTimer = null;
-      }
-      hasOpened = true;
-      setStatus('connected');
+    const detach = (source: EventSource): void => {
+      source.onopen = null;
+      source.onmessage = null;
+      source.onerror = null;
+      source.close();
     };
 
-    es.onmessage = (event) => {
-      if (!mountedRef.current || eventSourceRef.current !== es) return;
-      handleEvent(event);
-    };
+    const open = (cursor: string | undefined): void => {
+      const es = createSSEConnection(agentId, cursor);
+      eventSourceRef.current = es;
 
-    es.onerror = () => {
-      if (!mountedRef.current || eventSourceRef.current !== es) return;
-      if (!hasOpened) {
-        setStatus('connecting');
-        return;
-      }
-      if (disconnectStatusTimer === null) {
-        disconnectStatusTimer = setTimeout(() => {
+      es.onopen = () => {
+        if (!mountedRef.current || eventSourceRef.current !== es) return;
+        if (disconnectStatusTimer !== null) {
+          clearTimeout(disconnectStatusTimer);
           disconnectStatusTimer = null;
-          if (!mountedRef.current || eventSourceRef.current !== es) return;
-          setStatus('disconnected');
-        }, SSE_DISCONNECT_GRACE_MS);
-      }
-      // EventSource auto-reconnects; keep the last known connected state
-      // during its normal retry window so brief transport churn is not shown
-      // as an application failure.
+        }
+        hasOpened = true;
+        reconnectAttempts = 0;
+        setStatus('connected');
+      };
+
+      es.onmessage = (event) => {
+        if (!mountedRef.current || eventSourceRef.current !== es) return;
+        if (event.lastEventId) {
+          lastSeenEventId = event.lastEventId;
+        }
+        handleEvent(event);
+      };
+
+      es.onerror = () => {
+        if (!mountedRef.current || eventSourceRef.current !== es) return;
+        if (!hasOpened) {
+          setStatus('connecting');
+          return;
+        }
+        if (disconnectStatusTimer === null) {
+          disconnectStatusTimer = setTimeout(() => {
+            disconnectStatusTimer = null;
+            if (!mountedRef.current || disposed) return;
+            setStatus('disconnected');
+          }, SSE_DISCONNECT_GRACE_MS);
+        }
+        // EventSource auto-reconnects after a dropped stream, keeping the
+        // last known connected state during its retry window. A non-200
+        // answer, such as a proxy 502 while the orchestrator restarts, closes
+        // it for good instead; reopen from the last event seen so the stream
+        // resumes exactly where it stopped (ADR 024).
+        if (es.readyState === EVENT_SOURCE_CLOSED && !disposed && reconnectTimer === null) {
+          const delay = Math.min(
+            SSE_RECONNECT_MAX_MS,
+            SSE_RECONNECT_BASE_MS * 2 ** reconnectAttempts,
+          );
+          reconnectAttempts += 1;
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            if (disposed || eventSourceRef.current !== es) return;
+            detach(es);
+            open(lastSeenEventId ?? cursor);
+          }, delay);
+        }
+      };
     };
+
+    open(eventCursor);
 
     return () => {
+      disposed = true;
       if (disconnectStatusTimer !== null) {
         clearTimeout(disconnectStatusTimer);
         disconnectStatusTimer = null;
       }
-      es.onopen = null;
-      es.onmessage = null;
-      es.onerror = null;
-      es.close();
-      useSSEStatusStore.getState().adjustActive(-1);
-      if (eventSourceRef.current === es) {
-        eventSourceRef.current = null;
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
       }
+      const current = eventSourceRef.current;
+      if (current) {
+        detach(current);
+      }
+      useSSEStatusStore.getState().adjustActive(-1);
+      eventSourceRef.current = null;
       if (mountedRef.current) {
         setStatus('connecting');
       }
