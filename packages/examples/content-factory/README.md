@@ -24,10 +24,10 @@ schedule (Thu) -> measure -> scout files the report for next Monday
 
 You need a running Stablehand from the default install (which routes model calls through the LiteLLM gateway, so each run is priced and capped) and an [Apify](https://apify.com) API token. The demo reads synthetic meeting notes, so you do not need a Granola account to try it.
 
-1. Start the synthetic notes server and let the orchestrator reach it. Add this line to `.env`, then restart the orchestrator:
+1. Start the synthetic notes server and let the orchestrator reach it. Add this line to `.env`, then restart the orchestrator. Keep `gallery` in the list: the default install's gallery overlay reads the same variable, and its webhooks stop arriving without it.
 
    ```sh
-   STABLEHAND_EGRESS_ALLOWLIST=notes-mcp
+   STABLEHAND_EGRESS_ALLOWLIST=gallery,notes-mcp
    ```
 
    ```sh

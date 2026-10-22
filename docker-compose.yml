@@ -100,7 +100,7 @@ services:
     restart: unless-stopped
 
   # Synthetic meeting notes for the content factory example: a stand-in for Granola's MCP server.
-  # docker compose --profile content-factory up -d notes-mcp   (and STABLEHAND_EGRESS_ALLOWLIST=notes-mcp)
+  # docker compose --profile content-factory up -d notes-mcp   (and STABLEHAND_EGRESS_ALLOWLIST=gallery,notes-mcp)
   notes-mcp:
     image: node:22-alpine
     profiles: ["content-factory"]
