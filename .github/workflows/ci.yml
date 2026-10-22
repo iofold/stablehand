@@ -95,6 +95,9 @@ jobs:
     # Playwright step see them. Unset secrets resolve to empty strings; the smoke tests
     # that make real model calls then skip instead of failing.
     env:
+      # The base stack only: .env.example also lists the gateway and gallery
+      # overlays, which need generated keys (install.sh writes them).
+      COMPOSE_FILE: docker-compose.yml
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
@@ -163,3 +166,9 @@ jobs:
           docker build --target harness-langgraph -t stablehand/harness-langgraph:ci -f Dockerfile.sandbox .
           docker build --target harness-claude-agents -t stablehand/harness-claude-agents:ci -f Dockerfile.sandbox .
           docker build --target harness-pi-agent -t stablehand/harness-pi-agent:ci -f Dockerfile.sandbox .
+      - name: Build gallery and gateway images
+        run: |
+          docker build -t stablehand/gallery:ci extensions/artifact-gallery
+          docker build -t stablehand/gateway:ci -f deploy/compose/model-gateway/Dockerfile .
+      - name: Installer syntax
+        run: sh -n install.sh
