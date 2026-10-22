@@ -744,6 +744,53 @@ export interface RegisterToolHandlersDeps {
   repository?: DatabaseRepository;
 }
 
+function describeJsonKind(value: unknown): string {
+  if (Array.isArray(value)) return 'an array';
+  if (value === null) return 'null';
+  return `a ${typeof value}`;
+}
+
+/**
+ * Normalize the `payload` argument of the `emit-event` tool (ctx-n01m).
+ *
+ * Models sometimes serialize the payload themselves, so a string holding a
+ * JSON object is parsed and accepted. Anything else that is not a plain
+ * object is reported back to the caller instead of being replaced with `{}`,
+ * which used to fire triggers with silently emptied payloads. An absent
+ * payload carries no data and still means "empty payload".
+ */
+function normalizeEmitEventPayload(
+  raw: unknown,
+): { payload: Record<string, unknown> } | { error: string } {
+  if (raw === undefined || raw === null) {
+    return { payload: {} };
+  }
+
+  let value: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      return {
+        error: 'Error: emit-event requires "payload" to be a JSON object (got a string that is not valid JSON)',
+      };
+    }
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return {
+        error: `Error: emit-event requires "payload" to be a JSON object (got a JSON string encoding ${describeJsonKind(value)})`,
+      };
+    }
+  }
+
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return {
+      error: `Error: emit-event requires "payload" to be a JSON object (got ${describeJsonKind(value)})`,
+    };
+  }
+
+  return { payload: { ...(value as Record<string, unknown>) } };
+}
+
 export function registerDefaultToolHandlers(
   registry: OrchestratorToolRegistry,
   eventBusOrDeps: TypedEventBus | RegisterToolHandlersDeps,
@@ -761,9 +808,11 @@ export function registerDefaultToolHandlers(
     }
 
     const eventType = args.type;
-    const payload = typeof args.payload === 'object' && args.payload !== null
-      ? args.payload as Record<string, unknown>
-      : {};
+    const normalized = normalizeEmitEventPayload(args.payload);
+    if ('error' in normalized) {
+      return normalized.error;
+    }
+    const payload = normalized.payload;
 
     payload.turnId = ctx.turnId;
     payload.conversationId = ctx.conversationId;

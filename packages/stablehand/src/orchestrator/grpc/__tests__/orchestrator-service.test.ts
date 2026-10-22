@@ -1162,6 +1162,119 @@ describe('registerDefaultToolHandlers', () => {
     expect(result).toBe('Error: emit-event requires a non-empty string "type"');
     expect(eventBus.emitCustomAsync).not.toHaveBeenCalled();
   });
+
+  describe('payload normalization (ctx-n01m)', () => {
+    const ctx = {
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+      agentId: 'agent-1',
+      requestId: 'req-1',
+    };
+
+    function emitEventHandler() {
+      const eventBus = makeEventBus();
+      const registry = new DefaultOrchestratorToolRegistry();
+      registerDefaultToolHandlers(registry, eventBus);
+      return { eventBus, handler: registry.get('emit-event')! };
+    }
+
+    it('accepts an object payload and stamps the turn identity', async () => {
+      const { eventBus, handler } = emitEventHandler();
+
+      const result = await handler(
+        { type: 'report.ready', payload: { reportPath: '/workspace/r.json', score: 3 } },
+        ctx,
+      );
+
+      expect(JSON.parse(result)).toEqual({ ok: true, eventType: 'report.ready' });
+      expect(eventBus.emitCustomAsync).toHaveBeenCalledWith('report.ready', 'agent-1', {
+        reportPath: '/workspace/r.json',
+        score: 3,
+        turnId: 'turn-1',
+        conversationId: 'conversation-1',
+        agentId: 'agent-1',
+      });
+    });
+
+    it('parses a payload the model serialized as a JSON object string', async () => {
+      const { eventBus, handler } = emitEventHandler();
+
+      const result = await handler(
+        {
+          type: 'report.ready',
+          payload: JSON.stringify({ reportPath: '/workspace/r.json', tags: ['a', 'b'] }),
+        },
+        ctx,
+      );
+
+      expect(JSON.parse(result)).toEqual({ ok: true, eventType: 'report.ready' });
+      expect(eventBus.emitCustomAsync).toHaveBeenCalledWith('report.ready', 'agent-1', {
+        reportPath: '/workspace/r.json',
+        tags: ['a', 'b'],
+        turnId: 'turn-1',
+        conversationId: 'conversation-1',
+        agentId: 'agent-1',
+      });
+    });
+
+    it('keeps treating an absent payload as an empty payload', async () => {
+      const { eventBus, handler } = emitEventHandler();
+
+      const result = await handler({ type: 'ping' }, ctx);
+
+      expect(JSON.parse(result)).toEqual({ ok: true, eventType: 'ping' });
+      expect(eventBus.emitCustomAsync).toHaveBeenCalledWith('ping', 'agent-1', {
+        turnId: 'turn-1',
+        conversationId: 'conversation-1',
+        agentId: 'agent-1',
+      });
+    });
+
+    it('returns an error for a string payload that is not valid JSON', async () => {
+      const { eventBus, handler } = emitEventHandler();
+
+      const result = await handler(
+        { type: 'report.ready', payload: 'report is at /workspace/r.json' },
+        ctx,
+      );
+
+      expect(result).toBe(
+        'Error: emit-event requires "payload" to be a JSON object (got a string that is not valid JSON)',
+      );
+      expect(eventBus.emitCustomAsync).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an array', ['a', 'b'], 'an array'],
+      ['a number', 42, 'a number'],
+      ['a boolean', true, 'a boolean'],
+    ])('returns an error for %s payload', async (_label, payload, kind) => {
+      const { eventBus, handler } = emitEventHandler();
+
+      const result = await handler({ type: 'report.ready', payload }, ctx);
+
+      expect(result).toBe(
+        `Error: emit-event requires "payload" to be a JSON object (got ${kind})`,
+      );
+      expect(eventBus.emitCustomAsync).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an array', '[1, 2]'],
+      ['a number', '42'],
+      ['a string', '"done"'],
+      ['null', 'null'],
+    ])('returns an error for a JSON string encoding %s', async (kind, payload) => {
+      const { eventBus, handler } = emitEventHandler();
+
+      const result = await handler({ type: 'report.ready', payload }, ctx);
+
+      expect(result).toBe(
+        `Error: emit-event requires "payload" to be a JSON object (got a JSON string encoding ${kind})`,
+      );
+      expect(eventBus.emitCustomAsync).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('createGrpcRoutes', () => {
