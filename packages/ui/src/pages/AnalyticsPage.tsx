@@ -35,6 +35,7 @@ import {
 } from '@/lib/api';
 import { BudgetPolicyLedger } from '@/components/analytics/BudgetPolicyLedger';
 import { formatCompactNumber, formatRelativeTime } from '@/lib/format';
+import { formatUsd } from '@/lib/usage-cost';
 import { cn } from '@/lib/utils';
 
 const WINDOWS: Array<{ value: AnalyticsWindow; label: string }> = [
@@ -50,12 +51,10 @@ const COVERAGE_TONES = {
   unpriced: 'bg-rose-400',
 } as const;
 
-function formatUsd(value: number): string {
-  if (value > 0 && value < 0.0001) return `$${value.toPrecision(2)}`;
-  return `$${value.toLocaleString(undefined, {
-    minimumFractionDigits: 4,
-    maximumFractionDigits: 4,
-  })}`;
+/** Cost for a set of turns: a floor when some are unpriced, nothing when none are. */
+function describeKnownCost(knownCostUsd: number, unpricedTurns: number): string {
+  if (unpricedTurns > 0 && knownCostUsd === 0) return 'Not reported';
+  return unpricedTurns > 0 ? `≥ ${formatUsd(knownCostUsd)}` : formatUsd(knownCostUsd);
 }
 
 function formatChartLabel(timestamp: number, window: AnalyticsWindow): string {
@@ -367,9 +366,9 @@ export function AnalyticsPage() {
           detail={`${formatCompactNumber(totals.inputTokens)} in · ${formatCompactNumber(totals.outputTokens)} out · ${tokenCoverage}% reported`}
         />
         <Metric
-          label="Known model cost"
-          value={formatUsd(totals.knownCostUsd)}
-          detail={`${completeCoverage}% fully priced`}
+          label="Model cost"
+          value={describeKnownCost(totals.knownCostUsd, totals.turns - totals.costCoverage.complete)}
+          detail={`${totals.costCoverage.complete} of ${totals.turns} turns priced`}
         />
         <Metric
           label="Active agents"
@@ -650,9 +649,9 @@ export function AnalyticsPage() {
                         </p>
                       </div>
                       <div>
-                        <p className="text-label sm:text-right">Known cost</p>
+                        <p className="text-label sm:text-right">Model cost</p>
                         <p className="mt-1 text-sm font-medium tabular-nums text-surface-200 sm:text-right">
-                          {formatUsd(agent.knownCostUsd)}
+                          {describeKnownCost(agent.knownCostUsd, incompleteCostTurns)}
                         </p>
                       </div>
                     </div>

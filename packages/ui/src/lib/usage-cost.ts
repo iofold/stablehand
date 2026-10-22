@@ -10,9 +10,23 @@ export interface UsageCostDescription {
   state: UsageCostState;
 }
 
-function usd(value: number): string {
-  return `$${value.toFixed(4)}`;
+/**
+ * Dollar amounts for model cost: four decimals under $1 (turns cost cents),
+ * two from there, and two significant digits for sub-cent-hundredths.
+ */
+export function formatUsd(value: number): string {
+  if (value > 0 && value < 0.0001) return `$${value.toPrecision(2)}`;
+  const decimals = Math.abs(value) >= 1 ? 2 : 4;
+  return `$${value.toLocaleString(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  })}`;
 }
+
+const usd = formatUsd;
+
+/** Shown wherever a cost cannot be stated because no price was reported. */
+export const COST_NOT_REPORTED = 'Cost not reported';
 
 function callCoverageNote(usage: TurnUsage): string {
   if (usage.modelCalls.observed === 0) return '';
@@ -24,8 +38,8 @@ export function describeTurnCost(
 ): UsageCostDescription {
   if (!usage) {
     return {
-      label: 'Usage unavailable',
-      title: 'This turn did not report trustworthy usage.',
+      label: 'Usage not reported',
+      title: 'This turn did not report token usage or cost.',
       state: 'unavailable',
     };
   }
@@ -53,8 +67,8 @@ export function describeTurnCost(
     };
   }
   return {
-    label: 'Cost unavailable',
-    title: `Model calls occurred, but no price is configured for this model.${callCoverageNote(usage)}`,
+    label: COST_NOT_REPORTED,
+    title: `No price is configured for this model, so this turn's cost is not counted.${callCoverageNote(usage)}`,
     state: 'unpriced',
   };
 }
@@ -68,10 +82,18 @@ export function describeConversationCostRollup(summary: {
   incompleteCostTurnCount?: number;
 }): { label: string; title: string } | null {
   if (summary.knownCostUsd == null) return null;
-  if (summary.incompleteCostTurnCount != null && summary.incompleteCostTurnCount > 0) {
+  const incomplete = summary.incompleteCostTurnCount ?? 0;
+  const turns = `${incomplete} ${incomplete === 1 ? 'turn has' : 'turns have'}`;
+  if (incomplete > 0 && summary.knownCostUsd === 0) {
+    return {
+      label: COST_NOT_REPORTED,
+      title: `${turns} no reported cost.`,
+    };
+  }
+  if (incomplete > 0) {
     return {
       label: `≥ ${usd(summary.knownCostUsd)}`,
-      title: `${summary.incompleteCostTurnCount} ${summary.incompleteCostTurnCount === 1 ? 'turn is' : 'turns are'} not fully priced yet, so this is a floor.`,
+      title: `${turns} no reported cost, so the total is at least this much.`,
     };
   }
   return {
@@ -118,8 +140,8 @@ export function summarizeTurnCosts(
     };
   }
   return {
-    label: 'Cost unavailable',
-    title: 'The conversation has no trustworthy model cost total.',
+    label: COST_NOT_REPORTED,
+    title: 'No turn in this conversation reported a model cost.',
     state: 'unpriced',
   };
 }

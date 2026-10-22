@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeTurnCost, summarizeTurnCosts } from './usage-cost';
+import {
+  describeConversationCostRollup,
+  describeTurnCost,
+  formatUsd,
+  summarizeTurnCosts,
+} from './usage-cost';
 
 const base = {
   inputTokens: 10,
@@ -22,11 +27,27 @@ describe('usage cost presentation', () => {
     expect(describeTurnCost({
       ...base,
       cost: { totalUsd: null, knownUsd: 0, coverage: 'unpriced' },
-    })).toMatchObject({ label: 'Cost unavailable', state: 'unpriced' });
+    })).toMatchObject({ label: 'Cost not reported', state: 'unpriced' });
     expect(describeTurnCost({
       ...base,
       cost: { totalUsd: 0, knownUsd: 0, coverage: 'complete' },
     })).toMatchObject({ label: '$0.0000', state: 'complete' });
+  });
+
+  it('never shows a floor of zero for unpriced conversations', () => {
+    expect(describeConversationCostRollup({ knownCostUsd: 0, incompleteCostTurnCount: 1 }))
+      .toMatchObject({ label: 'Cost not reported' });
+    expect(describeConversationCostRollup({ knownCostUsd: 0.0788, incompleteCostTurnCount: 2 }))
+      .toMatchObject({ label: '≥ $0.0788' });
+    expect(describeConversationCostRollup({ knownCostUsd: 0.0985, incompleteCostTurnCount: 0 }))
+      .toMatchObject({ label: '$0.0985' });
+    expect(describeConversationCostRollup({ knownCostUsd: null })).toBeNull();
+  });
+
+  it('formats dollars by magnitude', () => {
+    expect(formatUsd(0.0788)).toBe('$0.0788');
+    expect(formatUsd(12.3456)).toBe('$12.35');
+    expect(formatUsd(0.00004)).toBe('$0.000040');
   });
 
   it('summarizes a conversation without treating missing usage as free', () => {

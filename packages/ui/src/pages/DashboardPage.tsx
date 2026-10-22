@@ -25,6 +25,7 @@ import { PageShell } from '@/components/ui/PageShell';
 import { StatsRow } from '@/components/ui/StatsRow';
 import { cn } from '@/lib/utils';
 import { formatCompactNumber } from '@/lib/format';
+import { formatUsd } from '@/lib/usage-cost';
 
 const TABS = [
   { id: 'overview', label: 'Overview', testId: 'dashboard-tab-overview' },
@@ -197,7 +198,11 @@ export function DashboardPage() {
                 },
                 {
                   label: `Spend · ${WINDOW_LABELS[analyticsWindow]}`,
-                  value: totals ? `$${totals.knownCostUsd.toFixed(2)}` : '--',
+                  value: totals
+                    ? totals.knownCostUsd === 0 && totals.costCoverage.complete < totals.turns
+                      ? 'Not reported'
+                      : formatUsd(totals.knownCostUsd)
+                    : '--',
                 },
                 {
                   label: 'Agents',
