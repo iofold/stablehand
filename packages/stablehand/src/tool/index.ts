@@ -15,10 +15,6 @@ export type { ToolProvider } from './provider.js';
 
 // Tool provider implementations
 export { LocalToolProvider } from './providers/local.js';
-export { MCPToolProvider } from './providers/mcp.js';
-export type { MCPTransportConfig } from './providers/mcp.js';
-export { ComposioToolProvider } from './providers/composio.js';
-export type { ComposioConfig } from './providers/composio.js';
 
 // Tool registry
 export { DefaultToolRegistry } from './registry.js';

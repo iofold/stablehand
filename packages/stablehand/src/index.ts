@@ -53,8 +53,8 @@ export type {
   HarnessTurnContext, HarnessExportedState, HarnessRestorePoint,
 } from './harness/index.js';
 export type { ToolProvider } from './tool/provider.js';
-export { LocalToolProvider, MCPToolProvider, ComposioToolProvider, HTTPToolProvider } from './tool/providers/index.js';
-export type { MCPTransportConfig, ComposioConfig, HttpEndpointConfig, HttpAuthConfig } from './tool/providers/index.js';
+export { LocalToolProvider, HTTPToolProvider } from './tool/providers/index.js';
+export type { HttpEndpointConfig, HttpAuthConfig } from './tool/providers/index.js';
 export { DefaultToolRegistry } from './tool/registry.js';
 export type { SecretProvider } from './secrets/index.js';
 

@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { LocalFunctionExecutor } from '../../packages/stablehand/src/tool/executor.js';
 import { LocalToolProvider } from '../../packages/stablehand/src/tool/providers/local.js';
 import { MCPToolProvider } from '../../packages/stablehand/src/tool/providers/mcp.js';
-import { ComposioToolProvider } from '../../packages/stablehand/src/tool/providers/composio.js';
 import type { ToolDefinition, ToolContext } from '@stablehand/sandbox-daemon';
 
 const mockCtx: ToolContext = {
@@ -203,102 +202,5 @@ describe('MCPToolProvider', () => {
 
     const result = await provider.execute('img-tool', {}, mockCtx);
     expect(result).toContain('base64...');
-  });
-});
-
-// ---------- ComposioToolProvider ----------
-
-describe('ComposioToolProvider', () => {
-  it('should have name "composio"', () => {
-    const provider = new ComposioToolProvider({ apiKey: 'test-key' });
-    expect(provider.name).toBe('composio');
-  });
-
-  it('should prefix tool names with composio.', async () => {
-    const mockClient = {
-      createSession: vi.fn().mockResolvedValue({
-        session_id: 'session-1',
-        tool_router_tools: [
-          {
-            name: 'create_issue',
-            description: 'Create a GitHub issue',
-          },
-        ],
-      }),
-      listSessionTools: vi.fn().mockResolvedValue([
-        {
-          name: 'create_issue',
-          description: 'Create a GitHub issue',
-          input_schema: {
-            type: 'object',
-            properties: {
-              title: { type: 'string', description: 'Issue title' },
-              body: { type: 'string', description: 'Issue body' },
-            },
-            required: ['title'],
-          },
-        },
-      ]),
-      executeSessionTool: vi.fn().mockResolvedValue({ id: 123 }),
-    };
-
-    const provider = new ComposioToolProvider({
-      apiKey: 'test-key',
-      toolkits: ['github'],
-      userId: 'agent-1',
-    }, mockClient);
-
-    const tools = await provider.listTools();
-    expect(tools).toHaveLength(1);
-    expect(tools[0].name).toBe('composio.create_issue');
-    expect(tools[0].description).toBe('Create a GitHub issue');
-
-    const parseResult = tools[0].input.safeParse({ title: 'Bug' });
-    expect(parseResult.success).toBe(true);
-    expect(mockClient.createSession).toHaveBeenCalledWith({
-      apiKey: 'test-key',
-      toolkits: ['github'],
-      userId: 'agent-1',
-    });
-    expect(mockClient.listSessionTools).toHaveBeenCalledWith('session-1');
-  });
-
-  it('should strip composio. prefix when executing', async () => {
-    const mockClient = {
-      createSession: vi.fn().mockResolvedValue({ session_id: 'session-1' }),
-      listSessionTools: vi.fn().mockResolvedValue([]),
-      executeSessionTool: vi.fn().mockResolvedValue('done'),
-    };
-
-    const provider = new ComposioToolProvider({ apiKey: 'test-key' }, mockClient);
-
-    const result = await provider.execute(
-      'composio.create_issue',
-      { title: 'Bug' },
-      mockCtx,
-    );
-
-    expect(result).toBe('done');
-    expect(mockClient.executeSessionTool).toHaveBeenCalledWith(
-      'session-1',
-      'create_issue',
-      { title: 'Bug' },
-    );
-  });
-
-  it('should cache tools after first list', async () => {
-    const mockClient = {
-      createSession: vi.fn().mockResolvedValue({ session_id: 'session-1' }),
-      listSessionTools: vi.fn().mockResolvedValue([]),
-      executeSessionTool: vi.fn(),
-    };
-
-    const provider = new ComposioToolProvider({ apiKey: 'test-key' }, mockClient);
-
-    await provider.listTools();
-    await provider.listTools();
-
-    expect(mockClient.createSession).toHaveBeenCalledTimes(1);
-    expect(mockClient.listSessionTools).toHaveBeenCalledTimes(1);
   });
 });
