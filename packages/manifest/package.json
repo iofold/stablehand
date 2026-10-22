@@ -1,9 +1,19 @@
 {
   "name": "@stablehand/manifest",
   "version": "0.1.0",
-  "license": "MIT",
-  "type": "module",
   "description": "Strict browser-light and Node agent manifest contracts for Stablehand",
+  "license": "MIT",
+  "author": "iofold",
+  "homepage": "https://github.com/iofold/stablehand/tree/master/packages/manifest#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iofold/stablehand.git",
+    "directory": "packages/manifest"
+  },
+  "bugs": {
+    "url": "https://github.com/iofold/stablehand/issues"
+  },
+  "type": "module",
   "sideEffects": false,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,13 +30,16 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
-  },
-  "engines": {
-    "node": ">=20"
   },
   "dependencies": {
     "@stablehand/contracts": "workspace:*",

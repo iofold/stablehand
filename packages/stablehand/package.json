@@ -1,9 +1,19 @@
 {
   "name": "stablehand",
   "version": "0.1.0",
+  "description": "Run agents on a schedule on your own servers: the Stablehand orchestrator, API and CLI",
   "license": "MIT",
+  "author": "iofold",
+  "homepage": "https://github.com/iofold/stablehand/tree/master/packages/stablehand#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iofold/stablehand.git",
+    "directory": "packages/stablehand"
+  },
+  "bugs": {
+    "url": "https://github.com/iofold/stablehand/issues"
+  },
   "type": "module",
-  "description": "Framework for building vertical AI products with ambient agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -18,6 +28,17 @@
   },
   "bin": {
     "stablehand": "./dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/__tests__",
+    "!dist/**/*.test.*"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc",
@@ -53,8 +74,5 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.8.0",
     "vitest": "^3.0.0"
-  },
-  "engines": {
-    "node": ">=22.0.0"
   }
 }

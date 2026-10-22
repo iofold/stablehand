@@ -1,13 +1,39 @@
 {
   "name": "@stablehand/proto",
   "version": "0.1.0",
+  "description": "Protocol Buffers and generated code for the Stablehand sandbox gRPC API",
   "license": "MIT",
-  "private": true,
+  "author": "iofold",
+  "homepage": "https://github.com/iofold/stablehand/tree/master/packages/proto#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iofold/stablehand.git",
+    "directory": "packages/proto"
+  },
+  "bugs": {
+    "url": "https://github.com/iofold/stablehand/issues"
+  },
   "type": "module",
   "exports": {
     "./sandbox/v1": {
       "types": "./gen/stablehand/sandbox/v1/sandbox_pb.ts",
       "default": "./dist/stablehand/sandbox/v1/sandbox_pb.js"
+    }
+  },
+  "files": [
+    "dist",
+    "stablehand"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      "./sandbox/v1": {
+        "types": "./dist/stablehand/sandbox/v1/sandbox_pb.d.ts",
+        "default": "./dist/stablehand/sandbox/v1/sandbox_pb.js"
+      }
     }
   },
   "scripts": {
