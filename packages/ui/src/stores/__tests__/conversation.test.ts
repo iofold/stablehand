@@ -436,6 +436,23 @@ describe('conversation store', () => {
     expect(state.toolCalls.size).toBe(0);
   });
 
+  it('keeps the streamed tool name when the committed row has no name recorded', () => {
+    const { handleSSEEvent } = getStore();
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'write_todos' }));
+    handleSSEEvent(makeEvent('CUSTOM', { name: 'stablehand.message.committed',
+      messageId: 'message-unnamed-tool',
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'tc1', name: 'unknown', args: '{}', status: 'complete' }],
+      messageSeq: 1,
+      turnId: 'r1',
+    }));
+
+    expect(getStore().messages[0].toolCalls?.[0].name).toBe('write_todos');
+  });
+
   it('late TOOL_CALL_RESULT updates committed tool calls after preview state is cleared', () => {
     const { handleSSEEvent } = getStore();
 

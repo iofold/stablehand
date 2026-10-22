@@ -57,11 +57,11 @@ describe('SessionThread subagent grouping and collapse', () => {
 
     // The badge names the subagent and counts its calls; children start hidden.
     expect(container.textContent).toContain('researcher · 2 calls');
-    expect(container.textContent).toContain('Task');
+    expect(container.textContent).toContain('Subagent');
     expect(container.textContent).not.toContain('Grep');
 
     const badge = [...container.querySelectorAll('button')]
-      .find((b) => b.textContent?.includes('researcher'));
+      .find((b) => b.textContent?.includes('researcher · '));
     expect(badge).toBeTruthy();
     act(() => badge!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(container.textContent).toContain('Read');
@@ -76,14 +76,14 @@ describe('SessionThread subagent grouping and collapse', () => {
     ])]);
 
     expect(container.textContent).toContain('3 tool calls');
-    expect(container.textContent).not.toContain('AlphaTool');
+    expect(container.textContent).not.toContain('Alpha tool');
 
     const summary = [...container.querySelectorAll('button')]
       .find((b) => b.textContent?.includes('3 tool calls'));
     expect(summary).toBeTruthy();
     act(() => summary!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-    expect(container.textContent).toContain('AlphaTool');
-    expect(container.textContent).toContain('GammaTool');
+    expect(container.textContent).toContain('Alpha tool');
+    expect(container.textContent).toContain('Gamma tool');
   });
 
   it('renders two or fewer top-level cards flat, with a subagent group counting once', () => {
@@ -95,7 +95,7 @@ describe('SessionThread subagent grouping and collapse', () => {
 
     // Two top-level items (Task group + DeltaTool): no run-level collapse.
     expect(container.textContent).not.toContain('tool calls');
-    expect(container.textContent).toContain('DeltaTool');
+    expect(container.textContent).toContain('Delta tool');
     expect(container.textContent).toContain('coder · 1 call');
     expect(container.textContent).not.toContain('Bash');
   });

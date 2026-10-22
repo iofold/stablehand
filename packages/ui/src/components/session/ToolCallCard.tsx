@@ -1,145 +1,158 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { ChevronRight } from 'lucide-react';
 import type { ApiA2UIBlock } from '@stablehand/shared';
 import { cn } from '@/lib/utils';
 import type { ToolCallState } from '@/stores/conversation';
 import { A2UIBlock } from '@/components/a2ui/A2UIBlock';
 import { formatEventDuration } from '@/lib/format';
+import {
+  a2uiDisplayName,
+  isA2UIRenderToolName,
+  isMissingToolName,
+  summarizeToolArgs,
+  toolDisplayName,
+} from '@/lib/tool-display';
 
 interface ToolCallCardProps {
   toolCall: ToolCallState;
 }
 
-export function ToolCallCard({ toolCall }: ToolCallCardProps) {
-  const [expanded, setExpanded] = useState(true);
+interface ParsedArgs {
+  value: unknown;
+  formatted: string;
+}
 
-  let parsedArgsStr = '';
-  let formattedArgs = '';
-  let a2uiBlock: ApiA2UIBlock | null = null;
+function parseArgs(args: string | undefined): ParsedArgs {
+  if (!args) return { value: undefined, formatted: '' };
   try {
-    if (toolCall.args) {
-      const parsed = JSON.parse(toolCall.args);
-      parsedArgsStr = JSON.stringify(parsed);
-      formattedArgs = JSON.stringify(parsed, null, 2);
-      
-      const isA2UIRender = toolCall.name === 'a2ui-render' || toolCall.name.endsWith('__a2ui-render');
-      if (isA2UIRender && parsed && typeof parsed === 'object' && typeof parsed.component === 'string') {
-        a2uiBlock = {
-          id: toolCall.id,
-          component: parsed.component,
-          props: parsed.props || {},
-        };
-      }
-    }
+    const value: unknown = JSON.parse(args);
+    return { value, formatted: JSON.stringify(value, null, 2) };
   } catch {
-    console.debug('[ToolCallCard] Failed to parse tool call args as JSON');
-    parsedArgsStr = toolCall.args || '';
-    formattedArgs = toolCall.args || '';
+    // Arguments still streaming (partial JSON) or plain text: show as sent.
+    return { value: undefined, formatted: args };
   }
+}
 
-  const truncatedArgs = parsedArgsStr.length > 96
-    ? parsedArgsStr.substring(0, 96) + '...'
-    : parsedArgsStr;
+function toA2UIBlock(id: string, name: string, value: unknown): ApiA2UIBlock | null {
+  if (!isA2UIRenderToolName(name)) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.component !== 'string') return null;
+  const props = record.props && typeof record.props === 'object' && !Array.isArray(record.props)
+    ? record.props as Record<string, unknown>
+    : {};
+  return { id, component: record.component, props };
+}
+
+function DetailBlock({ label, children, tone = 'default' }: {
+  label: string;
+  children: string;
+  tone?: 'default' | 'error';
+}) {
+  return (
+    <div>
+      <div className={cn(
+        'mb-1 text-[10px] uppercase tracking-wider',
+        tone === 'error' ? 'text-red-400/80' : 'text-surface-500',
+      )}
+      >
+        {label}
+      </div>
+      <pre className={cn(
+        'max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md border bg-surface-950 p-2 font-mono text-xs',
+        tone === 'error' ? 'border-red-900/50 text-red-400' : 'border-surface-700 text-surface-400',
+      )}
+      >
+        {children}
+      </pre>
+    </div>
+  );
+}
+
+export function ToolCallCard({ toolCall }: ToolCallCardProps) {
+  // null = follow the default (open only when the call failed).
+  const [expandedOverride, setExpandedOverride] = useState<boolean | null>(null);
+  const parsed = useMemo(() => parseArgs(toolCall.args), [toolCall.args]);
+  const a2uiBlock = useMemo(
+    () => toA2UIBlock(toolCall.id, toolCall.name, parsed.value),
+    [toolCall.id, toolCall.name, parsed.value],
+  );
 
   const isRunning = toolCall.status === 'running' || toolCall.status === 'pending';
   const isComplete = toolCall.status === 'complete';
   const isError = toolCall.status === 'error';
+  const expanded = expandedOverride ?? isError;
 
-  let dotColor = 'bg-surface-600';
-  let dotAnimation = '';
+  const label = a2uiBlock ? a2uiDisplayName(a2uiBlock.component) : toolDisplayName(toolCall.name);
+  const summary = a2uiBlock ? undefined : summarizeToolArgs(parsed.value);
+  const duration = formatEventDuration(toolCall.durationMs);
+  const rawName = isMissingToolName(toolCall.name) ? 'Not recorded' : toolCall.name;
 
-  if (isRunning) {
-    dotColor = 'bg-yellow-500';
-    dotAnimation = 'animate-pulse';
-  } else if (isComplete) {
-    dotColor = 'bg-green-500';
-  } else if (isError) {
-    dotColor = 'bg-red-500';
-  }
-
-  if (a2uiBlock) {
-    return (
-      <div data-testid="tool-call-card" className="my-1.5 rounded-lg border border-surface-700/50 bg-surface-800/40 px-3 py-2 text-sm font-mono">
-        <div className="flex items-center gap-2 text-left w-full mb-2">
-          <div className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', dotColor, dotAnimation)} />
-          <span className="truncate text-surface-400">
-            <span data-testid="tool-call-name">{toolCall.name}</span> ({a2uiBlock.component})
-          </span>
-          {toolCall.status === 'complete' && (
-            <span data-testid="tool-call-complete" className="sr-only">complete</span>
-          )}
-        </div>
-        <div className="mt-2">
-          <A2UIBlock block={a2uiBlock} />
-        </div>
-      </div>
-    );
-  }
+  const dotClass = isRunning
+    ? 'bg-yellow-500 animate-pulse'
+    : isComplete
+      ? 'bg-green-500'
+      : isError
+        ? 'bg-red-500'
+        : 'bg-surface-600';
 
   return (
-    <div data-testid="tool-call-card" className="my-1.5 rounded-lg border border-surface-700/50 bg-surface-800/40 px-3 py-2 text-sm font-mono">
+    <div
+      data-testid="tool-call-card"
+      className="my-1.5 rounded-lg border border-surface-700/50 bg-surface-800/40 px-3 py-2 text-sm"
+    >
       <button
         type="button"
-        onClick={() => setExpanded(!expanded)}
-        className="group flex w-full items-start gap-2 text-left transition-opacity hover:opacity-80"
+        onClick={() => setExpandedOverride(!expanded)}
+        aria-expanded={expanded}
+        className="group flex w-full min-w-0 items-center gap-2 text-left"
       >
-        <div className={cn('mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full', dotColor, dotAnimation)} />
-        <span className="min-w-0 flex-1 text-surface-400">
-          <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
-            <span aria-hidden>{expanded ? '▾' : '▸'}</span>
-            <span data-testid="tool-call-name" className="break-all text-surface-300">
-              {toolCall.name}
-            </span>
-            {toolCall.durationMs != null && (
-              <span className="text-[10px] text-surface-500 tabular-nums">
-                {formatEventDuration(toolCall.durationMs)}
-              </span>
-            )}
-          </span>
-          {!expanded && truncatedArgs && (
-            <span className="mt-1 block line-clamp-2 break-all text-[11px] leading-4 text-surface-500">
-              {truncatedArgs}
-            </span>
-          )}
+        <span className={cn('h-1.5 w-1.5 flex-shrink-0 rounded-full', dotClass)} />
+        <span
+          data-testid="tool-call-name"
+          title={rawName}
+          className="flex-shrink-0 font-medium text-surface-200"
+        >
+          {label}
         </span>
-        {!expanded && toolCall.result && (
-          <span className="ml-auto hidden flex-shrink-0 text-[10px] text-surface-500 sm:inline">result ↵</span>
+        {summary && (
+          <span className="min-w-0 truncate text-surface-400">{summary}</span>
         )}
-        {!expanded && toolCall.error && (
-          <span className="ml-auto hidden flex-shrink-0 text-[10px] text-red-500/70 sm:inline">error ↵</span>
-        )}
-        {toolCall.status === 'complete' && (
+        <span className="ml-auto flex flex-shrink-0 items-center gap-2 pl-2">
+          {isError && !expanded && (
+            <span className="text-[11px] font-medium text-red-400">Failed</span>
+          )}
+          {duration && (
+            <span className="text-[11px] tabular-nums text-surface-500">{duration}</span>
+          )}
+          <ChevronRight
+            aria-hidden
+            className={cn(
+              'h-3.5 w-3.5 text-surface-500 transition-transform group-hover:text-surface-300',
+              expanded && 'rotate-90',
+            )}
+          />
+        </span>
+        {isComplete && (
           <span data-testid="tool-call-complete" className="sr-only">complete</span>
         )}
       </button>
 
+      {a2uiBlock && (
+        <div className="mt-2">
+          <A2UIBlock block={a2uiBlock} />
+        </div>
+      )}
+
       {expanded && (
         <div className="mt-2 space-y-2">
-          {formattedArgs && (
-            <div>
-              <div className="text-[10px] text-surface-400 mb-1 uppercase tracking-wider">Arguments</div>
-              <pre className="overflow-x-hidden whitespace-pre-wrap break-all rounded-md border border-surface-700 bg-surface-950 p-2 font-mono text-xs text-surface-400">
-                {formattedArgs}
-              </pre>
-            </div>
-          )}
-          
-          {toolCall.result && (
-            <div>
-              <div className="text-[10px] text-surface-400 mb-1 uppercase tracking-wider">Result</div>
-              <pre className="max-h-48 overflow-x-hidden whitespace-pre-wrap break-all rounded-md border border-surface-700 bg-surface-950 p-2 font-mono text-xs text-surface-400">
-                {toolCall.result}
-              </pre>
-            </div>
-          )}
-          
-          {toolCall.error && (
-            <div>
-              <div className="text-[10px] text-red-500/80 mb-1 uppercase tracking-wider">Error</div>
-              <pre className="overflow-x-hidden whitespace-pre-wrap break-all rounded-md border border-red-900/50 bg-surface-950 p-2 font-mono text-xs text-red-400">
-                {toolCall.error}
-              </pre>
-            </div>
-          )}
+          <div className="flex items-baseline gap-2 text-[11px]">
+            <span className="uppercase tracking-wider text-surface-500">Tool</span>
+            <span className="break-all font-mono text-surface-400">{rawName}</span>
+          </div>
+          {parsed.formatted && <DetailBlock label="Arguments">{parsed.formatted}</DetailBlock>}
+          {toolCall.result && !a2uiBlock && <DetailBlock label="Result">{toolCall.result}</DetailBlock>}
+          {toolCall.error && <DetailBlock label="Error" tone="error">{toolCall.error}</DetailBlock>}
         </div>
       )}
     </div>

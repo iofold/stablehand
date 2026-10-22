@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { ApiMessage, ApiMessagePart, ApiToolCallState } from '@stablehand/shared';
 import { useInterruptStore } from './interrupt';
+import { isMissingToolName, MISSING_TOOL_NAME } from '@/lib/tool-display';
 
 export type ToolCallState = ApiToolCallState;
 export type MessagePart = ApiMessagePart;
@@ -57,7 +58,7 @@ function normalizeStoredToolCalls(value: unknown, messageId: string): ToolCallSt
       id: (typeof raw.id === 'string' && raw.id.length > 0) ? raw.id : `${messageId}-tool-${index}`,
       name: (typeof raw.name === 'string' && raw.name.length > 0)
         ? raw.name
-        : 'unknown',
+        : MISSING_TOOL_NAME,
       args: stringifyToolArgs(raw.args ?? raw.argumentsJson ?? raw.arguments ?? raw.input),
       result: typeof raw.result === 'string'
         ? raw.result
@@ -98,7 +99,7 @@ export function normalizeConversationMessage(
           parts.push({
             type: 'tool_call',
             id: (raw.id as string) || '',
-            name: (raw.name as string) || 'unknown',
+            name: (raw.name as string) || MISSING_TOOL_NAME,
             args: (raw.args as string) || '',
             result: raw.result as string | undefined,
             error: raw.error as string | undefined,
@@ -210,7 +211,7 @@ function normalizeEventToolCall(
 
   return {
     id: (typeof value.id === 'string' && value.id.length > 0) ? value.id : fallbackId,
-    name: (typeof value.name === 'string' && value.name.length > 0) ? value.name : 'unknown',
+    name: (typeof value.name === 'string' && value.name.length > 0) ? value.name : MISSING_TOOL_NAME,
     args: typeof value.args === 'string' ? value.args : '',
     result: typeof value.result === 'string' ? value.result : undefined,
     error,
@@ -239,7 +240,11 @@ function mergeCommittedToolCall(
 
   return {
     id: canonical.id,
-    name: canonical.name || preview.name,
+    // A transcript row written without a name must not hide the name the
+    // live stream already showed.
+    name: isMissingToolName(canonical.name) && !isMissingToolName(preview.name)
+      ? preview.name
+      : canonical.name,
     args: preview.args || canonical.args,
     result: hasCanonicalOutcome ? canonical.result : preview.result,
     error: hasCanonicalOutcome ? canonical.error : preview.error,
@@ -749,7 +754,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
         const tc: ToolCallState = {
           id: (event.toolCallId as string) || nextId(),
           // AG-UI carries the name as toolCallName; older frames used toolName.
-          name: (event.toolCallName as string) || (event.toolName as string) || 'unknown',
+          name: (event.toolCallName as string) || (event.toolName as string) || MISSING_TOOL_NAME,
           args: '',
           status: 'running',
           ...(typeof event.parentToolCallId === 'string'
