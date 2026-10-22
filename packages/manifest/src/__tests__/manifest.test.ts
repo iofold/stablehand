@@ -340,6 +340,13 @@ describe('canonical agent API conversion', () => {
     expect(() => validateManifest(candidate)).toThrow();
   });
 
+  it('compiles spec.defaultTags into the run attribution tags', () => {
+    const candidate = structuredClone(minimalManifest());
+    (candidate.spec as Record<string, unknown>).defaultTags = { campaign: 'content-factory' };
+    expect(manifestToAgentCreateInput(validateManifest(candidate)).metadata)
+      .toMatchObject({ defaultTags: { campaign: 'content-factory' } });
+  });
+
   it('rejects two MCP servers with the same name', () => {
     const candidate = structuredClone(minimalManifest());
     (candidate.spec as Record<string, unknown>).mcpServers = [

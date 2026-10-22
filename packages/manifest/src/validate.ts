@@ -6,6 +6,7 @@ import {
   McpServerListSchema,
   NativeToolPolicySchema,
   PIAgentConfigSchema,
+  TagsSchema,
 } from '@stablehand/contracts';
 import { z } from 'zod';
 
@@ -116,6 +117,7 @@ const manifestSpecCommon = {
   instructions: z.string().min(1),
   tools: z.array(manifestToolRefSchema).optional(),
   mcpServers: McpServerListSchema.optional(),
+  defaultTags: TagsSchema.optional(),
   builtinToolPolicy: BuiltinToolPolicySchema.optional(),
   nativeToolPolicy: NativeToolPolicySchema.optional(),
   triggers: z.array(manifestTriggerSchema).optional(),

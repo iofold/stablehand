@@ -89,6 +89,8 @@ interface ManifestSpecCommon {
   instructions: string;
   tools?: ManifestToolRef[];
   mcpServers?: ManifestMcpServer[];
+  /** Budget-attribution tags stamped on every run of this agent (metadata.defaultTags). */
+  defaultTags?: Record<string, string>;
   builtinToolPolicy?: ManifestBuiltinToolPolicy;
   nativeToolPolicy?: ManifestNativeToolPolicy;
   triggers?: ManifestTrigger[];

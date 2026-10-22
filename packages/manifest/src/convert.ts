@@ -60,6 +60,9 @@ function manifestMetadata(manifest: AgentManifest): Record<string, unknown> | un
   if (manifest.metadata.labels !== undefined) {
     metadata.labels = manifest.metadata.labels;
   }
+  if (manifest.spec.defaultTags !== undefined && Object.keys(manifest.spec.defaultTags).length > 0) {
+    metadata.defaultTags = manifest.spec.defaultTags;
+  }
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
