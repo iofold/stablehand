@@ -467,7 +467,7 @@ describe('InterruptManager', () => {
 
   // Shutdown behavior
   describe('shutdown', () => {
-    it('should reject all pending interrupts on shutdown', async () => {
+    it('should release in-process waiters as suspended, not rejected, on shutdown', async () => {
       const promise1 = manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
       const promise2 = manager.waitForApproval('run-2', 'agent-2', 'tc-2', 'read', { path: '/' });
 
@@ -476,16 +476,76 @@ describe('InterruptManager', () => {
       const result1 = await promise1;
       const result2 = await promise2;
 
-      expect(result1.action).toBe('reject');
-      expect(result1.data).toBe('Server shutting down');
-      expect(result2.action).toBe('reject');
-      expect(result2.data).toBe('Server shutting down');
+      expect(result1).toEqual({ action: 'suspend', data: 'Server shutting down' });
+      expect(result2).toEqual({ action: 'suspend', data: 'Server shutting down' });
     });
 
     it('should have no pending interrupts after shutdown', () => {
       manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
       manager.shutdown();
       expect(manager.hasPendingForTurn('run-1')).toBe(false);
+    });
+
+    it('leaves durable rows pending so a fresh manager reloads them (ctx-b3ky)', async () => {
+      const { db, rows } = createMockInterruptDb();
+      const bus = new TypedEventBus();
+      const resolvedListener = vi.fn();
+      bus.on('interrupt.resolved', resolvedListener);
+      const firstManager = new InterruptManager(bus, db);
+
+      // A live in-process waiter …
+      const liveWaiter = firstManager.waitForApproval(
+        'run-live',
+        'agent-1',
+        'tc-live',
+        'bash',
+        { cmd: 'ls' },
+        60_000,
+      );
+      await vi.waitFor(() => {
+        expect(firstManager.hasPendingForTurn('run-live')).toBe(true);
+      });
+
+      // … and one rehydrated from a previous process.
+      const previousProcess = new InterruptManager(undefined, db);
+      void previousProcess.waitForApproval(
+        'run-rehydrated',
+        'agent-2',
+        'tc-rehydrated',
+        'deploy',
+        { env: 'prod' },
+        60_000,
+      );
+      await vi.waitFor(() => {
+        expect(rows.size).toBe(2);
+      });
+      await firstManager.loadFromDb();
+      expect(firstManager.hasPendingForTurn('run-rehydrated')).toBe(true);
+      expect(firstManager.hasLiveWaiterForTurn('run-rehydrated')).toBe(false);
+
+      firstManager.shutdown();
+      await expect(liveWaiter).resolves.toEqual({
+        action: 'suspend',
+        data: 'Server shutting down',
+      });
+      // Let any stray fire-and-forget DB write settle before asserting.
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(db.resolveInterrupt).not.toHaveBeenCalled();
+      expect(db.markInterruptTimedOut).not.toHaveBeenCalled();
+      expect(resolvedListener).not.toHaveBeenCalled();
+      expect(Array.from(rows.values()).map((row) => row.status)).toEqual([
+        'pending',
+        'pending',
+      ]);
+
+      const restartedManager = new InterruptManager(undefined, db);
+      await restartedManager.loadFromDb();
+      expect(restartedManager.hasPendingForTurn('run-live')).toBe(true);
+      expect(restartedManager.hasPendingForTurn('run-rehydrated')).toBe(true);
+
+      previousProcess.shutdown();
+      restartedManager.shutdown();
     });
   });
 

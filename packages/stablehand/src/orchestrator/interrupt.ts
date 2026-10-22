@@ -580,19 +580,20 @@ export class InterruptManager {
   }
 
   /**
-   * Reject all pending interrupts. Call on server shutdown.
+   * Release this process's in-memory waiters. Call on server shutdown.
+   *
+   * Shutdown is not a human decision: the durable rows are left pending so
+   * the next process reloads them via loadFromDb() and the user's eventual
+   * approve/reject resumes the turn through the durable continuation path
+   * (ctx-b3ky). In-process waiters are settled as 'suspend' — the same
+   * no-decision outcome a HITL timeout produces — so callers never see a
+   * rejection that the user did not make. No interrupt.resolved event is
+   * emitted because nothing was resolved.
    */
   shutdown(): void {
     for (const entry of this.pending.values()) {
       if (entry.timeoutId) clearTimeout(entry.timeoutId);
-      entry.resolve({ action: 'reject', data: 'Server shutting down' });
-
-      // Mark as resolved in DB
-      if (this.db) {
-        this.db.resolveInterrupt(entry.info.interruptId, 'reject', 'Server shutting down').catch((err) => {
-          console.error('[InterruptManager] failed to persist shutdown resolution:', err);
-        });
-      }
+      entry.resolve({ action: 'suspend', data: 'Server shutting down' });
     }
     this.pending.clear();
   }
