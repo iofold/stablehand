@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { SessionEvent } from '@stablehand/proto/sandbox/v1';
 
 /**
- * Append-only record of one turn delivery's SessionEvents (ADR 024).
+ * Append-only record of one turn delivery's SessionEvents (ADR 025).
  *
  * The harness pump appends; any number of consumers (the original
  * DeliverTurn stream, or an AttachTurn after an orchestrator takeover) read
@@ -107,7 +107,7 @@ export const TURN_ORPHAN_GRACE_ENV = 'STABLEHAND_TURN_ORPHAN_GRACE_MS';
 
 /**
  * How long a turn keeps running after its orchestrator disappears. `0`
- * restores the pre-ADR-024 behaviour: a dropped stream or an expired
+ * restores the pre-ADR-025 behaviour: a dropped stream or an expired
  * capability aborts the turn at once.
  */
 export function resolveTurnOrphanGraceMs(

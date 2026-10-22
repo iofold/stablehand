@@ -676,7 +676,7 @@ export const toolRequestDedup = pgTable('tool_request_dedup', {
   error: text('error'),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   completedAt: bigint('completed_at', { mode: 'number' }),
-  /** Delivery fence that admitted the in-flight execution (ADR 024 reclaim). */
+  /** Delivery fence that admitted the in-flight execution (ADR 025 reclaim). */
   deliveryFenceToken: bigint('delivery_fence_token', { mode: 'number' }),
 }, (table) => ({
   createdIdx: index('idx_tool_dedup_created').on(table.createdAt),

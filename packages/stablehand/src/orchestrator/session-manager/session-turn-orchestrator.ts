@@ -675,7 +675,7 @@ export class SessionTurnOrchestrator {
       } finally {
         renewalStopController.abort();
         void capabilityRenewal;
-        // ADR 024: a dropped stream only detaches the sandbox delivery, so an
+        // ADR 025: a dropped stream only detaches the sandbox delivery, so an
         // intentional stop (user cancel, turn timeout) must be explicit. A
         // lost lease is not a stop: the successor re-attaches.
         if ((turnAbortSignal?.aborted || timedOut) && currentCapability) {

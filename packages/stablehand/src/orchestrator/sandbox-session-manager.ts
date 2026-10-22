@@ -235,7 +235,7 @@ export class SandboxSessionManager {
   }
   /**
    * Reconnect to a still-running ACTIVE sandbox whose startup adoption was
-   * deferred because a dead owner's turn lease was live (ADR 024 takeover).
+   * deferred because a dead owner's turn lease was live (ADR 025 takeover).
    * The caller holds the turn's delivery lease, which keeps lifecycle work
    * (suspend, reset, idle reclaim) away from the session meanwhile.
    */

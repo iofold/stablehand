@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 
 /**
- * Orchestrator process identity for turn-delivery lease owners (ADR 024).
+ * Orchestrator process identity for turn-delivery lease owners (ADR 025).
  *
  * Owner ids read `<instance>/<boot>/<uuid>`. The instance id names a slot
  * that runs at most one orchestrator process at a time: the container or pod

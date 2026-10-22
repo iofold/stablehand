@@ -3,7 +3,7 @@ import type { DeliveryStamp } from '@stablehand/sandbox-daemon';
 export type { DeliveryStamp };
 
 /**
- * Side channel carrying a daemon journal position (ADR 024) on the AG-UI
+ * Side channel carrying a daemon journal position (ADR 025) on the AG-UI
  * shaped events AgentTurnService consumes, without adding non-protocol keys
  * to the events themselves.
  */

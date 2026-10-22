@@ -33,7 +33,7 @@ export type TurnTakeoverResult =
 const TAG = '[TurnTakeover]';
 
 /**
- * Re-adopt a turn that was running when its orchestrator died (ADR 024).
+ * Re-adopt a turn that was running when its orchestrator died (ADR 025).
  *
  * The caller already holds the turn's delivery lease with a fresh fence.
  * This reconnects to the sandbox that is still running the turn, re-attaches

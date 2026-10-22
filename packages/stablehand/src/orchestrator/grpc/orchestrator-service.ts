@@ -382,7 +382,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
             );
           } else {
             if (admission === 'reclaimed') {
-              // ADR 024 side-effect caveat: the executor admitted under the
+              // ADR 025 side-effect caveat: the executor admitted under the
               // previous fence died with its orchestrator before recording a
               // result, so the tool runs again under the successor.
               console.warn(

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { CanonicalProjector } from '../projector.js';
 
-describe('CanonicalProjector takeover rehydration (ADR 024)', () => {
+describe('CanonicalProjector takeover rehydration (ADR 025)', () => {
   const base = { turnId: 'turn-1', agentId: 'agent-1', conversationId: 'conv-1', timestamp: 1 };
   const delta = (text: string) => ({ ...base, messageId: 'ignored', delta: text });
   const toolStart = { ...base, toolCallId: 'tc-1', toolName: 'search', args: {} };

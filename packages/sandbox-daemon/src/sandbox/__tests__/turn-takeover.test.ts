@@ -23,7 +23,7 @@ import type {
 import type { OrchestratorServiceClient } from '../tool-proxy.js';
 
 /**
- * ADR 024: a turn delivery outlives its orchestrator. Dropping the stream
+ * ADR 025: a turn delivery outlives its orchestrator. Dropping the stream
  * detaches; a successor re-attaches with a higher fence and receives every
  * journaled event exactly once, in order.
  */
@@ -137,7 +137,7 @@ async function collect(stream: AsyncIterable<SessionEvent>, into: SessionEvent[]
   for await (const event of stream) into.push(event);
 }
 
-describe('turn delivery takeover (ADR 024)', () => {
+describe('turn delivery takeover (ADR 025)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.ORCHESTRATOR_URL = 'http://127.0.0.1:3002';

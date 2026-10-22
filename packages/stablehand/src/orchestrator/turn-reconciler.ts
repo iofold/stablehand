@@ -62,7 +62,7 @@ interface TurnReconcilerDeps {
     lifecycleOperation: SandboxSessionLifecycleOperationGuard,
   ) => Promise<void>;
   /**
-   * Crash takeover (ADR 024): re-attach a running turn to the sandbox that is
+   * Crash takeover (ADR 025): re-attach a running turn to the sandbox that is
    * still executing it. Called with the turn's delivery lease held. Without
    * it, running turns are closed with restart copy as before.
    */
@@ -158,7 +158,7 @@ export function repairRunningEntries(entries: unknown[] | null | undefined, part
 }
 
 /**
- * Startup turn reconciliation (ADR-014, ctx-nm3o, ADR 024). Any turn open at
+ * Startup turn reconciliation (ADR-014, ctx-nm3o, ADR 025). Any turn open at
  * boot that started before boot lost its in-process owner — unless it is
  * parked on a durable HITL interrupt (pending/timed_out row), which the
  * durable resume path (WS-B) owns.

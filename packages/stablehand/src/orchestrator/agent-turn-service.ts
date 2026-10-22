@@ -162,7 +162,7 @@ export interface AgentTurnServiceDeps {
    * gateway (or its admin key) is off: budgets then apply at admission only.
    */
   turnSpendCaps?: Pick<SessionGatewayKeyManager, 'prepareTurn' | 'capForTurn' | 'settleTurn'>;
-  /** Restores projector state before a takeover continues a turn (ADR 024). */
+  /** Restores projector state before a takeover continues a turn (ADR 025). */
   turnProjection?: Pick<CanonicalLog, 'rehydrateTurnProjection'>;
 }
 
@@ -185,7 +185,7 @@ export interface ExecuteTurnParams {
   /** Cancels delivery when its cross-replica lease is lost. */
   signal?: AbortSignal;
   /**
-   * Crash takeover (ADR 024): re-attach to the delivery still running in
+   * Crash takeover (ADR 025): re-attach to the delivery still running in
    * `sandboxSessionId` instead of delivering the turn. The whole journal is
    * replayed; events whose effects are already durable only rebuild local
    * state, later ones are applied (idempotently) as usual. Requires
@@ -259,7 +259,7 @@ export class AgentTurnService {
     if (isTakeover && (!params.deliveryContext || !params.sandboxSessionId)) {
       throw new Error(`Turn ${turnId} takeover requires a delivery fence and its sandbox session`);
     }
-    // ADR 024 replay state: events at or before the watermark already have
+    // ADR 025 replay state: events at or before the watermark already have
     // durable effects and only rebuild local state; later events are applied.
     let takeoverWatermark: { deliveryId: string; deliverySeq: number } | undefined;
     let rebuildingEvent = false;
@@ -1045,7 +1045,7 @@ export class AgentTurnService {
           currentStreamedMessageId = undefined;
           const e = event as Record<string, unknown>;
           // Deterministic fallback id: a takeover replay must rebuild the
-          // same projection the original owner persisted (ADR 024).
+          // same projection the original owner persisted (ADR 025).
           const tcId = (e.toolCallId as string) || `tc-${turnId}-${++syntheticToolCallCounter}`;
           const toolArgs = typeof e.args === 'string'
             ? e.args

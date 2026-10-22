@@ -1,4 +1,4 @@
-# ADR 024: Crash Takeover of Running Turns
+# ADR 025: Crash Takeover of Running Turns
 
 **Date:** 2026-10-22
 **Status:** Accepted

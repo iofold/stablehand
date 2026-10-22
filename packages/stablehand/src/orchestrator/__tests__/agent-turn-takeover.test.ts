@@ -13,7 +13,7 @@ import type { SessionTurnExecutor } from '../session-turn-service.js';
 import { TurnAttachUnavailableError } from '../turn-attach-error.js';
 
 /**
- * ADR 024: a successor orchestrator replays the sandbox delivery journal.
+ * ADR 025: a successor orchestrator replays the sandbox delivery journal.
  * Events whose effects the dead owner already made durable only rebuild
  * local state; later events are applied once, tagged with their journal
  * position.
@@ -126,7 +126,7 @@ function setup(options: {
   return { db, sessionManager, executeSessionTurn, emitted, rehydrateTurnProjection, service: new AgentTurnService(deps), params };
 }
 
-describe('AgentTurnService crash takeover (ADR 024)', () => {
+describe('AgentTurnService crash takeover (ADR 025)', () => {
   it('rebuilds durable events without re-applying them and applies the rest once, tagged', async () => {
     const ctx = setup({ watermark: { deliveryId: DELIVERY, deliverySeq: 4 } });
 

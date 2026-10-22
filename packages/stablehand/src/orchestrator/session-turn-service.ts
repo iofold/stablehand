@@ -57,7 +57,7 @@ export interface SessionTurnExecutionOptions {
   turnSecrets?: TurnSecrets;
   /**
    * Re-attach to a delivery that is already running in the sandbox instead
-   * of delivering the turn (crash takeover, ADR 024).
+   * of delivering the turn (crash takeover, ADR 025).
    */
   attach?: { afterDeliverySeq: number };
 }

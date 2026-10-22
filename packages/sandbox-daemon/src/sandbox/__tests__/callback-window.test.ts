@@ -66,7 +66,7 @@ afterEach(() => {
   for (const created of contexts.splice(0)) clearTurnDeliveryExpiry(created);
 });
 
-describe('callWithinOrchestratorWindow (ADR 024)', () => {
+describe('callWithinOrchestratorWindow (ADR 025)', () => {
   it('classifies transport, stale-authority and fatal failures', () => {
     expect(classifyCallbackFailure(new ConnectError('down', Code.Unavailable))).toBe('transport');
     expect(classifyCallbackFailure(new ConnectError('socket hang up', Code.Internal))).toBe('transport');

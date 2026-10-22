@@ -2,7 +2,7 @@ import { eq, sql, gt, gte, lt, lte, and, or, desc, asc, inArray, isNotNull, isNu
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
-/** Bus events AgentTurnService tags with a daemon journal position (ADR 024). */
+/** Bus events AgentTurnService tags with a daemon journal position (ADR 025). */
 export const DELIVERY_TAGGED_SOURCE_TYPES = [
   'ag_ui.event',
   'message.delta',
@@ -1134,7 +1134,7 @@ export class DatabaseRepository {
         return undefined;
       }
 
-      // Re-staging an identical projection (crash-takeover replay, ADR 024)
+      // Re-staging an identical projection (crash-takeover replay, ADR 025)
       // must not mint a new revision and a duplicate message.updated frame.
       const [current] = await tx
         .select()
@@ -2680,7 +2680,7 @@ export class DatabaseRepository {
     ownerId: string;
     leaseDurationMs: number;
     /**
-     * ADR 024 fast takeover: also claim an unexpired lease held by a previous
+     * ADR 025 fast takeover: also claim an unexpired lease held by a previous
      * boot of this same orchestrator instance (owner ids start with
      * `instancePrefix` but not `ownBootPrefix`). That process is dead: the
      * instance id names a single-process slot such as a container hostname.
@@ -4169,7 +4169,7 @@ export class DatabaseRepository {
   /** All frames of a turn in seq order — reconnect tail replay for in-flight turns. */
   /**
    * Newest daemon journal position whose effects are durable for a turn
-   * (ADR 024). Each journaled event's last effect is one emit tagged with
+   * (ADR 025). Each journaled event's last effect is one emit tagged with
    * `delivery: { id, seq }` in its source payload, and canonical frames
    * persist in emission order, so the newest tagged frame is the replay
    * watermark: events at or before it are rebuilt, later ones re-applied.
@@ -8236,7 +8236,7 @@ export class DatabaseRepository {
       if (inserted.length > 0) {
         return 'inserted';
       }
-      // ADR 024: an in-progress row admitted under an older fence belongs to
+      // ADR 025: an in-progress row admitted under an older fence belongs to
       // an executor that died with its orchestrator. The live fence (locked
       // above) re-runs it; the old executor can no longer complete the row
       // because completion re-checks the exact delivery fence.

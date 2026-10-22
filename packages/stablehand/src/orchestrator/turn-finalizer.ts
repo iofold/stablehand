@@ -19,7 +19,7 @@ export const TURN_ERROR_ORCHESTRATOR_RESTART =
   'Orchestrator restarted while this turn was in flight; the turn was closed by startup reconciliation. Retry the request.';
 
 /**
- * ADR 024: the orchestrator restarted mid-turn and could not re-attach to the
+ * ADR 025: the orchestrator restarted mid-turn and could not re-attach to the
  * turn's sandbox (stopped, unreachable, or past its reconnect window).
  */
 export function turnErrorTakeoverUnavailable(reason: string): string {

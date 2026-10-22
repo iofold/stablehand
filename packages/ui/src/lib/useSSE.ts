@@ -179,7 +179,7 @@ export function useSSE(
         // last known connected state during its retry window. A non-200
         // answer, such as a proxy 502 while the orchestrator restarts, closes
         // it for good instead; reopen from the last event seen so the stream
-        // resumes exactly where it stopped (ADR 024).
+        // resumes exactly where it stopped (ADR 025).
         if (es.readyState === EVENT_SOURCE_CLOSED && !disposed && reconnectTimer === null) {
           const delay = Math.min(
             SSE_RECONNECT_MAX_MS,

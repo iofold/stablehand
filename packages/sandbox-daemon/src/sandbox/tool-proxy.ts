@@ -116,7 +116,7 @@ export function createToolProxy(
     const argsJson = typeof input === 'string' ? input : stringifyJsonWithBigInts(input ?? {});
 
     if ((deliveryContext.orphanGraceMs ?? 0) > 0) {
-      // ADR 024: keep the same request id across an orchestrator restart so
+      // ADR 025: keep the same request id across an orchestrator restart so
       // its dedup row returns a result that was produced but never delivered.
       const response = await callWithinOrchestratorWindow(
         deliveryContext,

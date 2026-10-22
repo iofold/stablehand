@@ -325,7 +325,7 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
   });
 });
 
-describe('crash takeover of running turns (ADR 024)', () => {
+describe('crash takeover of running turns (ADR 025)', () => {
   it('hands a running turn with a sandbox to takeover instead of failing it', async () => {
     const deps = createDeps({ openTurns: [createTurn()] });
     const adoptRunningTurn = vi.fn(async (): Promise<TurnTakeoverResult> => ({ outcome: 'adopted' }));

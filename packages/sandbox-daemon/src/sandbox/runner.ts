@@ -276,7 +276,7 @@ interface ActiveTurnDelivery {
   readonly settled: Promise<TurnDeliverySettlement>;
   readonly resolveSettlement: (settlement: TurnDeliverySettlement) => void;
   readonly journal: TurnDeliveryJournal;
-  /** ADR 024 orphan grace; 0 means a dropped stream cancels the turn. */
+  /** ADR 025 orphan grace; 0 means a dropped stream cancels the turn. */
   readonly orphanGraceMs: number;
   settlement?: TurnDeliverySettlement;
   consumer?: DeliveryConsumer;
@@ -901,7 +901,7 @@ export async function renewTurnDeliveryCapability(
   );
   const active = ctx.activeDelivery;
   if (!active || active.context.identity.turnId !== req.turnId) {
-    // ADR 024: the harness may finish while its consumer is still draining
+    // ADR 025: the harness may finish while its consumer is still draining
     // the journal (a takeover replay lags the pump). Acknowledge the current
     // authority so the consumer keeps its capability until it has read the
     // terminal frame; nothing can call back on a finished delivery.
@@ -1000,7 +1000,7 @@ export function agentEventCarriesOutput(event: AgentEvent): boolean {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Delivery consumers and the orphan grace window (ADR 024)                   */
+/*  Delivery consumers and the orphan grace window (ADR 025)                   */
 /* -------------------------------------------------------------------------- */
 
 const CONSUMER_DETACHED = new ConnectError('Turn delivery consumer detached', Code.Canceled);
@@ -1166,7 +1166,7 @@ function expireFinishedJournal(ctx: SessionContext, journal: TurnDeliveryJournal
  *
  * The harness runs in a pump that writes every SessionEvent to the delivery
  * journal; this stream is one consumer of it. With an orphan grace window
- * (ADR 024) a dropped stream only detaches: the turn keeps running and a
+ * (ADR 025) a dropped stream only detaches: the turn keeps running and a
  * successor orchestrator re-attaches with AttachTurn. Without one, dropping
  * the stream cancels the turn as before.
  *
@@ -1204,7 +1204,7 @@ export async function* deliverTurn(
 }
 
 /**
- * Re-attach to a delivery that outlived its consumer (ADR 024). The caller
+ * Re-attach to a delivery that outlived its consumer (ADR 025). The caller
  * presents a capability whose fence is at least the delivery's current one;
  * a higher fence becomes the delivery's authority for every later callback.
  * Events after `after_delivery_seq` are replayed from the journal, then the

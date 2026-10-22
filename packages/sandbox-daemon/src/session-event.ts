@@ -1,6 +1,6 @@
 import type { AgentSessionEvent, MessageCommittedEvent } from '@stablehand/shared';
 
-/** Daemon journal position of an event (ADR 024): journal id + 1-based seq. */
+/** Daemon journal position of an event (ADR 025): journal id + 1-based seq. */
 export interface DeliveryStamp {
   id: string;
   seq: number;

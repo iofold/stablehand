@@ -9,7 +9,7 @@ import {
 } from './turn-delivery-context.js';
 
 /**
- * Orchestrator callbacks that survive an orchestrator restart (ADR 024).
+ * Orchestrator callbacks that survive an orchestrator restart (ADR 025).
  *
  * While the orchestrator is unreachable, or while its successor has not yet
  * re-attached with a fresh capability, a callback waits and retries instead

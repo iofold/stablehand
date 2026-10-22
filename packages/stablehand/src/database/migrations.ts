@@ -1154,7 +1154,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
   await renameColumn(sql, 'tool_request_dedup', 'session_id', 'turn_id');
-  // ADR 024: a successor delivery fence may reclaim an in-progress request
+  // ADR 025: a successor delivery fence may reclaim an in-progress request
   // whose executor died with the previous orchestrator.
   await sql`ALTER TABLE tool_request_dedup ADD COLUMN IF NOT EXISTS delivery_fence_token BIGINT`;
 

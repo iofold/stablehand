@@ -40,7 +40,7 @@ export interface TurnDeliveryLeaseOptions {
   leaseMs?: number;
   heartbeatMs?: number;
   now?: () => number;
-  /** ADR 024: also take over a dead earlier boot's unexpired lease. */
+  /** ADR 025: also take over a dead earlier boot's unexpired lease. */
   previousBootTakeover?: { instancePrefix: string; ownBootPrefix: string };
 }
 

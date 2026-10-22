@@ -1601,7 +1601,7 @@ export const HarnessService: GenService<{
   },
   /**
    * Re-attach to a turn delivery that outlived its consumer (orchestrator
-   * crash takeover, ADR 024). Replays the delivery journal after
+   * crash takeover, ADR 025). Replays the delivery journal after
    * after_delivery_seq, then streams live events.
    *
    * @generated from rpc stablehand.sandbox.v1.HarnessService.AttachTurn

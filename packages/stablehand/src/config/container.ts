@@ -116,7 +116,7 @@ export interface AppContainer {
   /** Durable canonical event spine (ADR-015); serves replay when STABLEHAND_CANONICAL_EVENTS=1. */
   canonicalLog: CanonicalLog;
   /**
-   * Startup turn reconciliation (ADR-014/ctx-7e3x/ADR 024): take over running
+   * Startup turn reconciliation (ADR-014/ctx-7e3x/ADR 025): take over running
    * turns whose sandboxes are still executing them, fail the rest, and replay
    * durable queued turns. Takeovers finish in the background.
    */
@@ -677,7 +677,7 @@ export async function createContainer(
     ...(sessionGatewayKeys ? { turnSpendCaps: sessionGatewayKeys } : {}),
     turnProjection: canonicalLog,
   });
-  // ADR 024: re-adopt turns that were running when the previous process died.
+  // ADR 025: re-adopt turns that were running when the previous process died.
   const turnTakeoverService = new TurnTakeoverService({
     db,
     sessionManager: realSessionManager,

@@ -13,7 +13,7 @@ const MAX_TIMER_DELAY_MS = 2_147_483_647;
 export interface TurnDeliveryContext {
   /**
    * Current delivery authority. Re-attach after an orchestrator takeover
-   * replaces it with the successor's higher fence (ADR 024).
+   * replaces it with the successor's higher fence (ADR 025).
    */
   identity: TurnDeliveryIdentity;
   readonly abortController: AbortController;
@@ -24,7 +24,7 @@ export interface TurnDeliveryContext {
   ptcToken?: string;
   /**
    * How long the turn may keep running without a reachable orchestrator
-   * (ADR 024). Zero keeps the legacy rule: capability expiry aborts the turn.
+   * (ADR 025). Zero keeps the legacy rule: capability expiry aborts the turn.
    * Above zero, expiry only blocks callbacks until a successor re-attaches.
    */
   orphanGraceMs?: number;
@@ -109,7 +109,7 @@ function hasOrphanGrace(context: TurnDeliveryContext): boolean {
 /**
  * Throws once the delivery can no longer make progress. In grace mode an
  * expired capability does not stop the harness: only an abort does, and the
- * orphan timer owns that decision (ADR 024).
+ * orphan timer owns that decision (ADR 025).
  */
 export function assertTurnDeliveryContextCurrent(
   context: TurnDeliveryContext,
@@ -252,7 +252,7 @@ export function armTurnDeliveryExpiry(context: TurnDeliveryContext): void {
     const remainingMs = context.leaseExpiresAtMs - Date.now();
     if (remainingMs <= 0) {
       if (hasOrphanGrace(context)) {
-        // ADR 024: the orchestrator stopped renewing. Keep the harness
+        // ADR 025: the orchestrator stopped renewing. Keep the harness
         // running; callbacks wait for a successor and the orphan timer
         // decides when to give up.
         context.onCapabilityExpired?.();

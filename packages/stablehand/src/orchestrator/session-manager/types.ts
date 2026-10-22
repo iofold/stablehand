@@ -91,7 +91,7 @@ export interface TurnQueueEntry {
 export interface TurnDeliveryOptions {
   signal?: AbortSignal;
   turnSecrets?: TurnSecrets;
-  /** Re-attach to a running sandbox delivery instead of delivering (ADR 024). */
+  /** Re-attach to a running sandbox delivery instead of delivering (ADR 025). */
   attach?: { afterDeliverySeq: number };
 }
 

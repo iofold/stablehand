@@ -121,7 +121,7 @@ export class CanonicalLog {
 
   /**
    * Restore the projector's per-turn state from durable frames before a
-   * successor process continues a turn it took over (ADR 024). Runs on the
+   * successor process continues a turn it took over (ADR 025). Runs on the
    * ingest lane so it cannot interleave with a concurrent ingest.
    */
   rehydrateTurnProjection(turnId: string): Promise<void> {

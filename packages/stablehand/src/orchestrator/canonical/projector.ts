@@ -342,7 +342,7 @@ export class CanonicalProjector {
 
   /**
    * Rebuild a turn's synthesized text-message state from its durable frames
-   * (crash takeover, ADR 024). A successor process then continues an open
+   * (crash takeover, ADR 025). A successor process then continues an open
    * `${turnId}-m${n}` message, or opens `m${n + 1}`, instead of reusing an id.
    */
   restoreTurnTextState(

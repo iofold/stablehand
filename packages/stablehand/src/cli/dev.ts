@@ -43,7 +43,7 @@ export async function startDev() {
   const cwd = process.cwd();
 
   // ctx-tl9r: install the process-level safety net before any runtime work.
-  // Startup reconciliation and crash takeover (ADR 024) talk to Docker while
+  // Startup reconciliation and crash takeover (ADR 025) talk to Docker while
   // containers may be disappearing; a stray docker-modem rejection during
   // boot must be logged, not take the control plane down.
   process.on('unhandledRejection', (err) => console.error('[UNHANDLED REJECTION]', err));

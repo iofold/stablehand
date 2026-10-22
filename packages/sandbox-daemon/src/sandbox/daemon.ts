@@ -320,7 +320,7 @@ export async function* handleDeliverTurn(
 }
 
 /**
- * AttachTurn — server-streaming RPC (ADR 024).
+ * AttachTurn — server-streaming RPC (ADR 025).
  * Re-attaches a successor orchestrator to a delivery that outlived its
  * original stream, replaying journaled events after the given cursor.
  */

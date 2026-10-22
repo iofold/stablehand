@@ -5,11 +5,11 @@ import { CanonicalLog } from '../../packages/stablehand/src/orchestrator/canonic
 import { createTestDb, type TestDb } from '../utils/test-db.js';
 
 /**
- * ADR 024 persistence contracts: previous-boot lease takeover, tool dedup
+ * ADR 025 persistence contracts: previous-boot lease takeover, tool dedup
  * reclaim under the successor fence, idempotent projection re-staging, and
  * the delivery watermark read from tagged canonical frames.
  */
-describe('crash takeover repository contracts (ADR 024)', () => {
+describe('crash takeover repository contracts (ADR 025)', () => {
   let testDb: TestDb;
 
   beforeAll(async () => {
