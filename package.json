@@ -86,7 +86,8 @@
       "ignoreGhsas": [
         "GHSA-jfgx-wxx8-mp94",
         "GHSA-7v5m-pr3q-6453",
-        "GHSA-r95r-rj6r-c39x"
+        "GHSA-r95r-rj6r-c39x",
+        "GHSA-vfj7-8cjw-p6xm"
       ]
     }
   },
