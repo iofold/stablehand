@@ -70,6 +70,15 @@ Provide these through the deployment secret store:
 - `STABLEHAND_MODEL_GATEWAY_METERING_KEY`: a key allowed to read
   `/spend/logs/v2`. It stays in the orchestrator.
 - `STABLEHAND_MODEL_GATEWAY_REVISION`: non-secret release/credential revision.
+- `STABLEHAND_MODEL_GATEWAY_ADMIN_KEY` (optional): a LiteLLM key allowed to
+  call `/key/generate`, `/key/update`, `/key/delete`, `/key/info` and
+  `/key/list` (the master key, or a proxy-admin key). It stays in the
+  orchestrator. When set, every sandbox session gets its own virtual key
+  (`stablehand-session-<sessionId>`, the runtime key's model allowlist),
+  capped per run by the agent's `harnessConfig.limits.maxCostUsd` or the
+  remaining headroom of a blocking cost policy, and revoked when the session
+  ends, so a run stops mid-flight at its spend cap (ADR 024). Unset, sandboxes
+  share the runtime key and budgets apply when a run starts only.
 - Provider credentials for the configured inventory: `OPENAI_API_KEY`,
   `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, plus
   `CLOUDFLARE_ACCOUNT_ID` and a durable Workers AI API token in

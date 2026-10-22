@@ -649,6 +649,33 @@ If the environment credential ceiling is crossed, STABLEHAND maps the gateway
 error to `model_gateway_budget_exceeded`. It does not name a STABLEHAND policy
 and has no effect on direct calls.
 
+### Mid-run spend caps (shipped 2026-10-22, ADR 024)
+
+When the deployment also sets `STABLEHAND_MODEL_GATEWAY_ADMIN_KEY`, the
+gateway enforces a per-run spend cap mid-flight:
+
+- Each sandbox session gets its own LiteLLM virtual key at session open or
+  restore (alias `stablehand-session-<sessionId>`, the runtime key's model
+  allowlist), used in place of the shared runtime key and revoked when the
+  session is checkpointed, terminated, or fails to start or restore.
+- At each run start the key's spend is reset and its `max_budget` set to the
+  run's cap: the lower of `harnessConfig.limits.maxCostUsd` and the remaining
+  headroom of the tightest matching policy that blocks on `costUsd`
+  (advisory snapshot; token and turn limits are not converted).
+- The sandbox daemon relays gateway traffic through a loopback relay that
+  turns LiteLLM's retryable 429 budget refusal into a terminal error, so the
+  harness ends the run instead of retrying. The run ends with
+  `status: error`, `stopReason.code: budget_reached` (source, cap, spent), a
+  `budget.reached` event, and a `RUN_ERROR` frame carrying the same
+  `stopReason`. A refusal under no cap Stablehand set is still
+  `model_gateway_budget_exceeded`.
+- One call may overshoot: the call that crossed the cap. Explicitly direct
+  model branches are not capped.
+
+Without the admin key (or when minting or capping fails, which is logged),
+sandboxes keep the shared runtime key and budgets apply at admission only.
+Gateway mode off is unchanged.
+
 ## Extensible harness-side mid-turn enforcement
 
 The sandbox daemon will define a narrow internal enforcement seam now so later
@@ -1236,7 +1263,8 @@ cross-system inline-policy implementation.
   synchronization would still not represent arbitrary overlapping policies.
 - **Create one virtual key per run:** puts LiteLLM administration on the hot
   path, creates key churn, and does not atomically reserve concurrent policy
-  spend.
+  spend. Superseded in part by ADR 024: one key per sandbox *session*, minted
+  on the slow path and re-capped (one key update) at each run start.
 - **Synchronize STABLEHAND policies to LiteLLM tag budgets:** couples product
   semantics to edition-specific and version-sensitive gateway state.
 - **Use a key as call attribution:** credential rotation and shared-key traffic

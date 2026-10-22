@@ -336,3 +336,32 @@ describe('canonical agent API conversion', () => {
     });
   });
 });
+
+describe('per-run spend cap in the manifest (ctx-ycek)', () => {
+  it.each([
+    ['langgraph'],
+    ['claude-agents'],
+    ['pi-agent'],
+  ] as const)('accepts spec.harnessConfig.limits.maxCostUsd for %s and carries it to the API input', (harness) => {
+    const candidate = minimalManifest(harness);
+    const spec = candidate.spec as Record<string, unknown>;
+    spec.harnessConfig = {
+      ...(spec.harnessConfig as Record<string, unknown>),
+      limits: { maxModelCalls: 50, maxCostUsd: 0.05 },
+    };
+
+    const manifest = validateManifest(candidate);
+    expect(manifestToAgentCreateInput(manifest).harnessConfig).toMatchObject({
+      limits: { maxModelCalls: 50, maxCostUsd: 0.05 },
+    });
+  });
+
+  it('rejects a cap that is not a positive dollar amount', () => {
+    for (const maxCostUsd of [0, -1, '0.05']) {
+      const candidate = minimalManifest();
+      const spec = candidate.spec as Record<string, unknown>;
+      spec.harnessConfig = { ...(spec.harnessConfig as Record<string, unknown>), limits: { maxCostUsd } };
+      expect(safeValidateManifest(candidate).success).toBe(false);
+    }
+  });
+});

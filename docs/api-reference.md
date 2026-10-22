@@ -664,6 +664,25 @@ Per-agent sandbox resource limits:
 }
 ```
 
+A turn that ended with a typed reason also carries `stopReason` (omitted
+otherwise). With the model gateway's per-session keys enabled, a run that
+reaches its spend cap mid-flight ends with `status: "ERROR"` and:
+
+```json
+"stopReason": {
+  "code": "budget_reached",
+  "source": "run_limit",
+  "capUsd": 0.05,
+  "spentUsd": 0.06
+}
+```
+
+`source` is `run_limit` (the agent's `harnessConfig.limits.maxCostUsd`) or
+`budget_policy` (what remained of a blocking cost policy when the run started;
+`policyId`, `policyName` and `bucket` name it). A gateway budget refusal that
+Stablehand did not configure is `{ "code": "model_gateway_budget_exceeded",
+"spentUsd": ..., "limitUsd": ... }`. `error` holds the plain-language sentence.
+
 #### `POST /api/agents/:id/sandbox-sessions/:sandboxSessionId/suspend`
 
 - **Description:** Checkpoints a sandbox session.
@@ -2027,6 +2046,10 @@ Notes on actual stream behavior today:
 - `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR`, `TEXT_MESSAGE_*`,
   `TOOL_CALL_*`, `STATE_DELTA`, `MESSAGES_SNAPSHOT`, and `CUSTOM` can appear
   on the live stream.
+- A `RUN_ERROR` for a run stopped at its spend cap carries AG-UI's `code`
+  (`budget_reached`) and the turn's `stopReason`. The same stop is recorded
+  on `/api/events` as a `budget.reached` system event with `turnId`,
+  `source`, `capUsd` and `spentUsd` (and the policy fields for a policy cap).
 
 ### Connection lifecycle
 

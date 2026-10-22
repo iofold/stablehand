@@ -66,6 +66,9 @@ services:
       STABLEHAND_MODEL_GATEWAY_METERING_KEY: ${STABLEHAND_MODEL_GATEWAY_METERING_KEY:?set STABLEHAND_MODEL_GATEWAY_METERING_KEY}
       STABLEHAND_MODEL_GATEWAY_REVISION: ${STABLEHAND_MODEL_GATEWAY_REVISION:?set STABLEHAND_MODEL_GATEWAY_REVISION}
       STABLEHAND_MODEL_GATEWAY_EXPLICIT_FREE_MODELS: ${STABLEHAND_MODEL_GATEWAY_EXPLICIT_FREE_MODELS:-}
+      # Optional. Enables per-session gateway keys and mid-run spend caps
+      # (ADR 024). Empty keeps the shared runtime key, admission-only budgets.
+      STABLEHAND_MODEL_GATEWAY_ADMIN_KEY: ${STABLEHAND_MODEL_GATEWAY_ADMIN_KEY:-}
     depends_on:
       litellm:
         condition: service_healthy
