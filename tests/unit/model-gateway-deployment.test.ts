@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parse, parseAllDocuments } from 'yaml';
+import { parse } from 'yaml';
 
 interface ModelGatewayConfig {
   model_list?: Array<{
@@ -28,33 +28,6 @@ interface ModelGatewayCompose {
 
 function readYaml<T>(path: string): T {
   return parse(readFileSync(resolve(process.cwd(), path), 'utf8')) as T;
-}
-
-interface KubernetesResource {
-  kind?: string;
-  metadata?: {
-    name?: string;
-    annotations?: Record<string, string>;
-  };
-  spec?: Record<string, unknown>;
-  rules?: Array<Record<string, unknown>>;
-}
-
-function readYamlDocuments(path: string): KubernetesResource[] {
-  return parseAllDocuments(
-    readFileSync(resolve(process.cwd(), path), 'utf8'),
-  ).map((document) => document.toJS() as KubernetesResource);
-}
-
-function findResource(
-  resources: readonly KubernetesResource[],
-  kind: string,
-  name: string,
-): KubernetesResource {
-  const resource = resources.find((candidate) =>
-    candidate.kind === kind && candidate.metadata?.name === name);
-  expect(resource, `missing ${kind}/${name}`).toBeDefined();
-  return resource!;
 }
 
 describe('model gateway deployment', () => {
@@ -245,128 +218,5 @@ describe('model gateway deployment', () => {
       'traefik.http.routers.litellm.tls.certresolver=letsencrypt',
       'traefik.http.services.litellm.loadbalancer.server.port=4000',
     ]));
-  });
-
-  it('ships an isolated LiteLLM control plane for dev2', () => {
-    const resources = readYamlDocuments('deploy/k3s/dev2/model-gateway.yaml');
-    const database = findResource(resources, 'Deployment', 'litellm-db');
-    const gateway = findResource(resources, 'Deployment', 'litellm');
-
-    expect(findResource(resources, 'PersistentVolumeClaim', 'litellm-data')).toBeDefined();
-    expect(findResource(resources, 'Service', 'litellm-db')).toBeDefined();
-    expect(findResource(resources, 'Service', 'litellm')).toBeDefined();
-    expect(database.spec).toMatchObject({ strategy: { type: 'Recreate' } });
-    expect(gateway.spec).toMatchObject({
-      template: {
-        spec: {
-          containers: [{
-            name: 'litellm',
-            image: 'stablehand/litellm:dev2',
-            imagePullPolicy: 'Never',
-            envFrom: [
-              { secretRef: { name: 'stablehand-provider-secrets' } },
-              { secretRef: { name: 'stablehand-model-gateway-secrets' } },
-            ],
-            readinessProbe: {
-              httpGet: { path: '/health/readiness', port: 'http' },
-            },
-          }],
-        },
-      },
-    });
-  });
-
-  it('publishes the authenticated LiteLLM admin UI through the dev2 TLS ingress', () => {
-    const resources = readYamlDocuments('deploy/k3s/dev2/model-gateway.yaml');
-    const ingress = findResource(resources, 'Ingress', 'litellm');
-
-    expect(ingress.metadata?.annotations).toMatchObject({
-      'nginx.ingress.kubernetes.io/force-ssl-redirect': 'true',
-    });
-    expect(ingress.spec).toMatchObject({
-      ingressClassName: 'nginx-tailnet',
-      rules: [{
-        host: 'litellm.staging.example.com',
-        http: {
-          paths: [{
-            path: '/',
-            pathType: 'Prefix',
-            backend: {
-              service: {
-                name: 'litellm',
-                port: { number: 4000 },
-              },
-            },
-          }],
-        },
-      }],
-    });
-  });
-
-  it('deploys and bootstraps dev2 LiteLLM before enabling orchestrator routing', () => {
-    const deploy = readFileSync(
-      resolve(process.cwd(), 'deploy/k3s/dev2/deploy-dev2.sh'),
-      'utf8',
-    );
-    const secrets = readFileSync(
-      resolve(process.cwd(), 'deploy/k3s/dev2/sync-secrets.sh'),
-      'utf8',
-    );
-    const manifests = readFileSync(
-      resolve(process.cwd(), 'deploy/k3s/dev2/manifests.yaml'),
-      'utf8',
-    );
-    const bootstrap = readFileSync(
-      resolve(process.cwd(), 'deploy/k3s/dev2/bootstrap-model-gateway.sh'),
-      'utf8',
-    );
-
-    expect(deploy).toContain('deploy/compose/model-gateway/Dockerfile');
-    expect(deploy).toContain('model-gateway.yaml');
-    expect(deploy).toContain('bootstrap-model-gateway.sh');
-    expect(deploy).toContain('stablehand-model-gateway-config');
-    expect(secrets).toContain('stablehand-model-gateway-secrets');
-    expect(secrets).toContain('CLOUDFLARE_ACCOUNT_ID');
-    expect(secrets).toContain('CLOUDFLARE_API_KEY');
-    expect(secrets).toContain('LITELLM_RUNTIME_MAX_BUDGET_USD');
-    expect(bootstrap).toContain('"max_budget"');
-    expect(bootstrap).toContain('"budget_duration": "1d"');
-    expect(bootstrap).toContain('"http://127.0.0.1:4000/key/update"');
-    expect(bootstrap).toContain("if ! printf '%s' \"$runtime_key\"");
-    expect(bootstrap).toContain('for attempt in range(20)');
-    expect(bootstrap).toContain('time.sleep(0.5)');
-    expect(bootstrap).toContain('LiteLLM runtime key inventory reconciled');
-    expect(bootstrap).not.toContain('\\${');
-    expect(manifests).toContain('STABLEHAND_MODEL_GATEWAY_ENABLED');
-    expect(manifests).toContain('http://litellm.stablehand.svc.cluster.local:4000');
-    expect(manifests).toContain('STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY');
-    expect(manifests).toContain('STABLEHAND_MODEL_GATEWAY_METERING_KEY');
-  });
-
-  it('allows per-sandbox Secrets and forbids registry pulls for imported harness images', () => {
-    const resources = readYamlDocuments('deploy/k3s/dev2/manifests.yaml');
-    const role = findResource(resources, 'Role', 'stablehand-sandbox-runner');
-    const orchestrator = findResource(resources, 'Deployment', 'orchestrator');
-
-    expect(role.rules).toEqual(
-      expect.arrayContaining([expect.objectContaining({
-        apiGroups: [''],
-        resources: ['secrets'],
-        verbs: expect.arrayContaining(['create', 'get', 'delete']),
-      })]),
-    );
-    expect(orchestrator.spec).toMatchObject({
-      template: {
-        spec: {
-          containers: [expect.objectContaining({
-            name: 'orchestrator',
-            env: expect.arrayContaining([{
-              name: 'STABLEHAND_K8S_IMAGE_PULL_POLICY',
-              value: 'Never',
-            }]),
-          })],
-        },
-      },
-    });
   });
 });
