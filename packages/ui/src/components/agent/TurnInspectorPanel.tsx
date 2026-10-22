@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { X, Copy, Check, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
-import type { AgentBudgetStatus, Turn } from '@stablehand/contracts';
+import { formatSpendUsd, type AgentBudgetStatus, type Turn } from '@stablehand/contracts';
 import { fetchTurnDetail, fetchAgentBudgetStatuses } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { formatDurationBetween, formatCompactNumber } from '@/lib/format';
 import { describeTurnCost } from '@/lib/usage-cost';
 import { TurnStatusBadge } from './TurnStatusBadge';
 import { ErrorDisplay } from '@/components/session/ErrorDisplay';
+import { BudgetStopBanner } from '@/components/session/BudgetStopBanner';
 
 export interface TurnInspectorPanelProps {
   agentId: string;
@@ -187,7 +188,9 @@ export function TurnInspectorPanel({ agentId, turnId, onClose }: TurnInspectorPa
               </p>
             )}
 
-            {turn.error && (
+            {turn.stopReason ? (
+              <BudgetStopBanner reason={turn.stopReason} />
+            ) : turn.error && (
               <ErrorDisplay summary="This turn failed" details={turn.error} />
             )}
 
@@ -233,6 +236,21 @@ export function TurnInspectorPanel({ agentId, turnId, onClose }: TurnInspectorPa
                     {cost!.label}
                   </span>
                 </DetailRow>
+                {turn.stopReason?.code === 'budget_reached' && (
+                  <>
+                    <DetailRow label="Spend cap">
+                      {formatSpendUsd(turn.stopReason.capUsd)}{' '}
+                      <span className="text-surface-500">
+                        {turn.stopReason.source === 'run_limit'
+                          ? '(per-run limit)'
+                          : `(left in ${turn.stopReason.policyName ? `"${turn.stopReason.policyName}"` : 'budget'})`}
+                      </span>
+                    </DetailRow>
+                    <DetailRow label="Spent when stopped">
+                      {turn.stopReason.spentUsd != null ? formatSpendUsd(turn.stopReason.spentUsd) : 'Not reported'}
+                    </DetailRow>
+                  </>
+                )}
                 {turn.usage && (
                   <>
                     <DetailRow label="Tokens">

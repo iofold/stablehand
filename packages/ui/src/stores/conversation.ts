@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { ApiMessage, ApiMessagePart, ApiToolCallState } from '@stablehand/shared';
+import { TurnStopReasonSchema, type TurnStopReason } from '@stablehand/contracts';
 import { useInterruptStore } from './interrupt';
 import { isMissingToolName, MISSING_TOOL_NAME } from '@/lib/tool-display';
 
@@ -156,6 +157,11 @@ interface ConversationStore {
   seenEventIds: Set<string>;
   optimisticUserMessageIds: string[];
   reconciledUserMessageIds: Set<string>;
+  /**
+   * Typed stops seen live on RUN_ERROR frames (e.g. a run stopped at its
+   * spend cap), keyed by turn id, until the turns API reflects them.
+   */
+  turnStopReasons: Map<string, TurnStopReason>;
 
   addUserMessage: (content: string) => string;
   discardOptimisticUserMessage: (messageId: string) => void;
@@ -494,6 +500,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
   seenEventIds: new Set(),
   optimisticUserMessageIds: [],
   reconciledUserMessageIds: new Set(),
+  turnStopReasons: new Map(),
 
   addUserMessage: (content: string) => {
     const msg: Message = {
@@ -1080,15 +1087,23 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
         const errorMsg = (event.message as string) || 'Unknown error';
         useInterruptStore.getState().clear();
         resetPreviewController();
+        const parsedStop = TurnStopReasonSchema.safeParse(event.stopReason);
+        const stopTurnId = parsedStop.success ? resolveEventTurnId(event) : undefined;
         const msg: Message = {
           id: typeof event.messageId === 'string' && event.messageId.length > 0 ? event.messageId : nextId(),
           messageRevision: 0,
           role: 'system',
           content: `Error: ${errorMsg}`,
           parts: [{ type: 'text', content: `Error: ${errorMsg}` }],
+          // A typed stop belongs to its turn, so the thread can show its
+          // receipt there instead of a generic error.
+          ...(stopTurnId ? { turnId: stopTurnId } : {}),
           createdAt: Date.now(),
         };
         set((prev) => ({
+          ...(parsedStop.success && stopTurnId
+            ? { turnStopReasons: new Map(prev.turnStopReasons).set(stopTurnId, parsedStop.data) }
+            : {}),
           messages: [...prev.messages, msg],
           isStreaming: false,
           responseComplete: false,
@@ -1129,6 +1144,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
       seenEventIds: new Set(),
       optimisticUserMessageIds: [],
       reconciledUserMessageIds: new Set(),
+      turnStopReasons: new Map(),
     });
   },
   });

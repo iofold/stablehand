@@ -8,10 +8,11 @@ import {
   Info,
   Wrench,
 } from 'lucide-react';
-import type { Turn } from '@stablehand/contracts';
+import type { Turn, TurnStopReason } from '@stablehand/contracts';
 import { MessageBubble } from './MessageBubble';
 import { ToolCallCard } from './ToolCallCard';
 import { ErrorDisplay } from './ErrorDisplay';
+import { BudgetStopBanner } from './BudgetStopBanner';
 import { cn } from '@/lib/utils';
 import { formatDurationBetween } from '@/lib/format';
 import { describeTurnCost } from '@/lib/usage-cost';
@@ -43,6 +44,13 @@ export interface SessionThreadProps {
   trailingKey?: string;
   /** Epoch ms of the last event from the open turn; drives the "no new output" hint. */
   lastOutputAt?: number | null;
+  /** Typed stops seen live (turn id → reason) before the turns list catches up. */
+  turnStopReasons?: ReadonlyMap<string, TurnStopReason>;
+}
+
+/** The generic "Error: ..." system line a RUN_ERROR leaves; a typed stop replaces it with its receipt. */
+function isRunErrorLine(message: Message): boolean {
+  return message.role === 'system' && message.content.startsWith('Error: ');
 }
 
 /** Silence longer than this gets an explicit "no new output" note. */
@@ -302,7 +310,14 @@ function TurnDivider({
           {cost.label}
         </span>
       )}
-      {turn?.error && (
+      {turn?.stopReason ? (
+        <span
+          data-testid="turn-divider-stopped"
+          className="text-[10px] font-medium text-amber-400"
+        >
+          stopped at spend cap
+        </span>
+      ) : turn?.error && (
         <span className="text-[10px] font-medium text-red-400">failed</span>
       )}
       {onInspect && (
@@ -338,6 +353,7 @@ export function SessionThread({
   trailing,
   trailingKey,
   lastOutputAt = null,
+  turnStopReasons,
 }: SessionThreadProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const showWorkingIndicator = activity === 'working' && !streamingContent && toolCalls.size === 0;
@@ -442,6 +458,18 @@ export function SessionThread({
   const activeToolCalls = Array.from(toolCalls.values()) as ToolCallState[];
   const segments = segmentMessagesByTurn(mergedMessages);
   const turnById = new Map<string, Turn>(turns.map((turn) => [turn.id, turn]));
+  const stopReasonFor = (turnId: string | null): TurnStopReason | undefined => (
+    turnId ? turnById.get(turnId)?.stopReason ?? turnStopReasons?.get(turnId) : undefined
+  );
+  // A stopped run that left no messages of its own still gets its receipt.
+  const latestTurn = turns.reduce<Turn | undefined>(
+    (latest, turn) => (!latest || turn.startedAt > latest.startedAt ? turn : latest),
+    undefined,
+  );
+  const unplacedStop = latestTurn?.stopReason
+    && !segments.some((segment) => segment.turnId === latestTurn.id)
+    ? latestTurn.stopReason
+    : undefined;
 
   return (
     <div className="relative flex-1 min-h-0 overflow-hidden">
@@ -460,7 +488,9 @@ export function SessionThread({
                   onInspect={onInspectTurn ? () => onInspectTurn(segment.turnId!) : undefined}
                 />
               )}
-              {segment.messages.map((msg) => (
+              {segment.messages
+                .filter((msg) => !(stopReasonFor(segment.turnId) && isRunErrorLine(msg)))
+                .map((msg) => (
             <div key={msg.id} className="space-y-1">
               {msg.parts && msg.parts.length > 0 ? (
                 // Interleaving preserved: text renders in place, while each
@@ -494,8 +524,14 @@ export function SessionThread({
               )}
             </div>
               ))}
+              {(() => {
+                const stopReason = stopReasonFor(segment.turnId);
+                return stopReason ? <BudgetStopBanner reason={stopReason} className="my-2" /> : null;
+              })()}
             </div>
           ))}
+
+          {unplacedStop && <BudgetStopBanner reason={unplacedStop} className="my-2" />}
 
           {/* Active tool calls during streaming */}
           {activeToolCalls.length > 0 && (

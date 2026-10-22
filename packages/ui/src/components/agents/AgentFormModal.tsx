@@ -4,6 +4,11 @@ import { X, Wrench, Check } from 'lucide-react';
 import { useAgentsStore, type Agent } from '@/stores/agents';
 import { fetchCatalogTools, type CatalogTool } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import {
+  parseRunSpendCapInput,
+  readRunSpendCap,
+  writeRunSpendCap,
+} from '@/lib/run-spend-cap';
 import { ToolPickerModal } from './ToolPickerModal';
 import {
   STABLEHAND_HARNESS_NAMES,
@@ -90,6 +95,8 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
   // group by (agent metadata.budgetDimensions). Values are comma-separated
   // in the editor.
   const [budgetDims, setBudgetDims] = useState<Array<{ key: string; values: string }>>([]);
+  // Per-run spend cap; stored in the harness config as limits.maxCostUsd.
+  const [spendCapText, setSpendCapText] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
@@ -116,7 +123,9 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
     if (agent) {
       setName(agent.name);
       setHarness(agent.harness ?? DEFAULT_HARNESS);
-      setHarnessConfigText(formatJsonLike(agent.harnessConfig));
+      const configText = formatJsonLike(agent.harnessConfig);
+      setHarnessConfigText(configText);
+      setSpendCapText(readRunSpendCap(configText) ?? '');
       setDescription(agent.description ?? '');
       setSystemPrompt(agent.systemPrompt ?? '');
       setTools(agent.tools ?? []);
@@ -151,6 +160,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
       setNativeToolsList([]);
       setManifestYamlText('');
       setBudgetDims([]);
+      setSpendCapText('');
     }
     setNativeToolInput('');
     setErrors({});
@@ -226,6 +236,9 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
       } catch {
         errs.harnessConfig = 'Harness config must be valid JSON';
       }
+    }
+    if (parseRunSpendCapInput(spendCapText) === null) {
+      errs.spendCap = 'Enter a dollar amount above zero, or leave empty for no cap';
     }
     for (const row of budgetDims) {
       const key = row.key.trim();
@@ -434,7 +447,12 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
                   (t) => JSON.stringify(t, null, 2) === harnessConfigText.trim()
                 );
                 if (!harnessConfigText.trim() || currentIsTemplate) {
-                  setHarnessConfigText(JSON.stringify(HARNESS_CONFIG_TEMPLATES[newHarness] || {}, null, 2));
+                  const template = JSON.stringify(HARNESS_CONFIG_TEMPLATES[newHarness] || {}, null, 2);
+                  // Keep the spend cap the user set across a template swap.
+                  const cap = parseRunSpendCapInput(spendCapText);
+                  setHarnessConfigText(
+                    (typeof cap === 'number' ? writeRunSpendCap(template, cap) : null) ?? template,
+                  );
                 }
               }}
               className={cn('input-base mt-1.5', errors.harness && 'border-red-500/60')}
@@ -458,12 +476,53 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
               id="agent-harness-config"
               value={harnessConfigText}
               onChange={(e) => setHarnessConfigText(e.target.value)}
+              onBlur={() => {
+                const cap = readRunSpendCap(harnessConfigText);
+                if (cap !== null) setSpendCapText(cap);
+              }}
               placeholder={'{\n  "provider": "openai",\n  "model": "gpt-5.4-mini"\n}'}
               rows={5}
               className={cn('input-base mt-1.5 resize-y font-mono', errors.harnessConfig && 'border-red-500/60')}
             />
             {errors.harnessConfig && (
               <p className="mt-1 text-xs text-red-400">{errors.harnessConfig}</p>
+            )}
+          </div>
+
+          {/* Per-run spend cap (harnessConfig.limits.maxCostUsd) */}
+          <div>
+            <label htmlFor="agent-spend-cap" className="text-label">
+              Spend cap per run (USD)
+            </label>
+            <p className="mt-1 text-xs text-surface-500">
+              A run stops when its model spend reaches this amount, even mid-task. Needs the
+              model gateway; leave empty for no per-run cap.
+            </p>
+            <input
+              id="agent-spend-cap"
+              data-testid="agent-spend-cap"
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="0.01"
+              value={spendCapText}
+              placeholder="No cap"
+              disabled={readRunSpendCap(harnessConfigText) === null}
+              title={readRunSpendCap(harnessConfigText) === null
+                ? 'Fix the harness configuration JSON to set a spend cap'
+                : undefined}
+              onChange={(e) => {
+                const text = e.target.value;
+                setSpendCapText(text);
+                const cap = parseRunSpendCapInput(text);
+                if (cap === null) return;
+                const nextConfig = writeRunSpendCap(harnessConfigText, cap);
+                if (nextConfig !== null) setHarnessConfigText(nextConfig);
+              }}
+              className={cn('input-base mt-1.5 w-40 font-mono', errors.spendCap && 'border-red-500/60')}
+            />
+            {errors.spendCap && (
+              <p className="mt-1 text-xs text-red-400">{errors.spendCap}</p>
             )}
           </div>
 

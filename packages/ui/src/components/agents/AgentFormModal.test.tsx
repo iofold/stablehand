@@ -270,3 +270,98 @@ describe('AgentFormModal', () => {
     }));
   });
 });
+
+describe('AgentFormModal spend cap per run', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
+      .IS_REACT_ACT_ENVIRONMENT = true;
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    mocks.fetchCatalogTools.mockResolvedValue([]);
+    mocks.updateAgent.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.clearAllMocks();
+  });
+
+  function typeInto(element: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+    const prototype = element instanceof HTMLInputElement
+      ? HTMLInputElement.prototype
+      : HTMLTextAreaElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+    act(() => {
+      setter?.call(element, value);
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  async function save(): Promise<void> {
+    const button = [...document.querySelectorAll('button')]
+      .find((candidate) => candidate.textContent?.includes('Save Changes')) as HTMLButtonElement;
+    await act(async () => {
+      button.click();
+      await Promise.resolve();
+    });
+  }
+
+  it('shows the cap stored in the harness config and saves an edit back into limits.maxCostUsd', async () => {
+    act(() => root.render(
+      <AgentFormModal
+        open
+        agent={makeAgent({
+          harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini', limits: { maxModelCalls: 40, maxCostUsd: 0.5 } },
+        })}
+        onClose={vi.fn()}
+      />,
+    ));
+    await flushEffects();
+
+    const field = document.querySelector<HTMLInputElement>('[data-testid="agent-spend-cap"]')!;
+    expect(field.value).toBe('0.5');
+
+    typeInto(field, '0.05');
+    expect(JSON.parse(document.querySelector<HTMLTextAreaElement>('#agent-harness-config')!.value))
+      .toEqual({ provider: 'openai', model: 'gpt-5.4-mini', limits: { maxModelCalls: 40, maxCostUsd: 0.05 } });
+
+    await save();
+    expect(mocks.updateAgent).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+      harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini', limits: { maxModelCalls: 40, maxCostUsd: 0.05 } },
+    }));
+  });
+
+  it('clears the cap without touching other limits', async () => {
+    act(() => root.render(
+      <AgentFormModal
+        open
+        agent={makeAgent({ harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini', limits: { maxCostUsd: 2 } } })}
+        onClose={vi.fn()}
+      />,
+    ));
+    await flushEffects();
+
+    typeInto(document.querySelector<HTMLInputElement>('[data-testid="agent-spend-cap"]')!, '');
+    await save();
+
+    expect(mocks.updateAgent).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+      harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
+    }));
+  });
+
+  it('refuses a zero or negative cap', async () => {
+    act(() => root.render(<AgentFormModal open agent={makeAgent()} onClose={vi.fn()} />));
+    await flushEffects();
+
+    typeInto(document.querySelector<HTMLInputElement>('[data-testid="agent-spend-cap"]')!, '0');
+    await save();
+
+    expect(mocks.updateAgent).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain('Enter a dollar amount above zero');
+  });
+});

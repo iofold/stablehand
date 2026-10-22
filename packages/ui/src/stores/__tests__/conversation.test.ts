@@ -1086,3 +1086,43 @@ describe('conversation store', () => {
     });
   });
 });
+
+describe('conversation store typed run stops (ctx-ycek)', () => {
+  it('records a spend-cap stop from RUN_ERROR and ties its error line to the turn', () => {
+    const { handleSSEEvent } = getStore();
+    const stopReason = { code: 'budget_reached', source: 'run_limit', capUsd: 0.05, spentUsd: 0.0512 };
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'turn-7' }));
+    handleSSEEvent(makeEvent('RUN_ERROR', {
+      runId: 'turn-7',
+      message: 'Stopped: this run reached its $0.05 spend cap.',
+      code: 'budget_reached',
+      stopReason,
+    }));
+
+    const state = getStore();
+    expect(state.turnStopReasons.get('turn-7')).toEqual(stopReason);
+    expect(state.messages.at(-1)).toMatchObject({ role: 'system', turnId: 'turn-7' });
+    expect(state.isStreaming).toBe(false);
+  });
+
+  it('ignores malformed stop reasons and forgets stops on reset', () => {
+    const { handleSSEEvent } = getStore();
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'turn-8' }));
+    handleSSEEvent(makeEvent('RUN_ERROR', { runId: 'turn-8', message: 'boom', stopReason: { code: 'nope' } }));
+    expect(getStore().turnStopReasons.size).toBe(0);
+    expect(getStore().messages.at(-1)).not.toHaveProperty('turnId');
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'turn-9' }));
+    handleSSEEvent(makeEvent('RUN_ERROR', {
+      runId: 'turn-9',
+      message: 'Stopped.',
+      stopReason: { code: 'model_gateway_budget_exceeded', spentUsd: null, limitUsd: null },
+    }));
+    expect(getStore().turnStopReasons.has('turn-9')).toBe(true);
+
+    getStore().reset();
+    expect(getStore().turnStopReasons.size).toBe(0);
+  });
+});

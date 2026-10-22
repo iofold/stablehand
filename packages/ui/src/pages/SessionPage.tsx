@@ -101,6 +101,7 @@ export function SessionPage() {
     loadMessages,
     setActiveConversation,
     reset,
+    turnStopReasons,
   } = useConversationStore();
   const interrupt = useInterruptStore((s) => s.pending);
   const clearInterrupt = useInterruptStore((s) => s.clear);
@@ -256,7 +257,9 @@ export function SessionPage() {
               for (const turn of convTurns) conversationTurnIds.add(turn.id);
               setConversationTurns(convTurns);
               const lastTurn = convTurns[0];
-              if (lastTurn?.error) {
+              // A run stopped at its spend cap shows its own receipt in the
+              // thread rather than a generic failure.
+              if (lastTurn?.error && !lastTurn.stopReason) {
                 setPastRunError(lastTurn.error as string);
               } else {
                 setPastRunError(null);
@@ -575,6 +578,7 @@ export function SessionPage() {
             conversationId={conversationId}
             pastRunError={pastRunError}
             turns={conversationTurns}
+            turnStopReasons={turnStopReasons}
             onInspectTurn={id ? setInspectedTurnId : undefined}
             activity={threadActivity}
             lastOutputAt={lastTurnEventAt}
