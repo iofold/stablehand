@@ -258,7 +258,7 @@ describe('turn delivery takeover (ADR 024)', () => {
     expect(late.map(describeEvent)).toEqual(['text:working', 'turnFailed']);
     const failure = late.at(-1)?.payload;
     expect(failure?.case === 'turnFailed' && failure.value.errorMessage)
-      .toMatch(/No orchestrator re-attached within/);
+      .toMatch(/did not reconnect within 0s/);
   });
 
   it('does not abort when the capability lapses in grace mode, and resumes callbacks with the successor capability', async () => {

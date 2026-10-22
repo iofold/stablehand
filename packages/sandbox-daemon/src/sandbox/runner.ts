@@ -1025,9 +1025,11 @@ function startOrphanTimer(delivery: ActiveTurnDelivery, reason: string): void {
     console.error(
       `[sandbox] turn ${turnId}: no orchestrator re-attached within ${graceMs}ms; abandoning the turn`,
     );
-    abortTurnDelivery(delivery, new ConnectError(
-      `No orchestrator re-attached within ${Math.round(graceMs / 1000)}s after it disconnected (${reason}); the turn was abandoned`,
-      Code.DeadlineExceeded,
+    // A plain Error keeps the user-facing copy free of a "[deadline_exceeded]"
+    // transport prefix; this text becomes the turn's error.
+    abortTurnDelivery(delivery, new Error(
+      `The orchestrator went away and did not reconnect within ${Math.round(graceMs / 1000)}s `
+      + `(${reason}), so the sandbox stopped this turn. Messages saved before then are kept; retry to continue.`,
     ));
   }, graceMs);
   delivery.orphanTimer.unref();
