@@ -246,8 +246,8 @@ describe('overnight-analyst run-once', () => {
       type: 'custom.overnight.brief',
       payload: { sources: 'https://news.ycombinator.com' },
     });
-    expect(stdout).toContain('cost     $0.01');
-    expect(stdout).toContain('RESULT status=COMPLETED turn=turn-1 brief=brief-1 cost_usd=0.0123 coverage=complete');
+    expect(stdout).toContain('cost     $0.0123');
+    expect(stdout).toContain('RESULT status=COMPLETED turn=turn-1 brief=brief-1 cost_usd=0.0123 coverage=complete gallery=none');
   });
 
   it('starts nothing when asked to skip and a brief exists', async () => {

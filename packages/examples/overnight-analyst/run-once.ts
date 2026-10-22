@@ -8,7 +8,7 @@
  *
  * Exit code 0 means the run completed and uploaded overnight-brief.html.
  * The last line is machine-readable for install.sh:
- *   RESULT status=COMPLETED turn=<id> brief=<artifactId> cost_usd=<n|unknown> coverage=<c>
+ *   RESULT status=COMPLETED turn=<id> brief=<artifactId> cost_usd=<n|unknown> coverage=<c> gallery=<shown|missing|none>
  *
  * Environment:
  *   API_URL               Stablehand base URL   (default http://localhost:3002)
@@ -73,7 +73,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function formatUsd(value: number): string {
-  return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
+  return value < 1 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
 }
 
 function elapsed(since: number): string {
@@ -181,19 +181,22 @@ async function main(): Promise<number> {
   console.log(`  brief    ${brief ? brief.id : 'missing'}`);
   if (priced.error) console.log(`  error    ${priced.error.slice(0, 300)}`);
 
+  let gallery = 'none';
   if (brief && GALLERY_URL) {
     const shown = await waitFor('waiting for the gallery to show the brief', 150_000, async () => {
       const res = await fetch(`${GALLERY_URL}/a/${encodeURIComponent(brief.id)}`).catch(() => undefined);
       if (res) await res.arrayBuffer();
       return res?.ok ? true : undefined;
     });
+    gallery = shown ? 'shown' : 'missing';
     console.log(`  gallery  ${shown ? 'showing the brief' : 'not yet showing the brief'}`);
   }
 
   const costValue = cost?.totalUsd ?? (cost && cost.knownUsd > 0 ? cost.knownUsd : null);
   console.log(
     `RESULT status=${priced.status} turn=${priced.id} brief=${brief?.id ?? 'missing'} `
-    + `cost_usd=${costValue ?? 'unknown'} coverage=${cost?.coverage ?? 'none'}`,
+    + `cost_usd=${costValue === null ? 'unknown' : Number(costValue.toFixed(6))} `
+    + `coverage=${cost?.coverage ?? 'none'} gallery=${gallery}`,
   );
   return priced.status === 'COMPLETED' && brief ? 0 : 1;
 }

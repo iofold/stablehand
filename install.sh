@@ -294,7 +294,8 @@ TOKEN=$(env_get STABLEHAND_API_TOKEN)
 cost=$(printf '%s' "$receipt_line" | sed -n 's/.*cost_usd=\([^ ]*\).*/\1/p')
 say "Stablehand is running ($(elapsed))"
 case "$receipt_line" in
-  *status=COMPLETED*) note "first run: completed, model cost \$${cost:-unknown}, brief in the gallery" ;;
+  *status=COMPLETED*gallery=shown*) note "first run: completed for \$${cost:-unknown} in model calls; the brief is in the gallery" ;;
+  *status=COMPLETED*) note "first run: completed for \$${cost:-unknown} in model calls; the brief is under Artifacts in the UI" ;;
   *status=SKIPPED*) note "first run: skipped, a brief already exists (STABLEHAND_FIRST_RUN=always runs another)" ;;
 esac
 cat <<EOF
