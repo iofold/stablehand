@@ -3,7 +3,7 @@
   "name": "dev2-scale-10",
   "expectedOutput": "BENCHMARK_OK",
   "target": {
-    "apiBase": "https://stablehand.staging.example.com/api",
+    "apiBase": "http://localhost:3002/api",
     "kubernetesNamespace": "stablehand"
   },
   "requirements": {

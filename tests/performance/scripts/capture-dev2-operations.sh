@@ -5,7 +5,7 @@ PHASE="${1:?usage: capture-dev2-operations.sh <before|after> <output-directory> 
 OUTPUT_DIR="${2:?usage: capture-dev2-operations.sh <before|after> <output-directory> [since-time]}"
 SINCE_TIME="${3:-}"
 NAMESPACE="${STABLEHAND_PERF_NAMESPACE:-stablehand}"
-API_BASE="${STABLEHAND_PERF_API_BASE:-https://stablehand.staging.example.com/api}"
+API_BASE="${STABLEHAND_PERF_API_BASE:-http://localhost:3002/api}"
 KUBECTL="${KUBECTL:-kubectl}"
 
 if [[ "$PHASE" != "before" && "$PHASE" != "after" ]]; then

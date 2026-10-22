@@ -1,8 +1,9 @@
 # SigNoz for Debugging
 
 Use this runbook when you need OpenTelemetry traces for stablehand API,
-orchestrator behavior, and sandbox run behavior in the centralized dev2 SigNoz
-instance.
+orchestrator behavior, and sandbox run behavior in SigNoz. By default traces go
+to a collector on your Docker host; internal operators send them to the
+centralized dev2 SigNoz instance by setting `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 ## What Is Instrumented
 
@@ -16,8 +17,16 @@ HTTP/Undici URL attributes. Base `docker-compose.yml` keeps
 get noisy export failures.
 
 For SigNoz debugging, use `docker-compose.signoz.yml`. It does not start a
-local SigNoz collector, ClickHouse, or SigNoz UI. Instead it exports
-orchestrator and sandbox traces to the centralized dev2 OTLP HTTP endpoint:
+SigNoz collector, ClickHouse, or SigNoz UI. By default it exports orchestrator
+and sandbox traces to an OTLP HTTP collector on the Docker host, such as a
+local SigNoz install:
+
+```text
+http://host.docker.internal:4318
+```
+
+Internal operators export to the centralized dev2 OTLP HTTP endpoint instead
+(see [Start stablehand With Dev2 Tracing](#start-stablehand-with-dev2-tracing)):
 
 ```text
 https://otlp-signoz.staging.example.com
@@ -64,25 +73,23 @@ through the tailnet-only ingress at:
 https://otlp-signoz.staging.example.com
 ```
 
-Do not run a local SigNoz ClickHouse stack for stablehand telemetry. All stablehand
-OpenTelemetry traces should land in dev2 SigNoz.
+Internal operators: do not run a local SigNoz ClickHouse stack for stablehand
+telemetry. Set `OTEL_EXPORTER_OTLP_ENDPOINT` so traces land in dev2 SigNoz.
 
 ## Start stablehand With Dev2 Tracing
 
 From the stablehand repo root:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.signoz.yml up --build -d --remove-orphans
-```
-
-The default OTLP endpoint is `https://otlp-signoz.staging.example.com`. Override
-it only when intentionally targeting another central collector:
-
-```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-signoz.staging.example.com \
 STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-signoz.staging.example.com \
   docker compose -f docker-compose.yml -f docker-compose.signoz.yml up --build -d --remove-orphans
 ```
+
+Without `OTEL_EXPORTER_OTLP_ENDPOINT`, the overlay exports to
+`http://host.docker.internal:4318`. Sandbox run containers inherit the
+orchestrator's endpoint. To make the setting stick across restarts, put
+`OTEL_EXPORTER_OTLP_ENDPOINT` in `.env`.
 
 To run stablehand without tracing:
 

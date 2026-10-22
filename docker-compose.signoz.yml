@@ -1,10 +1,15 @@
+# Optional overlay: export OpenTelemetry traces from the orchestrator and sandbox runs.
+#   docker compose -f docker-compose.yml -f docker-compose.signoz.yml up --build -d
+# Traces go to an OTLP HTTP collector on the Docker host (http://host.docker.internal:4318,
+# for example a local SigNoz install) unless OTEL_EXPORTER_OTLP_ENDPOINT points elsewhere.
+# Sandbox run containers inherit the orchestrator's endpoint. See docs/signoz-for-debugging.md.
 services:
   orchestrator:
     environment:
       NODE_OPTIONS: ${NODE_OPTIONS:---import /app/packages/sandbox-daemon/dist/observability/otel-auto-register.js}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-stablehand-orchestrator}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=stablehand}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-https://otlp-signoz.staging.example.com}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
       OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
       OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-otlp}
       OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-none}
@@ -16,7 +21,7 @@ services:
     environment:
       OTEL_SERVICE_NAME: stablehand-sandbox-langgraph
       OTEL_RESOURCE_ATTRIBUTES: ${STABLEHAND_SANDBOX_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=stablehand},stablehand.component=sandbox,stablehand.harness=langgraph
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT:-https://otlp-signoz.staging.example.com}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
       OTEL_EXPORTER_OTLP_PROTOCOL: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
       OTEL_TRACES_EXPORTER: ${STABLEHAND_SANDBOX_OTEL_TRACES_EXPORTER:-otlp}
       OTEL_METRICS_EXPORTER: ${STABLEHAND_SANDBOX_OTEL_METRICS_EXPORTER:-none}
@@ -28,7 +33,7 @@ services:
     environment:
       OTEL_SERVICE_NAME: stablehand-sandbox-claude-agents
       OTEL_RESOURCE_ATTRIBUTES: ${STABLEHAND_SANDBOX_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=stablehand},stablehand.component=sandbox,stablehand.harness=claude-agents
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT:-https://otlp-signoz.staging.example.com}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
       OTEL_EXPORTER_OTLP_PROTOCOL: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
       OTEL_TRACES_EXPORTER: ${STABLEHAND_SANDBOX_OTEL_TRACES_EXPORTER:-otlp}
       OTEL_METRICS_EXPORTER: ${STABLEHAND_SANDBOX_OTEL_METRICS_EXPORTER:-none}
@@ -40,7 +45,7 @@ services:
     environment:
       OTEL_SERVICE_NAME: stablehand-sandbox-pi-agent
       OTEL_RESOURCE_ATTRIBUTES: ${STABLEHAND_SANDBOX_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=stablehand},stablehand.component=sandbox,stablehand.harness=pi-agent
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT:-https://otlp-signoz.staging.example.com}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
       OTEL_EXPORTER_OTLP_PROTOCOL: ${STABLEHAND_SANDBOX_OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
       OTEL_TRACES_EXPORTER: ${STABLEHAND_SANDBOX_OTEL_TRACES_EXPORTER:-otlp}
       OTEL_METRICS_EXPORTER: ${STABLEHAND_SANDBOX_OTEL_METRICS_EXPORTER:-none}

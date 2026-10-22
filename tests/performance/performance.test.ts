@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -25,6 +26,7 @@ import {
   assertModelGatewayRequirement,
   parsePerformanceProfile,
   summarizePerformancePlan,
+  withApiBaseOverride,
 } from './src/profile.js';
 import {
   percentile,
@@ -277,7 +279,7 @@ describe('performance profile', () => {
       name: 'dev2-smoke',
       expectedOutput: 'BENCHMARK_OK',
       target: {
-        apiBase: 'https://stablehand.staging.example.com/api',
+        apiBase: 'https://stablehand.example/api',
         kubernetesNamespace: 'stablehand',
       },
       stages: [{
@@ -329,7 +331,7 @@ describe('performance profile', () => {
       schemaVersion: 1,
       name: 'dev2-parallel-groups',
       target: {
-        apiBase: 'https://stablehand.staging.example.com/api',
+        apiBase: 'https://stablehand.example/api',
         kubernetesNamespace: 'stablehand',
       },
       stages: [
@@ -349,7 +351,7 @@ describe('performance profile', () => {
       schemaVersion: 1,
       name: 'unsafe',
       target: {
-        apiBase: 'https://stablehand.staging.example.com/api',
+        apiBase: 'https://stablehand.example/api',
         kubernetesNamespace: 'stablehand',
       },
       safety: { maxConcurrency: 5 },
@@ -377,7 +379,7 @@ describe('performance profile', () => {
       schemaVersion: 1,
       name: 'unwarmed',
       target: {
-        apiBase: 'https://stablehand.staging.example.com/api',
+        apiBase: 'https://stablehand.example/api',
         kubernetesNamespace: 'stablehand',
       },
       stages: [{
@@ -404,7 +406,7 @@ describe('performance profile', () => {
       schemaVersion: 1,
       name: 'invalid-claude-config',
       target: {
-        apiBase: 'https://stablehand.staging.example.com/api',
+        apiBase: 'https://stablehand.example/api',
         kubernetesNamespace: 'stablehand',
       },
       stages: [{
@@ -431,7 +433,7 @@ describe('performance profile', () => {
       schemaVersion: 1,
       name: 'model-matrix',
       target: {
-        apiBase: 'https://stablehand.staging.example.com/api',
+        apiBase: 'https://stablehand.example/api',
         kubernetesNamespace: 'stablehand',
       },
       requirements: { modelGateway: 'required' },
@@ -495,7 +497,7 @@ describe('performance profile', () => {
       schemaVersion: 1,
       name: 'too-many-turns',
       target: {
-        apiBase: 'https://stablehand.staging.example.com/api',
+        apiBase: 'https://stablehand.example/api',
         kubernetesNamespace: 'stablehand',
       },
       safety: { maxTurns: 5 },
@@ -519,7 +521,7 @@ describe('performance profile', () => {
       schemaVersion: 1,
       name: 'gateway-required',
       target: {
-        apiBase: 'https://stablehand.staging.example.com/api',
+        apiBase: 'https://stablehand.example/api',
         kubernetesNamespace: 'stablehand',
       },
       requirements: { modelGateway: 'required' },
@@ -612,6 +614,29 @@ describe('performance profile', () => {
     expect(requestedUrls).toEqual([
       'https://stablehand.example/api/model-gateway/status',
     ]);
+  });
+
+  it('targets the local stack unless STABLEHAND_PERF_API_BASE names another', () => {
+    const profileDir = new URL('./profiles/', import.meta.url);
+    const profiles = readdirSync(profileDir).filter((name) => name.endsWith('.json'));
+    expect(profiles.length).toBeGreaterThan(0);
+    for (const name of profiles) {
+      const raw = JSON.parse(readFileSync(new URL(name, profileDir), 'utf8')) as {
+        target: { apiBase: string };
+      };
+      expect(raw.target.apiBase, name).toBe('http://localhost:3002/api');
+    }
+
+    const target = { apiBase: 'http://localhost:3002/api', kubernetesNamespace: 'stablehand' };
+    expect(withApiBaseOverride({ target }, undefined).target).toBe(target);
+    expect(withApiBaseOverride({ target }, '  ').target).toBe(target);
+    expect(withApiBaseOverride({ target }, 'https://stablehand.example/api').target).toEqual({
+      apiBase: 'https://stablehand.example/api',
+      kubernetesNamespace: 'stablehand',
+    });
+    expect(() => withApiBaseOverride({ target }, 'not a url')).toThrow(
+      /STABLEHAND_PERF_API_BASE must be an absolute URL/,
+    );
   });
 
   it('ships a current frontier matrix and cheaper volumetric plans', () => {
@@ -1189,7 +1214,7 @@ describe('benchmark agent inventory', () => {
       schemaVersion: 1,
       name: 'inventory',
       target: {
-        apiBase: 'https://stablehand.staging.example.com/api',
+        apiBase: 'https://stablehand.example/api',
         kubernetesNamespace: 'stablehand',
       },
       stages: [{
@@ -1785,7 +1810,7 @@ describe('performance report', () => {
       runId: 'run-1',
       profile: 'dev2-smoke',
       target: {
-        apiBase: 'https://stablehand.staging.example.com/api',
+        apiBase: 'https://stablehand.example/api',
         kubernetesNamespace: 'stablehand',
       },
       requirements: { modelGateway: 'optional' },
@@ -1820,7 +1845,7 @@ describe('performance report', () => {
           schemaVersion: 1,
           name: 'nested',
           target: {
-            apiBase: 'https://stablehand.staging.example.com/api',
+            apiBase: 'https://stablehand.example/api',
             kubernetesNamespace: 'stablehand',
           },
           stages: [{

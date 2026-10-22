@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "dev2-edge-capacity-mixed",
   "target": {
-    "apiBase": "https://stablehand.staging.example.com/api",
+    "apiBase": "http://localhost:3002/api",
     "kubernetesNamespace": "stablehand"
   },
   "levels": [8, 12, 16, 24, 32, 48],

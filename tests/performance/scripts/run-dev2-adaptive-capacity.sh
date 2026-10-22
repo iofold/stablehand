@@ -11,7 +11,7 @@ BOUNDARY_TIMEOUT_SECONDS="${STABLEHAND_PERF_BOUNDARY_TIMEOUT_SECONDS:-180}"
 
 export KUBECONFIG="${KUBECONFIG:-$HOME/workspace/infra/.k3s-kubeconfig.yaml}"
 namespace="$(jq -r '.target.kubernetesNamespace' "$RAMP_PATH")"
-api_base="$(jq -r '.target.apiBase' "$RAMP_PATH")"
+api_base="${STABLEHAND_PERF_API_BASE:-$(jq -r '.target.apiBase' "$RAMP_PATH")}"
 temporary_limit="$(jq -r '.maxGlobalContainers' "$RAMP_PATH")"
 confirmation_runs="$(jq -r '.confirmationRuns' "$RAMP_PATH")"
 harness_count="$(jq '.harnesses | length' "$RAMP_PATH")"

@@ -1,9 +1,23 @@
 # Dev2 performance certification
 
-This suite drives the real Kubernetes STABLEHAND deployment at
-`https://stablehand.staging.example.com`, while sampling the dev2 node and STABLEHAND
-namespace. It uses the public `@stablehand/client` control and durable SSE
-contracts; it never calls a harness adapter directly.
+This suite drives a real Kubernetes STABLEHAND deployment while sampling its
+node and STABLEHAND namespace. It uses the public `@stablehand/client` control
+and durable SSE contracts; it never calls a harness adapter directly.
+
+## Choose the target
+
+Checked-in profiles target the local Docker stack at
+`http://localhost:3002/api`. To load-test any other deployment you must name it
+explicitly in `STABLEHAND_PERF_API_BASE`, which overrides `target.apiBase` in
+the profile or ramp for the CLI and every wrapper script:
+
+```bash
+export STABLEHAND_PERF_API_BASE=https://<stablehand-host>/api
+```
+
+Internal operators set this to the dev2 API before running any `run-dev2*`
+wrapper; without it the wrappers drive the local stack while sampling the
+cluster in `KUBECONFIG`.
 
 ## Evergreen findings
 

@@ -220,3 +220,23 @@ export function parsePerformanceProfile(value: unknown): PerformanceProfile {
   }
   return profile;
 }
+
+/** Environment variable that retargets a profile or ramp at another API. */
+export const PERFORMANCE_API_BASE_ENV = 'STABLEHAND_PERF_API_BASE';
+
+/**
+ * Checked-in profiles target the local Docker stack. A remote deployment is
+ * only load-tested when the operator names it in STABLEHAND_PERF_API_BASE,
+ * which replaces `target.apiBase` on a parsed profile or capacity ramp.
+ */
+export function withApiBaseOverride<T extends { target: { apiBase: string } }>(
+  value: T,
+  override: string | undefined,
+): T {
+  const apiBase = override?.trim();
+  if (!apiBase) return value;
+  if (!z.url().safeParse(apiBase).success) {
+    throw new Error(`${PERFORMANCE_API_BASE_ENV} must be an absolute URL, got "${apiBase}"`);
+  }
+  return { ...value, target: { ...value.target, apiBase } };
+}

@@ -49,9 +49,9 @@ For more details, see [LangSmith Tracing](./langsmith-tracing.md).
 
 ## SigNoz / OpenTelemetry Tracing
 
-The Docker Compose orchestrator service can be preloaded with Node OpenTelemetry auto-instrumentation using the optional `docker-compose.signoz.yml` override. Sandbox harness images preload the same instrumentation through Bun. The override exports to the centralized dev2 SigNoz collector, not to a local SigNoz or local ClickHouse stack.
+The Docker Compose orchestrator service can be preloaded with Node OpenTelemetry auto-instrumentation using the optional `docker-compose.signoz.yml` override. Sandbox harness images preload the same instrumentation through Bun. By default the override exports to an OTLP HTTP collector on the Docker host (`http://host.docker.internal:4318`); set `OTEL_EXPORTER_OTLP_ENDPOINT` to send traces to a central collector instead. See [SigNoz for Debugging](signoz-for-debugging.md).
 
-This captures orchestrator-side HTTP, Fastify, PostgreSQL, and related Node spans under `stablehand-orchestrator`, plus sandbox daemon spans under `stablehand-sandbox-<harness>`. Keep `deployment.environment` resource attributes accurate for the source environment so dev2 SigNoz can distinguish local, dev1, dev2, and sandbox traffic.
+This captures orchestrator-side HTTP, Fastify, PostgreSQL, and related Node spans under `stablehand-orchestrator`, plus sandbox daemon spans under `stablehand-sandbox-<harness>`. Keep `deployment.environment` resource attributes accurate for the source environment so a shared collector can distinguish local, staging, and sandbox traffic.
 
 For setup and trace verification commands, see [SigNoz for Debugging](./signoz-for-debugging.md).
 

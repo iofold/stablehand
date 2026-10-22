@@ -18,7 +18,7 @@ export STABLEHAND_PERF_MAX_NODE_MEMORY_PERCENT="$(
   jq -r '.safety.maxNodeMemoryPercent' "$PROFILE_PATH"
 )"
 export STABLEHAND_PERF_ABORT_FILE="$OUTPUT_DIR/ABORT"
-API_BASE="$(jq -r '.target.apiBase' "$PROFILE_PATH")"
+API_BASE="${STABLEHAND_PERF_API_BASE:-$(jq -r '.target.apiBase' "$PROFILE_PATH")}"
 export STABLEHAND_PERF_API_BASE="$API_BASE"
 MIN_GLOBAL_CONTAINERS="$(
   jq -r '.requirements.minGlobalContainers // 0' "$PROFILE_PATH"

@@ -31,6 +31,7 @@ import {
 import {
   parsePerformanceProfile,
   summarizePerformancePlan,
+  withApiBaseOverride,
 } from './src/profile.js';
 import { renderPerformanceReport } from './src/report.js';
 import {
@@ -57,7 +58,9 @@ function usage(): never {
       + '  bun tests/performance/cli.ts resources --kubernetes <jsonl> '
       + '--output <evidence-directory>\n'
       + '  bun tests/performance/cli.ts cleanup --api-base <url> '
-      + '[--timeout-ms <milliseconds>]\n',
+      + '[--timeout-ms <milliseconds>]\n'
+      + '\nProfiles target the local stack (http://localhost:3002/api). '
+      + 'Set STABLEHAND_PERF_API_BASE to target another deployment.\n',
   );
   process.exit(2);
 }
@@ -99,7 +102,10 @@ async function runCommand(values: Record<string, string | boolean | undefined>):
   const profilePath = typeof values.profile === 'string' ? values.profile : undefined;
   const output = typeof values.output === 'string' ? values.output : undefined;
   if (!profilePath || !output) usage();
-  const profile = parsePerformanceProfile(await readJson(profilePath));
+  const profile = withApiBaseOverride(
+    parsePerformanceProfile(await readJson(profilePath)),
+    process.env.STABLEHAND_PERF_API_BASE,
+  );
   await mkdir(output, { recursive: true, mode: 0o700 });
   await writeFile(
     `${output}/plan.json`,
@@ -203,7 +209,10 @@ async function planCommand(
 ): Promise<void> {
   const profilePath = typeof values.profile === 'string' ? values.profile : undefined;
   if (!profilePath) usage();
-  const profile = parsePerformanceProfile(await readJson(profilePath));
+  const profile = withApiBaseOverride(
+    parsePerformanceProfile(await readJson(profilePath)),
+    process.env.STABLEHAND_PERF_API_BASE,
+  );
   process.stdout.write(`${JSON.stringify({
     profile: profile.name,
     target: profile.target,
@@ -334,7 +343,10 @@ async function waveCommand(
     || !Number.isSafeInteger(ordinal)
     || ordinal < 1
   ) usage();
-  const ramp = parseCapacityRamp(await readJson(rampPath));
+  const ramp = withApiBaseOverride(
+    parseCapacityRamp(await readJson(rampPath)),
+    process.env.STABLEHAND_PERF_API_BASE,
+  );
   const profile = buildCapacityWaveProfile(ramp, concurrency, ordinal);
   await mkdir(dirname(output), { recursive: true, mode: 0o700 });
   await writeFile(output, `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600 });
