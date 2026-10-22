@@ -228,9 +228,10 @@ note "healthy after $(elapsed)"
 # Copy this checkout's example into the container, so the seed and manifest
 # match the checkout even when the pulled image is older.
 EXAMPLE=/app/packages/examples/overnight-analyst
-docker compose cp packages/examples/overnight-analyst/seed.ts "orchestrator:$EXAMPLE/seed.ts" >/dev/null
-docker compose cp packages/examples/overnight-analyst/run-once.ts "orchestrator:$EXAMPLE/run-once.ts" >/dev/null
-docker compose cp packages/examples/overnight-analyst/agents/. "orchestrator:$EXAMPLE/agents/" >/dev/null
+for file in seed.ts run-once.ts agents/.; do
+  docker compose cp "packages/examples/overnight-analyst/$file" "orchestrator:$EXAMPLE/$file" >/dev/null 2>&1 \
+    || die "Could not copy $file into the orchestrator container."
+done
 
 timezone=${ANALYST_TZ:-}
 if [ -z "$timezone" ] && [ -L /etc/localtime ]; then
@@ -238,13 +239,15 @@ if [ -z "$timezone" ] && [ -L /etc/localtime ]; then
 fi
 
 say "Seeding the Overnight Analyst"
-GALLERY_API_KEY=$(env_get GALLERY_API_KEY)
+current_key=$(env_get GALLERY_API_KEY)
 gallery_mode=auto
-[ -n "$GALLERY_API_KEY" ] || gallery_mode=rotate
-export GALLERY_API_KEY
+[ -n "$current_key" ] || gallery_mode=rotate
 seed_log=$(mktemp)
 trap 'rm -f "$seed_log"' EXIT
-docker compose exec -T \
+# The key goes to the seed through its environment, never the command line.
+# It is set for this one command only: an exported (even empty) value would
+# override .env when Compose recreates the gallery below.
+GALLERY_API_KEY=$current_key docker compose exec -T \
   -e API_URL=http://localhost:3001 \
   -e GALLERY_API_KEY \
   -e ANALYST_GALLERY="$gallery_mode" \
@@ -267,13 +270,18 @@ if [ "$FIRST_RUN" != skip ]; then
   trap 'rm -f "$seed_log" "$run_log"' EXIT
   only_if_none=1
   [ "$FIRST_RUN" = always ] && only_if_none=0
-  if docker compose exec -T \
+  # A read loop instead of grep or sed, so progress shows as it happens.
+  docker compose exec -T \
     -e API_URL=http://localhost:3001 \
     -e GALLERY_URL=http://gallery:8090 \
     -e ANALYST_SKIP_IF_BRIEF="$only_if_none" \
-    -w "$EXAMPLE" orchestrator node --experimental-strip-types run-once.ts < /dev/null 2>&1 | tee "$run_log" | grep -v '^RESULT ' | sed 's/^/    /'; then
-    :
-  fi
+    -w "$EXAMPLE" orchestrator node --experimental-strip-types run-once.ts < /dev/null 2>&1 \
+    | tee "$run_log" | while IFS= read -r line; do
+        case $line in
+          "RESULT "*) ;;
+          *) printf '    %s\n' "$line" ;;
+        esac
+      done
   receipt_line=$(grep '^RESULT ' "$run_log" | tail -n 1 || true)
   case "$receipt_line" in
     *status=COMPLETED*|*status=SKIPPED*) ;;
@@ -299,7 +307,8 @@ cat <<EOF
 
   The Overnight Analyst runs every day at 07:00 (${timezone:-UTC}). Open it in the UI
   to see the run, its receipt and its files. Run it again now:
-    cd $ROOT && docker compose exec -w $EXAMPLE orchestrator \\
+    cd $ROOT && docker compose exec -e API_URL=http://localhost:3001 \\
+      -e GALLERY_URL=http://gallery:8090 -w $EXAMPLE orchestrator \\
       node --experimental-strip-types run-once.ts
 
   Stop: docker compose down    Remove everything: docker compose down -v
