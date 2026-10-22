@@ -6,6 +6,7 @@ import {
   DeliverTurnRequestSchema,
   FreshBootstrapSchema,
   OpenSessionRequestSchema,
+  RenewTurnDeliveryCapabilityRequestSchema,
   RequestToolResponseSchema,
   ToolLocation,
   ToolMetadataSchema,
@@ -364,6 +365,32 @@ describe('turn delivery takeover (ADR 024)', () => {
     expect(terminal?.case).toBe('turnFailed');
     expect(terminal?.case === 'turnFailed' && terminal.value.errorMessage)
       .toMatch(/user pressed stop/);
+  });
+
+  it('keeps renewing the current authority while a consumer drains a finished delivery', async () => {
+    const { deliverTurn, openSession, renewTurnDeliveryCapability } = await importRunner();
+    mocks.harnessOpenSession.mockResolvedValue({
+      deliverTurn: async function* () {
+        yield { type: 'done', result: 'ok' } satisfies AgentEvent;
+      },
+      exportState: async () => ({ stateVersion: '2', payload: {} }),
+      close: mocks.harnessClose,
+    });
+    await openSession(openRequest(), {});
+    await collect(deliverTurn(deliverRequest('turn-drain')), []);
+
+    const renewal = (ownerId: string, fenceToken: number) => create(
+      RenewTurnDeliveryCapabilityRequestSchema,
+      {
+        sessionId: SESSION_ID,
+        turnId: 'turn-drain',
+        deliveryCapability: capability(ownerId, fenceToken, Date.now() + 120_000),
+      },
+    );
+    await expect(renewTurnDeliveryCapability(renewal('owner-a', 1)))
+      .resolves.toMatchObject({ renewed: true });
+    await expect(renewTurnDeliveryCapability(renewal('owner-z', 1)))
+      .rejects.toMatchObject({ code: Code.FailedPrecondition });
   });
 
   it('refuses to attach to an unknown turn or with a stale fence', async () => {

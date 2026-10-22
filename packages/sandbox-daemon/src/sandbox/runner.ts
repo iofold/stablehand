@@ -901,6 +901,25 @@ export async function renewTurnDeliveryCapability(
   );
   const active = ctx.activeDelivery;
   if (!active || active.context.identity.turnId !== req.turnId) {
+    // ADR 024: the harness may finish while its consumer is still draining
+    // the journal (a takeover replay lags the pump). Acknowledge the current
+    // authority so the consumer keeps its capability until it has read the
+    // terminal frame; nothing can call back on a finished delivery.
+    const retained = ctx.journalsByTurn.get(req.turnId);
+    const highest = ctx.highestDeliveryByTurn.get(req.turnId);
+    if (retained?.journal.finished && highest) {
+      const parsed = parseTurnDeliveryCapability(
+        req.deliveryCapability,
+        {
+          turnId: req.turnId,
+          sandboxSessionId: req.sessionId,
+          agentId: ctx.agentId,
+        },
+      );
+      if (sameTurnDeliveryIdentity(highest, parsed.identity)) {
+        return create(RenewTurnDeliveryCapabilityResponseSchema, { renewed: true });
+      }
+    }
     throw new ConnectError(
       'No active delivery matches the renewal request',
       Code.FailedPrecondition,
