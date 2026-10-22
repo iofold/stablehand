@@ -120,6 +120,11 @@ class LangGraphSession implements HarnessSession {
 
   constructor(private readonly config: HarnessSessionConfig) {
     this.harnessConfig = parseHarnessConfig(LangGraphConfigSchema, config.harnessConfigJson);
+    if (this.harnessConfig.subagents?.length && !isNativeToolAllowed(config.nativeToolPolicy, 'task')) {
+      console.warn(
+        '[langgraph] nativeToolPolicy does not include the task tool, so the configured subagents cannot be used. Add "task" to nativeToolPolicy.names to enable them.',
+      );
+    }
   }
 
   restoreTranscript(messages: Message[]): void {
@@ -172,15 +177,15 @@ class LangGraphSession implements HarnessSession {
       // Step 4: Build langchain tools that wrap our tool definitions
       const lcTools = this.buildLangChainTools(ctx, input.turnId, tools, onApprovalNeeded, queuedEvents);
 
-      // Step 5: Create the deep agent with LocalShellBackend for full filesystem/shell capabilities
-      const { createDeepAgent, LocalShellBackend } = await this.loadDeepAgentsModule();
-      const backend = new LocalShellBackend({
-        rootDir: workspaceDir ?? process.cwd(),
-        env: {
-          ...process.env,
-          ...turnSecrets,
-        } as Record<string, string>,
-      });
+      // Step 5: Create the deep agent. The backend only gets the capabilities
+      // nativeToolPolicy allows: shell + disk, disk only, or none.
+      const deepAgents = await this.loadDeepAgentsModule();
+      const { createDeepAgent } = deepAgents;
+      const backend = this.createBackend(deepAgents, workspaceDir ?? process.cwd(), turnSecrets);
+      const nativeToolPolicy = this.config.nativeToolPolicy;
+      const nativeToolPolicyMiddleware = nativeToolPolicy && nativeToolPolicy.policy !== 'all'
+        ? createNativeToolPolicyMiddleware(nativeToolPolicy, new Set(tools.map((tool) => tool.name)))
+        : undefined;
 
       // Load workspace middleware once — used for both main agent and subagent propagation
       const workspaceMiddleware: Record<string, unknown>[] = [];
@@ -198,32 +203,47 @@ class LangGraphSession implements HarnessSession {
       const resolvedSubagents = await this.buildSubagentParams(
         this.harnessConfig.subagents,
         lcTools,
-        [...(fanoutMiddleware ? [fanoutMiddleware] : []), ...workspaceMiddleware],
+        [
+          ...(nativeToolPolicyMiddleware ? [nativeToolPolicyMiddleware] : []),
+          ...(fanoutMiddleware ? [fanoutMiddleware] : []),
+          ...workspaceMiddleware,
+        ],
         effectiveSecrets,
         input.turnId,
-      );
+      ) ?? [];
+      // deepagents adds a general-purpose subagent with the parent's tools but
+      // none of the parent's custom middleware. Under a restrictive policy,
+      // supply that subagent ourselves so `task` cannot reach tools the
+      // parent is denied.
+      if (
+        nativeToolPolicyMiddleware
+        && !resolvedSubagents.some((subagent) => subagent.name === deepAgents.GENERAL_PURPOSE_SUBAGENT.name)
+      ) {
+        resolvedSubagents.unshift({
+          ...deepAgents.GENERAL_PURPOSE_SUBAGENT,
+          tools: lcTools,
+          middleware: [nativeToolPolicyMiddleware],
+        });
+      }
 
       const hasSystemMessage = this.transcript.some((message) => message.role === 'system');
 
       const deepAgentParams: Record<string, unknown> = {
         model: chatModel,
         tools: lcTools,
-        backend,
       };
+      // No backend means deepagents' in-memory StateBackend: no disk, no shell.
+      if (backend) deepAgentParams.backend = backend;
       if (!hasSystemMessage) deepAgentParams.systemPrompt = systemPrompt;
-      if (resolvedSubagents) deepAgentParams.subagents = resolvedSubagents;
+      if (resolvedSubagents.length > 0) deepAgentParams.subagents = resolvedSubagents;
+      // The policy middleware goes first so a denied call is refused before
+      // any other Stablehand middleware sees it.
       const middlewares: Record<string, unknown>[] = [
+        ...(nativeToolPolicyMiddleware ? [nativeToolPolicyMiddleware] : []),
         ...(fanoutMiddleware ? [fanoutMiddleware] : []),
         createSystemMessageCompatibilityMiddleware(),
         createToolErrorBoundaryMiddleware(),
       ];
-      const nativeToolPolicy = this.config.nativeToolPolicy;
-      if (nativeToolPolicy && nativeToolPolicy.policy !== 'all') {
-        middlewares.push(this.createNativeToolPolicyMiddleware(
-          nativeToolPolicy,
-          new Set(tools.map((tool) => tool.name)),
-        ));
-      }
 
       middlewares.push(...workspaceMiddleware);
 
@@ -563,22 +583,33 @@ class LangGraphSession implements HarnessSession {
     return converted;
   }
 
-  private createNativeToolPolicyMiddleware(
-    nativeToolPolicy: NonNullable<HarnessSessionConfig['nativeToolPolicy']>,
-    stablehandToolNames: ReadonlySet<string>,
-  ): Record<string, unknown> {
-    return {
-      name: 'stablehand-native-tool-policy',
-      beforeToolCall: (call: { name: string }) => {
-        if (stablehandToolNames.has(call.name) || isNativeToolAllowed(nativeToolPolicy, call.name)) {
-          return { blocked: false };
-        }
-        return {
-          blocked: true,
-          reason: `Native tool '${call.name}' is denied by nativeToolPolicy '${nativeToolPolicy.policy}'`,
-        };
-      },
-    };
+  /**
+   * The least capable deepagents backend that still serves the allowed native
+   * tools: LocalShellBackend (disk + shell) only when `execute` is allowed,
+   * FilesystemBackend (disk, no shell) when only file tools are allowed, and
+   * none when no file or shell tool is allowed — deepagents then uses its
+   * in-memory StateBackend. With a backend that cannot run commands,
+   * deepagents also drops `execute` from every agent and subagent.
+   */
+  private createBackend(
+    deepAgents: Pick<typeof import('deepagents'), 'LocalShellBackend' | 'FilesystemBackend'>,
+    rootDir: string,
+    turnSecrets: Readonly<Record<string, string>>,
+  ): unknown {
+    const nativeToolPolicy = this.config.nativeToolPolicy;
+    if (isNativeToolAllowed(nativeToolPolicy, 'execute')) {
+      return new deepAgents.LocalShellBackend({
+        rootDir,
+        env: {
+          ...process.env,
+          ...turnSecrets,
+        } as Record<string, string>,
+      });
+    }
+    if (DEEPAGENTS_FILE_TOOL_NAMES.some((name) => isNativeToolAllowed(nativeToolPolicy, name))) {
+      return new deepAgents.FilesystemBackend({ rootDir });
+    }
+    return undefined;
   }
 
   private extractUsage(data: Record<string, unknown>): TokenUsage | undefined {
@@ -834,6 +865,67 @@ class LangGraphSession implements HarnessSession {
 }
 
 const GRAPH_INTERRUPT_NAMES = new Set(['GraphInterrupt', 'NodeInterrupt']);
+
+/** deepagents' built-in file tools (`execute` is the shell tool). */
+const DEEPAGENTS_FILE_TOOL_NAMES: readonly string[] = [
+  'ls',
+  'read_file',
+  'write_file',
+  'edit_file',
+  'glob',
+  'grep',
+];
+
+/**
+ * Enforce nativeToolPolicy on deepagents' built-in tools (file tools,
+ * `execute`, `task`, `write_todos`, ...). Stablehand tools are never affected.
+ *
+ * - `wrapModelCall` removes denied native tools from the request, so the
+ *   model is never offered them. It runs inside deepagents' own middleware,
+ *   so it sees every tool they register.
+ * - `wrapToolCall` refuses a call to a denied native tool without running it
+ *   and returns the refusal to the model as an error result.
+ *
+ * langchain 1.x agent middleware has no `beforeToolCall` hook; these two
+ * hooks are the supported way to change the tool list and to intercept calls.
+ */
+function createNativeToolPolicyMiddleware(
+  nativeToolPolicy: NonNullable<HarnessSessionConfig['nativeToolPolicy']>,
+  stablehandToolNames: ReadonlySet<string>,
+): Record<string, unknown> {
+  const isAllowed = (toolName: string): boolean =>
+    stablehandToolNames.has(toolName) || isNativeToolAllowed(nativeToolPolicy, toolName);
+
+  return {
+    name: 'stablehand-native-tool-policy',
+    wrapModelCall: async (
+      request: { tools?: unknown[]; [key: string]: unknown },
+      handler: (req: { tools?: unknown[]; [key: string]: unknown }) => Promise<unknown>,
+    ) => handler({
+      ...request,
+      tools: request.tools?.filter((tool) => {
+        const toolName = (tool as { name?: unknown } | null)?.name;
+        return typeof toolName !== 'string' || isAllowed(toolName);
+      }),
+    }),
+    wrapToolCall: async (
+      request: { toolCall: { id?: string; name: string }; [k: string]: unknown },
+      handler: (req: unknown) => Promise<unknown>,
+    ) => {
+      const toolName = request.toolCall.name;
+      if (isAllowed(toolName)) {
+        return handler(request);
+      }
+      console.warn(`[langgraph] nativeToolPolicy '${nativeToolPolicy.policy}' denied native tool '${toolName}'`);
+      return new ToolMessage({
+        content: `Tool "${toolName}" is not available to this agent (denied by nativeToolPolicy '${nativeToolPolicy.policy}').`,
+        tool_call_id: request.toolCall.id ?? '',
+        name: toolName,
+        status: 'error',
+      });
+    },
+  };
+}
 
 /**
  * Collapse text-only system prompt fragments into the canonical string form.

@@ -90,6 +90,8 @@ In the LangGraph harness, subagents are defined as an array of objects in `harne
 *   `temperature`: Temperature override.
 *   `maxTokens`: Max tokens override.
 
+Subagents are started through deepagents' `task` tool. If `nativeToolPolicy` is `allow`, add `task` to its `names` to use subagents; `none` turns them off. The policy also applies inside every subagent, including deepagents' built-in `general-purpose` one.
+
 **Example Manifest:**
 
 ```yaml

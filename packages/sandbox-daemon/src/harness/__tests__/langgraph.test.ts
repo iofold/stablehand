@@ -1,6 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { SystemMessage } from '@langchain/core/messages';
+import { BaseChatModel, type BindToolsInput } from '@langchain/core/language_models/chat_models';
+import { AIMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
+import type { ChatResult } from '@langchain/core/outputs';
 import type { AgentEvent, HarnessSessionConfig } from '../types.js';
 import type { Message } from '../../types.js';
 import type { ToolDefinition } from '../../tool/types.js';
@@ -51,12 +57,25 @@ vi.mock('langsmith', () => ({
 }));
 
 const mockLocalShellBackendOptions: Array<Record<string, unknown>> = [];
+const mockFilesystemBackendOptions: Array<Record<string, unknown>> = [];
 
 class MockLocalShellBackend {
   constructor(options: Record<string, unknown>) {
     mockLocalShellBackendOptions.push(options);
   }
 }
+
+class MockFilesystemBackend {
+  constructor(options: Record<string, unknown>) {
+    mockFilesystemBackendOptions.push(options);
+  }
+}
+
+const MOCK_GENERAL_PURPOSE_SUBAGENT = {
+  name: 'general-purpose',
+  description: 'General-purpose agent',
+  systemPrompt: 'You are a general-purpose agent.',
+};
 
 function makeMessage(role: Message['role'], content: string, extra: Partial<Message> = {}): Message {
   return {
@@ -136,6 +155,48 @@ function createMockChatModel() {
   };
 }
 
+const POLICY_PROBE_TOOLS = [
+  'ls',
+  'read_file',
+  'write_file',
+  'edit_file',
+  'glob',
+  'grep',
+  'execute',
+  'task',
+  'write_todos',
+  'stablehand_search',
+];
+
+type PolicyMiddleware = {
+  name?: string;
+  wrapModelCall: (
+    request: { tools?: unknown[] },
+    handler: (request: { tools?: unknown[] }) => Promise<unknown>,
+  ) => Promise<unknown>;
+  wrapToolCall: (
+    request: { toolCall: { id?: string; name: string } },
+    handler: (request: unknown) => Promise<unknown>,
+  ) => Promise<unknown>;
+};
+
+function findPolicyMiddleware(middleware: Array<{ name?: string }> | undefined): PolicyMiddleware {
+  const found = middleware?.find((candidate) => candidate.name === 'stablehand-native-tool-policy');
+  if (!found) {
+    throw new Error('Expected the stablehand-native-tool-policy middleware');
+  }
+  return found as PolicyMiddleware;
+}
+
+function makeSearchTool(): ToolDefinition {
+  return {
+    name: 'stablehand_search',
+    description: 'Search stablehand data',
+    input: z.object({ query: z.string() }),
+    handler: async () => 'result',
+  };
+}
+
 async function openRestoredTestSession(
   restore: { stateVersion: string; messages: Message[]; payload: Record<string, unknown> },
   config: HarnessSessionConfig = makeConfig(),
@@ -149,6 +210,8 @@ async function openRestoredTestSession(
   Reflect.set(session, 'loadDeepAgentsModule', async () => ({
     createDeepAgent: mockCreateDeepAgent,
     LocalShellBackend: MockLocalShellBackend,
+    FilesystemBackend: MockFilesystemBackend,
+    GENERAL_PURPOSE_SUBAGENT: MOCK_GENERAL_PURPOSE_SUBAGENT,
   }));
 
   return session;
@@ -158,6 +221,7 @@ describe('LangGraphHarness message history', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockLocalShellBackendOptions.length = 0;
+    mockFilesystemBackendOptions.length = 0;
     mockLangSmith.FakeRunTree.runs = [];
     delete process.env.LANGSMITH_TRACING;
     delete process.env.LANGSMITH_PROJECT;
@@ -170,63 +234,75 @@ describe('LangGraphHarness message history', () => {
     {
       label: 'allow',
       nativeToolPolicy: { policy: 'allow', names: ['read_file'] } as NativeToolPolicy,
-      readFileBlocked: false,
-      executeBlocked: true,
+      visibleTools: ['read_file', 'stablehand_search'],
     },
     {
       label: 'deny',
       nativeToolPolicy: { policy: 'deny', names: ['execute'] } as NativeToolPolicy,
-      readFileBlocked: false,
-      executeBlocked: true,
+      visibleTools: POLICY_PROBE_TOOLS.filter((name) => name !== 'execute'),
     },
     {
       label: 'none',
       nativeToolPolicy: { policy: 'none' } as NativeToolPolicy,
-      readFileBlocked: true,
-      executeBlocked: true,
+      visibleTools: ['stablehand_search'],
     },
   ])('enforces the $label native-tool policy without blocking stablehand tools', async ({
     nativeToolPolicy,
-    readFileBlocked,
-    executeBlocked,
+    visibleTools,
   }) => {
     mockStreamEvents.mockImplementation(() => langGraphStream([{
       event: 'on_chat_model_stream',
       data: { chunk: { content: 'Done.' } },
     }]));
-    const customTool: ToolDefinition = {
-      name: 'stablehand_search',
-      description: 'Search stablehand data',
-      input: z.object({ query: z.string() }),
-      handler: async () => 'result',
-    };
     const messages = [makeMessage('user', 'Use tools')];
     const session = await openRestoredTestSession({
       stateVersion: '1',
       messages,
       payload: { transcript: messages },
-    }, makeConfig({ nativeToolPolicy, tools: [customTool] }));
+    }, makeConfig({ nativeToolPolicy, tools: [makeSearchTool()] }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     try {
       await collectEvents(session.deliverTurn({ messages, turnId: 'turn-policy' }, {}));
       const params = mockCreateDeepAgent.mock.calls[0]?.[0] as {
-        middleware?: Array<{
-          name?: string;
-          beforeToolCall?: (call: { name: string }) => { blocked: boolean };
-        }>;
+        middleware?: PolicyMiddleware[];
       } | undefined;
-      const middleware = params?.middleware?.find((candidate) =>
-        candidate.name === 'stablehand-native-tool-policy',
-      );
+      const middleware = findPolicyMiddleware(params?.middleware);
+      // Runs before every other Stablehand middleware.
+      expect(params?.middleware?.[0]).toBe(middleware);
 
-      expect(middleware?.beforeToolCall?.({ name: 'read_file' })).toEqual(expect.objectContaining({
-        blocked: readFileBlocked,
-      }));
-      expect(middleware?.beforeToolCall?.({ name: 'execute' })).toEqual(expect.objectContaining({
-        blocked: executeBlocked,
-      }));
-      expect(middleware?.beforeToolCall?.({ name: 'stablehand_search' })).toEqual({ blocked: false });
+      // The model is only offered allowed native tools plus Stablehand tools.
+      const modelHandler = vi.fn(async (request: { tools?: unknown[] }) => request);
+      await middleware.wrapModelCall({
+        tools: [...POLICY_PROBE_TOOLS.map((name) => ({ name })), { type: 'web_search_preview' }],
+      }, modelHandler);
+      const offered = modelHandler.mock.calls[0]?.[0].tools ?? [];
+      expect(offered.map((tool) => (tool as { name?: string }).name ?? 'unnamed')).toEqual([
+        ...visibleTools,
+        'unnamed',
+      ]);
+
+      // A call to a denied native tool never runs and comes back as an error.
+      for (const toolName of POLICY_PROBE_TOOLS) {
+        const toolHandler = vi.fn(async () => 'ran');
+        const result = await middleware.wrapToolCall(
+          { toolCall: { id: `call-${toolName}`, name: toolName } },
+          toolHandler,
+        );
+        if (visibleTools.includes(toolName)) {
+          expect(toolHandler, toolName).toHaveBeenCalledOnce();
+          expect(result).toBe('ran');
+        } else {
+          expect(toolHandler, toolName).not.toHaveBeenCalled();
+          expect(ToolMessage.isInstance(result), toolName).toBe(true);
+          const message = result as ToolMessage;
+          expect(message.status).toBe('error');
+          expect(message.tool_call_id).toBe(`call-${toolName}`);
+          expect(message.content).toContain(`denied by nativeToolPolicy '${nativeToolPolicy.policy}'`);
+        }
+      }
     } finally {
+      warn.mockRestore();
       await session.close();
     }
   });
@@ -250,12 +326,129 @@ describe('LangGraphHarness message history', () => {
       await collectEvents(session.deliverTurn({ messages, turnId: 'turn-policy-all' }, {}));
       const params = mockCreateDeepAgent.mock.calls[0]?.[0] as {
         middleware?: Array<{ name?: string }>;
+        subagents?: unknown;
       } | undefined;
       expect(params?.middleware).not.toEqual(expect.arrayContaining([
         expect.objectContaining({ name: 'stablehand-native-tool-policy' }),
       ]));
+      // deepagents keeps building its own general-purpose subagent.
+      expect(params?.subagents).toBeUndefined();
     } finally {
       await session.close();
+    }
+  });
+
+  it.each([
+    { label: 'no', nativeToolPolicy: undefined, backend: 'shell' },
+    { label: 'the all', nativeToolPolicy: { policy: 'all' } as NativeToolPolicy, backend: 'shell' },
+    {
+      label: 'an allow-with-execute',
+      nativeToolPolicy: { policy: 'allow', names: ['read_file', 'execute'] } as NativeToolPolicy,
+      backend: 'shell',
+    },
+    {
+      label: 'a deny-execute',
+      nativeToolPolicy: { policy: 'deny', names: ['execute'] } as NativeToolPolicy,
+      backend: 'filesystem',
+    },
+    {
+      label: 'a file-tools-only allow',
+      nativeToolPolicy: { policy: 'allow', names: ['read_file', 'grep'] } as NativeToolPolicy,
+      backend: 'filesystem',
+    },
+    {
+      label: 'an allow-without-file-or-shell',
+      nativeToolPolicy: { policy: 'allow', names: ['write_todos'] } as NativeToolPolicy,
+      backend: 'none',
+    },
+    { label: 'the none', nativeToolPolicy: { policy: 'none' } as NativeToolPolicy, backend: 'none' },
+  ])('gives $label policy a $backend backend', async ({ nativeToolPolicy, backend }) => {
+    mockStreamEvents.mockImplementation(() => langGraphStream([]));
+    const messages = [makeMessage('user', 'Hello')];
+    const session = await openRestoredTestSession({
+      stateVersion: '1',
+      messages,
+      payload: { transcript: messages },
+    }, makeConfig({ nativeToolPolicy }));
+
+    try {
+      await collectEvents(session.deliverTurn({ messages, turnId: 'turn-backend' }, {}));
+      const params = mockCreateDeepAgent.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+      if (backend === 'shell') {
+        expect(params?.backend).toBeInstanceOf(MockLocalShellBackend);
+        expect(mockFilesystemBackendOptions).toEqual([]);
+      } else if (backend === 'filesystem') {
+        expect(params?.backend).toBeInstanceOf(MockFilesystemBackend);
+        expect(mockFilesystemBackendOptions).toEqual([{ rootDir: '/tmp/workspace' }]);
+        expect(mockLocalShellBackendOptions).toEqual([]);
+      } else {
+        // No backend: deepagents falls back to its in-memory StateBackend.
+        expect(params).not.toHaveProperty('backend');
+        expect(mockLocalShellBackendOptions).toEqual([]);
+        expect(mockFilesystemBackendOptions).toEqual([]);
+      }
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('applies the native-tool policy to configured subagents and the general-purpose subagent', async () => {
+    mockStreamEvents.mockImplementation(() => langGraphStream([]));
+    const messages = [makeMessage('user', 'Delegate')];
+    const session = await openRestoredTestSession({
+      stateVersion: '1',
+      messages,
+      payload: { transcript: messages },
+    }, makeConfig({
+      nativeToolPolicy: { policy: 'deny', names: ['write_file'] },
+      tools: [makeSearchTool()],
+      harnessConfigJson: JSON.stringify({
+        model: 'gpt-5.4-mini',
+        provider: 'openai',
+        apiKeyRef: 'openai',
+        subagents: [{ name: 'researcher', description: 'Researches', systemPrompt: 'Research.' }],
+      }),
+    }));
+
+    try {
+      await collectEvents(session.deliverTurn({ messages, turnId: 'turn-subagents' }, {}));
+      const params = mockCreateDeepAgent.mock.calls[0]?.[0] as {
+        middleware?: PolicyMiddleware[];
+        subagents?: Array<{ name: string; tools?: Array<{ name: string }>; middleware?: unknown[] }>;
+      } | undefined;
+      const policyMiddleware = findPolicyMiddleware(params?.middleware);
+
+      expect(params?.subagents?.map((subagent) => subagent.name)).toEqual(['general-purpose', 'researcher']);
+      const generalPurpose = params?.subagents?.[0];
+      expect(generalPurpose).toEqual(expect.objectContaining(MOCK_GENERAL_PURPOSE_SUBAGENT));
+      expect(generalPurpose?.tools?.map((tool) => tool.name)).toEqual(['stablehand_search']);
+      expect(generalPurpose?.middleware).toEqual([policyMiddleware]);
+      expect(params?.subagents?.[1]?.middleware?.[0]).toBe(policyMiddleware);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('warns when configured subagents are unreachable because task is not allowed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const session = await openRestoredTestSession({
+        stateVersion: '1',
+        messages: [],
+        payload: { transcript: [] },
+      }, makeConfig({
+        nativeToolPolicy: { policy: 'allow', names: ['read_file'] },
+        harnessConfigJson: JSON.stringify({
+          model: 'gpt-5.4-mini',
+          provider: 'openai',
+          apiKeyRef: 'openai',
+          subagents: [{ name: 'researcher', description: 'Researches', systemPrompt: 'Research.' }],
+        }),
+      }));
+      await session.close();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Add "task" to nativeToolPolicy.names'));
+    } finally {
+      warn.mockRestore();
     }
   });
 
@@ -728,5 +921,167 @@ describe('LangGraphHarness message history', () => {
     // AbortError should be swallowed — no error event, no hang
     expect(events.every((e) => (e as Record<string, unknown>).type !== 'error')).toBe(true);
     assertAbortContract(events as AgentEvent[]);
+  });
+});
+
+/**
+ * Plays back a fixed list of assistant messages and records the tools bound
+ * for each model call, so a test can see exactly what the model was offered.
+ * Shared by the parent agent and its subagents (deepagents gives subagents
+ * the parent's model instance).
+ */
+class ScriptedChatModel extends BaseChatModel {
+  readonly offeredTools: string[][] = [];
+  readonly receivedMessages: BaseMessage[][] = [];
+  private boundToolNames: string[] = [];
+  private step = 0;
+
+  constructor(private readonly script: Array<() => AIMessage>) {
+    super({});
+  }
+
+  _llmType(): string {
+    return 'scripted';
+  }
+
+  override bindTools(tools: BindToolsInput[]): this {
+    this.boundToolNames = tools.map((tool) => {
+      const name = (tool as { name?: unknown }).name;
+      return typeof name === 'string' ? name : 'unnamed';
+    });
+    return this;
+  }
+
+  async _generate(messages: BaseMessage[]): Promise<ChatResult> {
+    this.offeredTools.push(this.boundToolNames);
+    this.receivedMessages.push(messages);
+    const next = this.script[Math.min(this.step, this.script.length - 1)];
+    this.step += 1;
+    const message = next();
+    return {
+      generations: [{ text: typeof message.content === 'string' ? message.content : '', message }],
+    };
+  }
+}
+
+function toolCallMessage(id: string, name: string, args: Record<string, unknown>): () => AIMessage {
+  return () => new AIMessage({ content: '', tool_calls: [{ id, name, args, type: 'tool_call' }] });
+}
+
+function textMessage(text: string): () => AIMessage {
+  return () => new AIMessage({ content: text });
+}
+
+function toolResults(model: ScriptedChatModel): ToolMessage[] {
+  return model.receivedMessages.flat().filter((message): message is ToolMessage => ToolMessage.isInstance(message));
+}
+
+describe('LangGraphHarness native-tool policy against real deepagents', () => {
+  let workspaceDir: string;
+
+  beforeEach(async () => {
+    workspaceDir = await mkdtemp(path.join(tmpdir(), 'langgraph-policy-'));
+  });
+
+  afterEach(async () => {
+    await rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  async function runTurn(nativeToolPolicy: NativeToolPolicy, model: ScriptedChatModel): Promise<AgentEvent[]> {
+    vi.resetModules();
+    const { LangGraphHarness } = await import('../langgraph.js');
+    const harness = new LangGraphHarness();
+    const session = await harness.openSession(makeConfig({
+      nativeToolPolicy,
+      tools: [makeSearchTool()],
+      workspaceDir,
+    }));
+    // Only the chat model is faked; deepagents, its middleware, backends and
+    // the general-purpose subagent are the real installed packages.
+    Reflect.set(session, 'buildModelFromConfig', async () => model);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const messages = [makeMessage('user', 'Go')];
+      return await collectEvents(session.deliverTurn({ messages, turnId: 'turn-real-policy' }, {})) as AgentEvent[];
+    } finally {
+      warn.mockRestore();
+      await session.close();
+    }
+  }
+
+  it('never offers a denied file tool and refuses a call to it without writing', async () => {
+    const target = path.join(workspaceDir, 'denied.txt');
+    const model = new ScriptedChatModel([
+      toolCallMessage('call-write', 'write_file', { file_path: target, content: 'should not exist' }),
+      textMessage('done'),
+    ]);
+
+    const events = await runTurn({ policy: 'deny', names: ['write_file'] }, model);
+
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(model.offeredTools[0]).toEqual(expect.arrayContaining(['read_file', 'edit_file', 'stablehand_search']));
+    expect(model.offeredTools[0]).not.toContain('write_file');
+    expect(existsSync(target)).toBe(false);
+    expect(toolResults(model)).toEqual([expect.objectContaining({
+      tool_call_id: 'call-write',
+      status: 'error',
+      content: expect.stringContaining("denied by nativeToolPolicy 'deny'"),
+    })]);
+  });
+
+  it('gives the none policy no native tools and refuses a shell call without running it', async () => {
+    const marker = path.join(workspaceDir, 'marker');
+    const model = new ScriptedChatModel([
+      toolCallMessage('call-exec', 'execute', { command: `touch ${marker}` }),
+      textMessage('done'),
+    ]);
+
+    await runTurn({ policy: 'none' }, model);
+
+    expect(model.offeredTools[0]).toEqual(['stablehand_search']);
+    expect(existsSync(marker)).toBe(false);
+    expect(toolResults(model)).toEqual([expect.objectContaining({
+      tool_call_id: 'call-exec',
+      status: 'error',
+      content: expect.stringContaining("denied by nativeToolPolicy 'none'"),
+    })]);
+  });
+
+  it('keeps execute out of reach when it is denied, including through the general-purpose subagent', async () => {
+    const marker = path.join(workspaceDir, 'marker');
+    const model = new ScriptedChatModel([
+      // Parent delegates to deepagents' general-purpose subagent...
+      toolCallMessage('call-task', 'task', { description: 'Run the command', subagent_type: 'general-purpose' }),
+      // ...which tries the denied shell tool and a denied file tool.
+      () => new AIMessage({
+        content: '',
+        tool_calls: [
+          { id: 'call-sub-exec', name: 'execute', args: { command: `touch ${marker}` }, type: 'tool_call' },
+          {
+            id: 'call-sub-write',
+            name: 'write_file',
+            args: { file_path: path.join(workspaceDir, 'sub.txt'), content: 'x' },
+            type: 'tool_call',
+          },
+        ],
+      }),
+      textMessage('subagent done'),
+      textMessage('done'),
+    ]);
+
+    await runTurn({ policy: 'deny', names: ['execute', 'write_file'] }, model);
+
+    // Parent, then the subagent's two model calls, then the parent again.
+    expect(model.offeredTools).toHaveLength(4);
+    for (const offered of model.offeredTools) {
+      expect(offered).not.toContain('execute');
+      expect(offered).not.toContain('write_file');
+    }
+    expect(model.offeredTools[0]).toContain('task');
+    expect(model.offeredTools[1]).toEqual(expect.arrayContaining(['read_file', 'stablehand_search']));
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(path.join(workspaceDir, 'sub.txt'))).toBe(false);
+    const refused = toolResults(model).filter((message) => message.status === 'error');
+    expect(refused.map((message) => message.tool_call_id).sort()).toEqual(['call-sub-exec', 'call-sub-write']);
   });
 });

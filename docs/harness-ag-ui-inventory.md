@@ -64,7 +64,7 @@ harnessRegistry.register(new PIAgentHarness());
 
 ### Key Features Claimed In This Snapshot
 - **Backend**: `LocalShellBackend` (filesystem + shell execution)
-- **Native Tool Policy**: `nativeToolPolicy` applies the common `all`/`allow`/`deny`/`none` contract through middleware
+- **Native Tool Policy**: `nativeToolPolicy` applies the common `all`/`allow`/`deny`/`none` contract through `wrapModelCall`/`wrapToolCall` middleware on the agent and every subagent (including deepagents' general-purpose subagent); denied tools are never offered and calls to them are refused. The backend follows the policy: `LocalShellBackend` only when `execute` is allowed, `FilesystemBackend` when only file tools are, and deepagents' in-memory `StateBackend` otherwise. Name `task` to use subagents
 - **Knowledge Context**: Stub (no real knowledge lookup)
 - **Transcript**: Maintains full history, passes to SDK each turn
 - **Skills**: Historical claim; current Stablehand does not auto-seed `.stablehand/skills`
