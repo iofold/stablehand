@@ -103,5 +103,37 @@ describe('AgentSecretsTab', () => {
     expect(container.textContent).toContain('Secret storage is unavailable');
   });
 
-  void deleteSecretMock;
+  it('saves a tools-only secret and deletes it from the tools scope', async () => {
+    setSecretMock.mockResolvedValue({ key: 'APIFY_TOKEN' });
+    fetchSecretKeysMock.mockResolvedValue({ keys: ['OPENAI_API_KEY'], toolKeys: ['APIFY_TOKEN'] });
+    deleteSecretMock.mockResolvedValue(undefined);
+    act(() => root.render(<AgentSecretsTab agentId="agent-1" />));
+    await flushEffects();
+
+    expect(container.textContent).toContain('tools only');
+    const add = [...container.querySelectorAll('button')]
+      .find((button) => button.textContent?.includes('Add Secret')) as HTMLButtonElement;
+    act(() => add.click());
+    act(() => {
+      changeValue(container.querySelector('[data-testid="secret-key-input"]') as HTMLInputElement, 'APIFY_TOKEN');
+      changeValue(container.querySelector('[data-testid="secret-value-input"]') as HTMLTextAreaElement, 'apify');
+      (container.querySelector('[data-testid="secret-scope-tools"]') as HTMLInputElement).click();
+    });
+    await act(async () => {
+      (container.querySelector('[data-testid="save-secret-button"]') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(setSecretMock).toHaveBeenCalledWith('agent-1', 'APIFY_TOKEN', 'apify', 'tools');
+
+    const toolRow = [...container.querySelectorAll('[data-testid="secret-row"]')]
+      .find((row) => row.textContent?.includes('tools only')) as HTMLElement;
+    act(() => (toolRow.querySelector('button[title="Delete secret"]') as HTMLButtonElement).click());
+    await act(async () => {
+      const confirm = [...container.querySelectorAll('button')]
+        .find((button) => button.textContent === 'Confirm') as HTMLButtonElement;
+      confirm.click();
+      await Promise.resolve();
+    });
+    expect(deleteSecretMock).toHaveBeenCalledWith('agent-1', 'APIFY_TOKEN', 'tools');
+  });
 });

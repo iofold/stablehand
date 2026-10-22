@@ -3,6 +3,7 @@ import { DefaultToolRegistry } from '../tool/registry.js';
 import type { AgentDefinition } from '@stablehand/sandbox-daemon';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { SecretProvider } from '../secrets/types.js';
+import { readAgentToolSecrets } from '../secrets/scopes.js';
 import { createGuardedFetch } from '../util/egress.js';
 
 /**
@@ -130,17 +131,9 @@ async function resolveProviderSecrets(
   agentId: string,
   secretProvider?: SecretProvider,
 ): Promise<Record<string, string>> {
-  if (!secretProvider) return {};
-
-  const secrets: Record<string, string> = {};
-  const keys = await secretProvider.list(agentId);
-  for (const key of keys) {
-    const value = await secretProvider.get(agentId, key);
-    if (value !== null) {
-      secrets[key] = value;
-    }
-  }
-  return secrets;
+  // Tools-scope secrets win, so an HTTP tool key can live outside the
+  // sandbox env (see secrets/scopes.ts).
+  return readAgentToolSecrets(secretProvider, agentId);
 }
 
 export async function registerAgentHttpTools(

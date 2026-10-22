@@ -38,6 +38,7 @@ import { PostgresSecretProvider } from '../secrets/postgres-provider.js';
 import { deriveKey } from '../secrets/crypto.js';
 import { resolveSecretMasterKeyPassphrase } from '../secrets/master-key.js';
 import type { SecretProvider } from '../secrets/types.js';
+import { readSandboxScopeSecrets } from '../secrets/scopes.js';
 import { ContainerManager, type SandboxContainerManager } from '../sandbox/container-manager.js';
 import { KubernetesContainerManager } from '../sandbox/kubernetes-container-manager.js';
 import { WorkspaceDiffService } from '../sandbox/workspace-diff.js';
@@ -530,13 +531,9 @@ export async function createContainer(
         .map((key) => [key, process.env[key]!]),
     );
 
-    const keys = await secretProvider.list(agentId);
-    const entries = await Promise.all(
-      keys.map(async (key): Promise<[string, string | null]> => [key, await secretProvider.get(agentId, key)]),
-    );
-    const agentSecrets = Object.fromEntries(
-      entries.filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-    );
+    // Sandbox scope only: tools-scope secrets (MCP tokens, HTTP tool keys)
+    // stay in the orchestrator.
+    const agentSecrets = await readSandboxScopeSecrets(secretProvider, agentId);
 
     const merged = mergeSandboxSecrets({
       ...envSecrets,

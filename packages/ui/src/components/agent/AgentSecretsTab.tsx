@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { KeyRound, Trash2, AlertTriangle, X } from 'lucide-react';
-import { fetchSecretKeys, setSecret, deleteSecret } from '@/lib/api';
+import { fetchSecretKeys, setSecret, deleteSecret, type SecretScope } from '@/lib/api';
 
 export interface AgentSecretsTabProps {
   agentId: string;
@@ -8,6 +8,8 @@ export interface AgentSecretsTabProps {
 
 export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
   const [keys, setKeys] = useState<string[]>([]);
+  const [toolKeys, setToolKeys] = useState<string[]>([]);
+  const [newScope, setNewScope] = useState<SecretScope>('sandbox');
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [newKey, setNewKey] = useState('');
@@ -22,9 +24,11 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
       setError(null);
       const data = await fetchSecretKeys(agentId);
       setKeys(data.keys ?? []);
+      setToolKeys(data.toolKeys ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setKeys([]);
+      setToolKeys([]);
     } finally {
       setLoading(false);
     }
@@ -39,10 +43,15 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
     setSaving(true);
     setError(null);
     try {
-      await setSecret(agentId, newKey, newValue);
+      if (newScope === 'tools') {
+        await setSecret(agentId, newKey, newValue, 'tools');
+      } else {
+        await setSecret(agentId, newKey, newValue);
+      }
       await loadKeys();
       setNewKey('');
       setNewValue('');
+      setNewScope('sandbox');
       setShowForm(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -51,11 +60,22 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
     }
   };
 
-  const handleDelete = async (key: string) => {
+  const rows: Array<{ id: string; key: string; scope: SecretScope }> = [
+    ...keys.map((key) => ({ id: `sandbox:${key}`, key, scope: 'sandbox' as const })),
+    ...toolKeys.map((key) => ({ id: `tools:${key}`, key, scope: 'tools' as const })),
+  ];
+
+  const handleDelete = async (rowId: string) => {
+    const row = rows.find((candidate) => candidate.id === rowId);
+    if (!row) return;
     setDeleting(true);
     setError(null);
     try {
-      await deleteSecret(agentId, key);
+      if (row.scope === 'tools') {
+        await deleteSecret(agentId, row.key, 'tools');
+      } else {
+        await deleteSecret(agentId, row.key);
+      }
       await loadKeys();
       setConfirmDelete(null);
     } catch (err) {
@@ -95,7 +115,7 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
         <div className="flex items-center gap-2">
           <KeyRound className="h-4 w-4 text-accent-400" />
           <h3 className="text-sm font-semibold text-surface-200">
-            Secrets ({keys.length})
+            Secrets ({rows.length})
           </h3>
         </div>
         <button
@@ -127,6 +147,38 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
             className="w-full resize-y rounded-lg border border-surface-600/50 bg-surface-900/50 px-3 py-2 font-mono text-sm text-surface-200 placeholder:text-surface-400 focus:outline-none focus:border-accent-500/50"
             data-testid="secret-value-input"
           />
+          <fieldset className="space-y-1.5">
+            <legend className="text-xs text-surface-400">Who reads it</legend>
+            <div className="flex flex-wrap gap-2">
+              {([
+                ['sandbox', 'The agent, as an env var'],
+                ['tools', 'Tools only (HTTP and MCP)'],
+              ] as const).map(([scope, label]) => (
+                <label
+                  key={scope}
+                  className={`cursor-pointer rounded-md border px-2.5 py-1 text-xs ${newScope === scope
+                    ? 'border-accent-500/50 bg-accent-500/10 text-accent-300'
+                    : 'border-surface-600/50 text-surface-300'}`}
+                >
+                  <input
+                    type="radio"
+                    name="secret-scope"
+                    value={scope}
+                    checked={newScope === scope}
+                    onChange={() => setNewScope(scope)}
+                    className="sr-only"
+                    data-testid={`secret-scope-${scope}`}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <p className="text-xs text-surface-500">
+              {newScope === 'tools'
+                ? 'Stablehand sends it to the HTTP tool or MCP server for the agent. It never enters the sandbox.'
+                : 'The agent can read it inside its sandbox. Use this for model keys.'}
+            </p>
+          </fieldset>
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -149,7 +201,7 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
       )}
 
       {/* Secret keys list */}
-      {keys.length === 0 ? (
+      {rows.length === 0 ? (
         <div className="text-center py-12">
           <KeyRound className="h-8 w-8 text-surface-500 mx-auto mb-3" />
           <p className="text-surface-400 font-medium">No secrets configured</p>
@@ -159,20 +211,20 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
         </div>
       ) : (
         <div className="space-y-2">
-          {keys.map((key) => (
+          {rows.map(({ id: rowId, key, scope }) => (
             <div
-              key={key}
+              key={rowId}
               data-testid="secret-row"
               className="flex items-center justify-between border border-surface-700 rounded-lg bg-surface-800 px-4 py-3 transition-colors hover:border-surface-600"
             >
-              {confirmDelete === key ? (
+              {confirmDelete === rowId ? (
                 <div className="flex items-center gap-3 w-full">
                   <p className="text-sm text-surface-300 flex-1">
                     Delete <span className="font-mono font-medium text-surface-200">{key}</span>?
                   </p>
                   <button
                     type="button"
-                    onClick={() => handleDelete(key)}
+                    onClick={() => handleDelete(rowId)}
                     disabled={deleting}
                     className="rounded-lg bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
@@ -192,10 +244,18 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
                     <KeyRound className="h-3.5 w-3.5 text-surface-400 shrink-0" />
                     <span className="font-mono text-sm font-medium text-surface-200 truncate">{key}</span>
                     <span className="text-xs text-surface-500 font-mono">********</span>
+                    {scope === 'tools' && (
+                      <span
+                        className="shrink-0 rounded border border-violet-500/20 bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-300"
+                        title="Read by HTTP tools and MCP servers only. Never enters the sandbox."
+                      >
+                        tools only
+                      </span>
+                    )}
                   </div>
                   <button
                     type="button"
-                    onClick={() => setConfirmDelete(key)}
+                    onClick={() => setConfirmDelete(rowId)}
                     title="Delete secret"
                     className="p-1 text-surface-400 hover:text-red-400 transition-colors shrink-0"
                   >

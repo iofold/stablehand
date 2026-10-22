@@ -1201,6 +1201,41 @@ describe('Agent CRUD & related endpoints', () => {
       expect(valid.statusCode, valid.body).toBe(201);
       expect(valid.json()).toEqual({ key: 'PROVIDER_TOKEN' });
     });
+
+    it('stores tools-scope secrets apart from sandbox secrets', async () => {
+      const created = await createAgent({ name: 'tools-scope-secret-agent' });
+      expect(created.statusCode, created.body).toBe(201);
+      const agentId = created.json().id as string;
+
+      const sandbox = await app.inject({
+        method: 'POST',
+        url: `/api/agents/${agentId}/secrets`,
+        payload: { key: 'OPENAI_API_KEY', value: 'sk-model' },
+      });
+      expect(sandbox.statusCode, sandbox.body).toBe(201);
+      const tools = await app.inject({
+        method: 'POST',
+        url: `/api/agents/${agentId}/secrets`,
+        payload: { key: 'APIFY_TOKEN', value: 'apify-value', scope: 'tools' },
+      });
+      expect(tools.statusCode, tools.body).toBe(201);
+
+      const listed = await app.inject({ method: 'GET', url: `/api/agents/${agentId}/secrets` });
+      expect(listed.json()).toEqual({ keys: ['OPENAI_API_KEY'], toolKeys: ['APIFY_TOKEN'] });
+
+      const badScope = await app.inject({
+        method: 'DELETE',
+        url: `/api/agents/${agentId}/secrets/APIFY_TOKEN?scope=elsewhere`,
+      });
+      expect(badScope.statusCode).toBe(400);
+      const removed = await app.inject({
+        method: 'DELETE',
+        url: `/api/agents/${agentId}/secrets/APIFY_TOKEN?scope=tools`,
+      });
+      expect(removed.statusCode).toBe(204);
+      const after = await app.inject({ method: 'GET', url: `/api/agents/${agentId}/secrets` });
+      expect(after.json()).toEqual({ keys: ['OPENAI_API_KEY'], toolKeys: [] });
+    });
   });
 
   describe('POST /api/ag-ui/:id/run', () => {

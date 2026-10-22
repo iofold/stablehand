@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { PostgresSecretProvider } from '../../packages/stablehand/src/secrets/postgres-provider.js';
 import { deriveKey } from '../../packages/stablehand/src/secrets/crypto.js';
+import {
+  TOOL_SECRET_SCOPE_ID,
+  readAgentToolSecrets,
+  readSandboxScopeSecrets,
+  readToolSecret,
+} from '../../packages/stablehand/src/secrets/scopes.js';
 import { createTestDb, type TestDb } from '../utils/test-db.js';
 
 describe('PostgresSecretProvider', () => {
@@ -72,6 +78,37 @@ describe('PostgresSecretProvider', () => {
     await expect(provider.get('agent-1', 'DOES_NOT_EXIST')).resolves.toBeNull();
     await expect(provider.get('no-agent', 'KEY')).resolves.toBeNull();
     await expect(provider.get('agent-1', 'KEY', 'no-tool')).resolves.toBeNull();
+  });
+
+  describe('tools scope', () => {
+    it('keeps tools-scope secrets out of the sandbox env and out of the runtime revision', async () => {
+      await provider.set('agent-scope', 'OPENAI_API_KEY', 'sk-model');
+      const before = await provider.revision('agent-scope');
+
+      await provider.set('agent-scope', 'APIFY_TOKEN', 'apify-token-value', TOOL_SECRET_SCOPE_ID);
+      await provider.set('agent-scope', 'MCP_OAUTH__granola', '{"tokens":{}}', TOOL_SECRET_SCOPE_ID);
+
+      const sandbox = await readSandboxScopeSecrets(provider, 'agent-scope');
+      expect(sandbox).toEqual({ OPENAI_API_KEY: 'sk-model' });
+      expect(JSON.stringify(sandbox)).not.toContain('apify-token-value');
+      // Rotating a tool token must not restart a warm sandbox.
+      expect(await provider.revision('agent-scope')).toBe(before);
+
+      await expect(readToolSecret(provider, 'agent-scope', 'APIFY_TOKEN')).resolves.toBe('apify-token-value');
+      // Tool secrets never fall back to the sandbox scope.
+      await expect(readToolSecret(provider, 'agent-scope', 'OPENAI_API_KEY')).resolves.toBeNull();
+    });
+
+    it('overlays tools-scope secrets on the sandbox scope for HTTP tools', async () => {
+      await provider.set('agent-overlay', 'API_KEY', 'sandbox-value');
+      await provider.set('agent-overlay', 'API_KEY', 'tools-value', TOOL_SECRET_SCOPE_ID);
+      await provider.set('agent-overlay', 'ONLY_TOOLS', 'x', TOOL_SECRET_SCOPE_ID);
+
+      await expect(readAgentToolSecrets(provider, 'agent-overlay')).resolves.toEqual({
+        API_KEY: 'tools-value',
+        ONLY_TOOLS: 'x',
+      });
+    });
   });
 
   it('warns and returns null when the master key cannot decrypt a stored secret', async () => {

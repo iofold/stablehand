@@ -450,22 +450,31 @@ export async function updateAgent(id: string, data: AgentPatchInput): Promise<Ag
 
 // ── Agent Secrets operations ──────────────────────────────────────────
 
-export async function fetchSecretKeys(agentId: string): Promise<{ keys: string[] }> {
+/** `tools` secrets are read by HTTP tools and MCP servers and never enter the sandbox. */
+export type SecretScope = 'sandbox' | 'tools';
+
+export async function fetchSecretKeys(agentId: string): Promise<{ keys: string[]; toolKeys?: string[] }> {
   const response = await apiFetch<unknown>(`${API_BASE}/agents/${agentId}/secrets`);
   return SecretListResponseSchema.parse(response);
 }
 
-export async function setSecret(agentId: string, key: string, value: string): Promise<{ key: string }> {
+export async function setSecret(
+  agentId: string,
+  key: string,
+  value: string,
+  scope?: SecretScope,
+): Promise<{ key: string }> {
   const response = await apiMutate<unknown>(
     `${API_BASE}/agents/${agentId}/secrets`,
     'POST',
-    SecretPutInputSchema.parse({ key, value }),
+    SecretPutInputSchema.parse({ key, value, ...(scope ? { scope } : {}) }),
   );
   return SecretPutResponseSchema.parse(response);
 }
 
-export async function deleteSecret(agentId: string, key: string): Promise<void> {
-  await apiFetch(`${API_BASE}/agents/${agentId}/secrets/${encodeURIComponent(key)}`, { method: 'DELETE' });
+export async function deleteSecret(agentId: string, key: string, scope?: SecretScope): Promise<void> {
+  const query = scope === 'tools' ? '?scope=tools' : '';
+  await apiFetch(`${API_BASE}/agents/${agentId}/secrets/${encodeURIComponent(key)}${query}`, { method: 'DELETE' });
 }
 
 export async function deleteAgent(id: string): Promise<void> {

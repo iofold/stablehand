@@ -277,13 +277,24 @@ export const AgentSchema = z.strictObject({
 
 export const AgentListResponseSchema = z.array(AgentSchema);
 
+/**
+ * `sandbox` secrets are injected into the agent's sandbox env. `tools`
+ * secrets are read only by the orchestrator for HTTP tools and MCP servers
+ * and never enter the sandbox.
+ */
+export const SecretScopeSchema = z.enum(['sandbox', 'tools']);
+
 export const SecretListResponseSchema = z.strictObject({
+  /** Sandbox-scope keys. */
   keys: z.array(z.string().trim().min(1)),
+  /** Tools-scope keys (never in the sandbox). */
+  toolKeys: z.array(z.string().trim().min(1)).optional(),
 });
 
 export const SecretPutInputSchema = z.strictObject({
   key: z.string().trim().min(1),
   value: z.string().min(1),
+  scope: SecretScopeSchema.optional(),
 });
 
 export const SecretPutResponseSchema = z.strictObject({

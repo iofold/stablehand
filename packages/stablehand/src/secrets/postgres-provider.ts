@@ -75,10 +75,13 @@ export class PostgresSecretProvider implements SecretProvider {
   }
 
   async revision(agentId: string): Promise<string> {
+    // Only the sandbox scope (tool_id '') reaches the runtime. Tools-scope
+    // secrets (MCP OAuth tokens, HTTP tool keys) rotate without restarting
+    // a warm sandbox.
     const rows = await this.sql`
       SELECT id, tool_id, key, updated_at::text AS updated_at
       FROM secrets
-      WHERE agent_id = ${agentId}
+      WHERE agent_id = ${agentId} AND tool_id = ''
       ORDER BY tool_id, key, id
     `;
     const metadata = rows.map((row) => ({
