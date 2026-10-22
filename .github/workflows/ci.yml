@@ -64,6 +64,15 @@ jobs:
       - name: React package tests
         run: pnpm test:react
 
+  egress-proxy:
+    name: Egress proxy policy + live checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Builds the proxy image and runs the policy, addon-hook and live mitmdump suites in it.
+      - name: Egress proxy tests
+        run: packages/egress-proxy/tests/run-in-docker.sh
+
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
