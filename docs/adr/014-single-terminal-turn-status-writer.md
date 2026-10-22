@@ -42,6 +42,8 @@ turn calls it; no other code writes a turn's terminal status directly.
 
 Startup reconciliation (`orchestrator/turn-reconciler.ts`) builds on the same
 primitive to close turns stranded by a restart, using cause-accurate error copy.
+Since ADR 024, a running turn whose sandbox is still executing it is re-adopted
+instead of closed; only turns that cannot be re-attached reach this path.
 
 ## Consequences
 
