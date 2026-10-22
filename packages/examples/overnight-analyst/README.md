@@ -17,7 +17,7 @@ Each run uploads one PNG per source and `overnight-brief.html` (`kind: brief`) t
 
 ## Costs and the spend cap
 
-The manifest has no `apiKeyRef`. With the model gateway on (the default stack), every model call goes through LiteLLM: each run is priced on its receipt, and the gateway refuses calls past $0.50, which stops the run with a `budget_reached` receipt. A run over two sources usually costs a few cents. Without the gateway the agent calls OpenAI directly with `OPENAI_API_KEY`; the run then shows as unpriced and the cap does not apply.
+The manifest has no `apiKeyRef`. With the model gateway on (the default stack), every model call goes through LiteLLM: each run is priced on its receipt, and the gateway refuses calls past $0.50, which stops the run with a `budget_reached` receipt. In our tests a run over Hacker News alone took about 35 seconds, 100k input tokens and $0.02. Without the gateway the agent calls OpenAI directly with `OPENAI_API_KEY`; the run then shows as unpriced and the cap does not apply.
 
 ## Web access
 
@@ -61,8 +61,9 @@ docker compose exec -e API_URL=http://localhost:3001 -e GALLERY_URL=http://galle
 Receipt
   status   COMPLETED
   model    gpt-5.4-mini via the model gateway
-  tokens   ... in, ... out, ... model calls
-  cost     $0.03
+  tokens   103764 in, 2168 out, 9 model calls
+  cost     $0.0217
+  time     35s running, 48s since the event
   brief    <artifact id>
   gallery  showing the brief
 ```
