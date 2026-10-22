@@ -7,6 +7,7 @@
   "description": "Flagship example: scheduled browser analyst publishing daily HTML briefs",
   "scripts": {
     "seed": "npx tsx seed.ts",
+    "run-once": "npx tsx run-once.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

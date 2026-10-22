@@ -15,7 +15,8 @@
     ]
   },
   "include": [
-    "seed.ts"
+    "seed.ts",
+    "run-once.ts"
   ],
   "exclude": [
     "node_modules",
