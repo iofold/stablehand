@@ -22,7 +22,7 @@ schedule (Thu) -> measure -> scout files the report for next Monday
 
 ## Run it
 
-You need a running Stablehand (`docker compose up -d` from the repo root), a model key the agents can read as `$secret:OPENAI_API_KEY` (or the model gateway), and an [Apify](https://apify.com) API token. The demo reads synthetic meeting notes, so you do not need a Granola account to try it.
+You need a running Stablehand from the default install (which routes model calls through the LiteLLM gateway, so each run is priced and capped) and an [Apify](https://apify.com) API token. The demo reads synthetic meeting notes, so you do not need a Granola account to try it.
 
 1. Start the synthetic notes server and let the orchestrator reach it. Add this line to `.env`, then restart the orchestrator:
 
@@ -71,7 +71,7 @@ Set `TYPEFULLY_API_KEY` and `TYPEFULLY_SOCIAL_SET_ID` (find it with `GET https:/
 
 ## What it costs
 
-Model spend: each agent has a per-run cap in its manifest (`limits.maxCostUsd`, $0.20 to $0.60), and the seed creates one budget for the campaign tag: $3 and 40 runs per rolling 7 days, a warning at 50%, new runs blocked at 100%. The per-run caps stop a run midway only when the model gateway is on; without it the budget still blocks new runs once spent.
+Model spend: each agent has a per-run cap in its manifest (`limits.maxCostUsd`, $0.20 to $0.60), and the seed creates one budget for the campaign tag: $3 and 40 runs per rolling 7 days, a warning at 50%, new runs blocked at 100%. The per-run caps stop a run midway through the model gateway, which the default install runs; without it the budget still blocks new runs once spent. A live check of the notes miner's privacy step and one LinkedIn draft on gpt-5.4-mini used about 3,600 tokens, well under one cent.
 
 Apify spend: the scout asks for at most 10 LinkedIn posts and 15 tweets per call and makes at most 6 calls; the measure agent makes at most 3. At the actors' prices (`harvestapi/linkedin-post-search` and `harvestapi/linkedin-profile-posts` at $2 per 1,000 posts, `apidojo/tweet-scraper` at $0.40 per 1,000 tweets) a week costs about $0.10. A test run of 3 LinkedIn posts and 5 tweets cost $0.008.
 

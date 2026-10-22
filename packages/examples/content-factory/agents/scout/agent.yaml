@@ -11,10 +11,12 @@ metadata:
     stage: scout
 spec:
   harness: langgraph
+  # No apiKeyRef: with the model gateway on, model calls go through it, so each
+  # run is priced and stops at limits.maxCostUsd. Without the gateway the agent
+  # calls OpenAI directly with OPENAI_API_KEY and the cap does not apply.
   harnessConfig:
     provider: openai
     model: gpt-5.4-mini
-    apiKeyRef: "$secret:OPENAI_API_KEY"
     maxTokens: 8000
     limits:
       maxCostUsd: 0.5
