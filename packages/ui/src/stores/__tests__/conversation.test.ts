@@ -1058,17 +1058,19 @@ describe('conversation store', () => {
     });
   });
   describe('approval decisions in the transcript', () => {
-    it('keeps a local decision line inside its turn and does not log it twice', () => {
-      getStore().addSystemMessage('✓ Approved', 'turn-7');
+    it('leaves approve and reject to the tool call, which records the decision', () => {
       getStore().handleSSEEvent(makeEvent('CUSTOM', {
         name: 'stablehand.interrupt.resolved',
         action: 'approve',
         turnId: 'turn-7',
       }));
 
-      const systemMessages = getStore().messages.filter((message) => message.role === 'system');
-      expect(systemMessages).toHaveLength(1);
-      expect(systemMessages[0].turnId).toBe('turn-7');
+      expect(getStore().messages).toHaveLength(0);
+    });
+
+    it('keeps a local log line inside its turn', () => {
+      getStore().addSystemMessage('Note', 'turn-7');
+      expect(getStore().messages[0].turnId).toBe('turn-7');
     });
 
     it('logs a timeout as a timeout, not a rejection', () => {

@@ -51,6 +51,25 @@ describe('ToolCallCard', () => {
     expect(container.textContent).toContain('Arguments');
   });
 
+  it('shows the decision recorded on an approval request', () => {
+    const render = (result: string | undefined, status: 'running' | 'complete') => {
+      act(() => {
+        root.render(
+          <ToolCallCard
+            toolCall={{ id: 'a1', name: 'mcp__stablehand__request-approval', args: '{"reason":"Write it"}', result, status }}
+          />,
+        );
+      });
+    };
+
+    render(undefined, 'running');
+    expect(container.querySelector('[data-testid="approval-outcome-waiting"]')).not.toBeNull();
+    render('{"approved":true,"action":"approve"}', 'complete');
+    expect(container.querySelector('[data-testid="approval-outcome-approved"]')?.textContent).toBe('Approved');
+    render('REJECTED', 'complete');
+    expect(container.querySelector('[data-testid="approval-outcome-rejected"]')).not.toBeNull();
+  });
+
   it('opens failed calls so the error is visible', () => {
     act(() => {
       root.render(

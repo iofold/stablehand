@@ -8,6 +8,7 @@ import { formatEventDuration } from '@/lib/format';
 import {
   a2uiDisplayName,
   isA2UIRenderToolName,
+  isApprovalToolName,
   isMissingToolName,
   summarizeToolArgs,
   toolDisplayName,
@@ -43,6 +44,39 @@ function toA2UIBlock(id: string, name: string, value: unknown): ApiA2UIBlock | n
     : {};
   return { id, component: record.component, props };
 }
+
+type ApprovalOutcome = 'waiting' | 'approved' | 'rejected';
+
+function parseJsonObject(text: string): Record<string, unknown> | undefined {
+  if (!text.startsWith('{')) return undefined;
+  try {
+    const value: unknown = JSON.parse(text);
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The decision recorded on an approval-request call, from its result. */
+function approvalOutcome(toolCall: ToolCallState): ApprovalOutcome | null {
+  if (!isApprovalToolName(toolCall.name)) return null;
+  if (toolCall.status === 'running' || toolCall.status === 'pending') return 'waiting';
+  const result = toolCall.result?.trim() ?? '';
+  const parsed = parseJsonObject(result);
+  if (typeof parsed?.approved === 'boolean') return parsed.approved ? 'approved' : 'rejected';
+  if (/^approved\b/i.test(result)) return 'approved';
+  if (/^rejected\b/i.test(result)) return 'rejected';
+  if (toolCall.error && /reject/i.test(toolCall.error)) return 'rejected';
+  return null;
+}
+
+const OUTCOME_STYLES: Record<ApprovalOutcome, { label: string; className: string }> = {
+  waiting: { label: 'Waiting for decision', className: 'border-amber-500/30 bg-amber-500/10 text-amber-300' },
+  approved: { label: 'Approved', className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' },
+  rejected: { label: 'Rejected', className: 'border-rose-500/30 bg-rose-500/10 text-rose-300' },
+};
 
 function DetailBlock({ label, children, tone = 'default' }: {
   label: string;
@@ -87,6 +121,7 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
   const summary = a2uiBlock ? undefined : summarizeToolArgs(parsed.value);
   const duration = formatEventDuration(toolCall.durationMs);
   const rawName = isMissingToolName(toolCall.name) ? 'Not recorded' : toolCall.name;
+  const outcome = approvalOutcome(toolCall);
 
   const dotClass = isRunning
     ? 'bg-yellow-500 animate-pulse'
@@ -115,6 +150,17 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
         >
           {label}
         </span>
+        {outcome && (
+          <span
+            data-testid={`approval-outcome-${outcome}`}
+            className={cn(
+              'flex-shrink-0 rounded-full border px-2 py-px text-[11px] font-medium',
+              OUTCOME_STYLES[outcome].className,
+            )}
+          >
+            {OUTCOME_STYLES[outcome].label}
+          </span>
+        )}
         {summary && (
           <span className="min-w-0 truncate text-surface-400">{summary}</span>
         )}

@@ -61,7 +61,7 @@ test.describe('HITL Approval Flow Visual QA @extended', () => {
     const resolvedIndicator = page.getByTestId('approval-approved');
     const resolved = await Promise.race([
       resolvedIndicator.waitFor({ timeout: 15_000 }).then(() => true),
-      page.getByText(/Approved:/i).waitFor({ timeout: 15_000 }).then(() => true),
+      page.getByTestId('approval-outcome-approved').waitFor({ timeout: 15_000 }).then(() => true),
     ]).catch(() => false);
     expect(resolved).toBe(true);
 

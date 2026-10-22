@@ -883,14 +883,10 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
           break;
         }
         if (event.name === 'stablehand.interrupt.resolved') {
+          // Approve/reject show on the tool call itself (its result records the
+          // decision); a timeout has no such record, so log it.
           const action = (event.action as string) || 'resolved';
-          const label = action === 'approve'
-            ? '✓ Approved'
-            : action === 'reject'
-              ? '✗ Rejected'
-              : action === 'timeout'
-                ? 'Approval request timed out'
-                : null;
+          const label = action === 'timeout' ? 'Approval request timed out' : null;
           const resolvedTurnId = typeof event.turnId === 'string' && event.turnId.length > 0
             ? event.turnId
             : undefined;

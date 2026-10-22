@@ -61,12 +61,6 @@ function describeInterrupt(toolName: string, args: Record<string, unknown>): {
   };
 }
 
-/** The approval tool needs no name in the log line; other gated tools do. */
-function decisionSuffix(toolName: string | undefined): string {
-  if (!toolName || isApprovalToolName(toolName)) return '';
-  return `: ${toolDisplayName(toolName)}`;
-}
-
 function humanizeError(raw: string): { summary: string; details: string } {
   if (raw.includes('ConnectError') || raw.includes('stream closed')) {
     return { summary: 'Connection to agent was interrupted', details: raw };
@@ -374,10 +368,6 @@ export function SessionPage() {
     if (!id || !interrupt?.interruptId) return;
     setError(null);
     try {
-      useConversationStore.getState().addSystemMessage(
-        `✓ Approved${decisionSuffix(interrupt?.toolName)}`,
-        interrupt?.turnId,
-      );
       await sendInterrupt(id, {
         interruptId: interrupt.interruptId,
         action: 'approve',
@@ -387,16 +377,12 @@ export function SessionPage() {
       console.debug('[Session] Failed to send approval:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolName, interrupt?.turnId]);
+  }, [id, clearInterrupt, interrupt?.interruptId]);
 
   const handleReject = useCallback(async () => {
     if (!id || !interrupt?.interruptId) return;
     setError(null);
     try {
-      useConversationStore.getState().addSystemMessage(
-        `✗ Rejected${decisionSuffix(interrupt?.toolName)}`,
-        interrupt?.turnId,
-      );
       await sendInterrupt(id, {
         interruptId: interrupt.interruptId,
         action: 'reject',
@@ -406,7 +392,7 @@ export function SessionPage() {
       console.debug('[Session] Failed to send rejection:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolName, interrupt?.turnId]);
+  }, [id, clearInterrupt, interrupt?.interruptId]);
 
   const handleDocSubmit = useCallback(
     async (content: string) => {
