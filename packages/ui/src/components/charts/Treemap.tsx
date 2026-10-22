@@ -3,8 +3,7 @@ import {
   Treemap as RechartsTreemap,
   Tooltip,
 } from 'recharts';
-
-const COLORS = ['#2dd4bf', '#14b8a6', '#a1a1aa', '#22c55e', '#eab308', '#ef4444'];
+import { CHART_SERIES_COLORS, CHART_TOOLTIP_STYLE, isChartColor, resolveChartHeight } from './chart-style';
 
 interface TreemapProps {
   title?: string;
@@ -63,31 +62,27 @@ export function Treemap({
   data,
   dataKey,
   nameKey = 'name',
-  colors = COLORS,
+  colors,
+  height,
 }: TreemapProps) {
+  const requested = Array.isArray(colors) ? colors.filter(isChartColor) : [];
+  const tileColors = requested.length > 0 ? requested : [...CHART_SERIES_COLORS];
   return (
-    <div data-testid="a2ui-treemap" className="w-full h-full bg-transparent">
+    <div data-testid="a2ui-treemap" className="w-full h-full bg-transparent font-sans">
       {title && (
-        <h3 className="text-sm font-semibold text-surface-200 mb-4">{title}</h3>
+        <h3 className="mb-3 text-sm font-semibold text-surface-200">{title}</h3>
       )}
-      <ResponsiveContainer width="100%" height={300}>
+      <ResponsiveContainer width="100%" height={resolveChartHeight(height, 300)}>
         <RechartsTreemap
           data={data}
           dataKey={dataKey}
           nameKey={nameKey}
           aspectRatio={4 / 3}
           stroke="#18181b"
-          content={<CustomContent x={0} y={0} width={0} height={0} index={0} colors={colors} />}
+          isAnimationActive={false}
+          content={<CustomContent x={0} y={0} width={0} height={0} index={0} colors={tileColors} />}
         >
-          <Tooltip
-            contentStyle={{
-              backgroundColor: '#27272a',
-              border: '1px solid #3f3f46',
-              borderRadius: '6px',
-              color: '#d4d4d8',
-              fontSize: '13px',
-            }}
-          />
+          <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
         </RechartsTreemap>
       </ResponsiveContainer>
     </div>

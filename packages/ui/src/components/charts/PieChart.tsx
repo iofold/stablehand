@@ -6,8 +6,15 @@ import {
   Tooltip,
   Legend,
 } from 'recharts';
-
-const COLORS = ['#2dd4bf', '#14b8a6', '#a1a1aa', '#22c55e', '#eab308', '#ef4444'];
+import {
+  CHART_GRID_COLOR,
+  CHART_TOOLTIP_ITEM_STYLE,
+  CHART_TOOLTIP_STYLE,
+  CHART_VALUE_TEXT,
+  formatChartValue,
+  resolveChartHeight,
+  resolveSeriesColors,
+} from './chart-style';
 
 interface PieChartProps {
   title?: string;
@@ -15,6 +22,25 @@ interface PieChartProps {
   nameKey: string;
   valueKey: string;
   donut?: boolean;
+  colors?: string[];
+  height?: number;
+}
+
+interface PieLabelProps {
+  x: number;
+  y: number;
+  textAnchor: 'start' | 'middle' | 'end' | 'inherit';
+  name?: string;
+  percent?: number;
+}
+
+/** Slice labels use the text token; Recharts' default paints them in the slice colour. */
+function PieLabel({ x, y, textAnchor, name, percent }: PieLabelProps) {
+  return (
+    <text x={x} y={y} textAnchor={textAnchor} dominantBaseline="central" fill={CHART_VALUE_TEXT} fontSize={12}>
+      {`${name ?? ''} ${Math.round((percent ?? 0) * 100)}%`}
+    </text>
+  );
 }
 
 export function PieChart({
@@ -23,42 +49,40 @@ export function PieChart({
   nameKey,
   valueKey,
   donut = false,
+  colors,
+  height,
 }: PieChartProps) {
+  const rows = Array.isArray(data) ? data : [];
+  const sliceColors = resolveSeriesColors(rows.length, { colors });
   return (
-    <div data-testid="a2ui-pie-chart" className="w-full h-full bg-transparent">
+    <div data-testid="a2ui-pie-chart" className="w-full h-full bg-transparent font-sans">
       {title && (
-        <h3 className="text-sm font-semibold text-surface-200 mb-4">{title}</h3>
+        <h3 className="mb-3 text-sm font-semibold text-surface-200">{title}</h3>
       )}
-      <ResponsiveContainer width="100%" height={300}>
+      <ResponsiveContainer width="100%" height={resolveChartHeight(height, 300)}>
         <RechartsPieChart>
           <Pie
-            data={data}
+            data={rows}
             dataKey={valueKey}
             nameKey={nameKey}
             cx="50%"
             cy="50%"
             innerRadius={donut ? 60 : 0}
             outerRadius={100}
-            strokeWidth={1}
-            stroke="#3f3f46"
-            label={({ name, percent }) =>
-              `${name} ${(percent * 100).toFixed(0)}%`
-            }
-            labelLine={{ stroke: '#3f3f46' }}
+            strokeWidth={2}
+            stroke="#151517"
+            label={PieLabel}
+            labelLine={{ stroke: CHART_GRID_COLOR }}
+            isAnimationActive={false}
           >
-            {data.map((_, index) => (
-              <Cell key={index} fill={COLORS[index % COLORS.length]} />
+            {rows.map((_, index) => (
+              <Cell key={index} fill={sliceColors[index]} />
             ))}
           </Pie>
           <Tooltip
-            contentStyle={{
-              backgroundColor: '#27272a',
-              border: '1px solid #3f3f46',
-              borderRadius: '6px',
-              color: '#d4d4d8',
-              fontSize: '13px',
-            }}
-            itemStyle={{ color: '#d4d4d8' }}
+            contentStyle={CHART_TOOLTIP_STYLE}
+            itemStyle={CHART_TOOLTIP_ITEM_STYLE}
+            formatter={(value: unknown) => formatChartValue(value)}
           />
           <Legend formatter={(value) => <span className="text-xs text-surface-400">{value}</span>} />
         </RechartsPieChart>

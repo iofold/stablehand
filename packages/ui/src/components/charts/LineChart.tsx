@@ -5,7 +5,8 @@ interface LineChartProps {
   data: Record<string, unknown>[];
   xKey: string;
   yKey: string | string[];
-  width?: number;
+  color?: string;
+  colors?: string[];
   height?: number;
 }
 

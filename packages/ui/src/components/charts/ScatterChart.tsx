@@ -7,8 +7,16 @@ import {
   CartesianGrid,
   Tooltip,
 } from 'recharts';
-
-const COLORS = ['#2dd4bf', '#14b8a6', '#a1a1aa', '#22c55e', '#eab308', '#ef4444'];
+import {
+  CHART_GRID_COLOR,
+  CHART_TICK_STYLE,
+  CHART_TOOLTIP_ITEM_STYLE,
+  CHART_TOOLTIP_STYLE,
+  formatAxisNumber,
+  formatChartValue,
+  resolveChartHeight,
+  resolveSeriesColors,
+} from './chart-style';
 
 interface ScatterChartProps {
   title?: string;
@@ -16,7 +24,6 @@ interface ScatterChartProps {
   xKey: string;
   yKey: string;
   color?: string;
-  width?: number;
   height?: number;
 }
 
@@ -26,43 +33,44 @@ export function ScatterChart({
   xKey,
   yKey,
   color,
+  height,
 }: ScatterChartProps) {
+  const [pointColor] = resolveSeriesColors(1, { color });
   return (
-    <div data-testid="a2ui-scatter-chart" className="w-full h-full bg-transparent">
+    <div data-testid="a2ui-scatter-chart" className="w-full h-full bg-transparent font-sans">
       {title && (
-        <h3 className="text-sm font-semibold text-surface-200 mb-4">{title}</h3>
+        <h3 className="mb-3 text-sm font-semibold text-surface-200">{title}</h3>
       )}
-      <ResponsiveContainer width="100%" height={300}>
-        <RechartsScatterChart margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-          <CartesianGrid stroke="#3f3f46" strokeOpacity={0.2} />
+      <ResponsiveContainer width="100%" height={resolveChartHeight(height)}>
+        <RechartsScatterChart margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+          <CartesianGrid stroke={CHART_GRID_COLOR} strokeOpacity={0.5} />
           <XAxis
             dataKey={xKey}
             type="number"
-            stroke="#3f3f46"
-            tick={{ fill: '#71717a', fontSize: 12 }}
             name={xKey}
+            tick={CHART_TICK_STYLE}
+            tickFormatter={formatAxisNumber}
+            tickLine={false}
+            axisLine={{ stroke: CHART_GRID_COLOR }}
+            tickMargin={8}
           />
           <YAxis
             dataKey={yKey}
             type="number"
-            stroke="#3f3f46"
-            tick={{ fill: '#71717a', fontSize: 12 }}
             name={yKey}
+            tick={CHART_TICK_STYLE}
+            tickFormatter={formatAxisNumber}
+            tickLine={false}
+            axisLine={false}
+            width={48}
           />
           <Tooltip
-            cursor={{ stroke: '#3f3f46' }}
-            contentStyle={{
-              backgroundColor: '#27272a',
-              border: '1px solid #3f3f46',
-              borderRadius: '6px',
-              color: '#d4d4d8',
-              fontSize: '13px',
-            }}
+            cursor={{ stroke: CHART_GRID_COLOR }}
+            contentStyle={CHART_TOOLTIP_STYLE}
+            itemStyle={CHART_TOOLTIP_ITEM_STYLE}
+            formatter={(value: unknown) => formatChartValue(value)}
           />
-          <Scatter
-            data={data}
-            fill={color ?? COLORS[0]}
-          />
+          <Scatter data={Array.isArray(data) ? data : []} fill={pointColor} isAnimationActive={false} />
         </RechartsScatterChart>
       </ResponsiveContainer>
     </div>

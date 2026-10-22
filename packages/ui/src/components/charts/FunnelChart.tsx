@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { resolveSeriesColors } from './chart-style';
 
 interface FunnelStage {
   name: string;
@@ -7,12 +8,18 @@ interface FunnelStage {
 
 interface FunnelChartProps {
   title: string;
-  stages: FunnelStage[];
+  stages?: FunnelStage[];
+  /** The a2ui-render tool documents `data` as an alias for `stages`. */
+  data?: FunnelStage[];
+  colors?: string[];
 }
 
-const COLORS = ['#2dd4bf', '#14b8a6', '#a1a1aa', '#22c55e', '#eab308', '#ef4444'];
-
-export function FunnelChart({ title, stages }: FunnelChartProps) {
+export function FunnelChart({ title, stages: stagesProp, data, colors }: FunnelChartProps) {
+  const stages = useMemo(
+    () => (Array.isArray(stagesProp) ? stagesProp : Array.isArray(data) ? data : []),
+    [stagesProp, data],
+  );
+  const stageColors = resolveSeriesColors(stages.length, { colors });
   const layout = useMemo(() => {
     if (stages.length === 0) return null;
 
@@ -51,7 +58,7 @@ export function FunnelChart({ title, stages }: FunnelChartProps) {
           const y = i * (stageHeight + gapHeight);
           const currentWidth = getWidth(stage.value);
           const nextWidth = i < stages.length - 1 ? getWidth(stages[i + 1].value) : currentWidth * 0.8;
-          const color = COLORS[i % COLORS.length];
+          const color = stageColors[i];
 
           const topLeft = centerX - currentWidth / 2;
           const topRight = centerX + currentWidth / 2;
