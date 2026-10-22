@@ -130,7 +130,7 @@ nativeToolPolicy:
 ### Key Features
 - **SDK**: `@anthropic-ai/claude-agent-sdk` (query + MCP integration)
 - **MCP Server**: `createSdkMcpServer` hosts tools for agent
-- **Native Tool Policy**: `nativeToolPolicy` maps the common policy to SDK `allowedTools`/`disallowedTools`
+- **Native Tool Policy**: `nativeToolPolicy` maps `allow`/`none` to the SDK `tools` option (the exact built-in set the model sees; `[]` for `none`) and `deny` to `disallowedTools`; `allowedTools` only auto-approves the allowed built-ins plus `mcp__stablehand__*`. Name `Agent` to use configured subagents and `Skill` to use project skills; subagents never get built-ins the parent lacks
 - **Tool Location**: Native tools (e.g., Read, Write, Edit, Bash) auto-populated from SDK
 - **Knowledge Context**: Stub
 - **Stateless**: Fresh agent per turn

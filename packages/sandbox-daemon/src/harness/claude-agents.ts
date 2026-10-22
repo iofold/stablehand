@@ -130,6 +130,9 @@ type StreamMappingState = {
   subagentTypeByTaskId: Map<string, string>;
 };
 
+/** Every tool on the in-process `stablehand` MCP server. */
+const STABLEHAND_MCP_TOOLS = 'mcp__stablehand__*';
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -179,6 +182,18 @@ class ClaudeSession implements HarnessSession {
     );
     this.mcpServer = sdk.createSdkMcpServer({ name: 'stablehand', tools: mcpTools });
     this.sdkSessionId = toSdkSessionId(config.conversationId);
+
+    const builtinTools = this.buildBuiltinTools();
+    if (
+      builtinTools
+      && Object.keys(harnessConfig.subagents ?? {}).length > 0
+      && !builtinTools.includes('Agent')
+      && !builtinTools.includes('Task')
+    ) {
+      console.warn(
+        '[claude-agents] nativeToolPolicy does not include the Agent tool, so the configured subagents cannot be used. Add "Agent" to nativeToolPolicy.names to enable them.',
+      );
+    }
   }
 
   setSdkSessionId(sessionId: string): void {
@@ -237,6 +252,7 @@ class ClaudeSession implements HarnessSession {
       const maxTurns = this.harnessConfig.maxTurns;
       const sdkSessionId = this.sdkSessionId;
       const agents = this.harnessConfig.subagents;
+      const builtinTools = this.buildBuiltinTools();
 
       const q = this.sdk.query({
         prompt: this.generateInput(input.messages, { replayAllMessages: shouldReplayFullPrompt }),
@@ -245,7 +261,8 @@ class ClaudeSession implements HarnessSession {
           systemPrompt: this.config.systemPrompt,
           cwd: this.config.workspaceDir,
           settingSources: ['project'],
-          allowedTools: this.buildAllowedTools() ?? [],
+          ...(builtinTools ? { tools: builtinTools } : {}),
+          allowedTools: this.buildAllowedTools(builtinTools) ?? [],
           disallowedTools: this.buildDisallowedTools() ?? [],
           mcpServers: { stablehand: this.mcpServer },
           permissionMode: 'bypassPermissions',
@@ -484,15 +501,33 @@ class ClaudeSession implements HarnessSession {
     }
   }
 
-  private buildAllowedTools(): string[] | undefined {
+  /**
+   * The SDK `tools` option: the base set of built-in tools the model can see.
+   * `allow` passes exactly the named built-ins and `none` passes `[]`, so
+   * nothing else (Read, Write, Agent, Skill, ...) is offered. `all` and `deny`
+   * keep the SDK default set; `deny` removes names through `disallowedTools`.
+   * Stablehand MCP tools are not built-ins and stay available under every
+   * policy. Subagents only get built-ins from this set, so `Agent` must be
+   * named to use configured subagents and `Skill` to use project skills.
+   */
+  private buildBuiltinTools(): string[] | undefined {
     const nativeToolPolicy = this.config.nativeToolPolicy;
     if (!nativeToolPolicy || nativeToolPolicy.policy === 'all' || nativeToolPolicy.policy === 'deny') {
       return undefined;
     }
-    if (nativeToolPolicy.policy === 'none') {
-      return ['mcp__stablehand__*'];
+    return nativeToolPolicy.policy === 'none' ? [] : [...nativeToolPolicy.names];
+  }
+
+  /**
+   * The SDK `allowedTools` option only auto-approves tools; it does not limit
+   * which tools exist. It keeps Stablehand MCP tools (and any allowed
+   * built-ins) approved without a prompt.
+   */
+  private buildAllowedTools(builtinTools: string[] | undefined): string[] | undefined {
+    if (!builtinTools) {
+      return undefined;
     }
-    return [...new Set([...nativeToolPolicy.names, 'mcp__stablehand__*'])];
+    return [...new Set([...builtinTools, STABLEHAND_MCP_TOOLS])];
   }
 
   private buildDisallowedTools(): string[] | undefined {

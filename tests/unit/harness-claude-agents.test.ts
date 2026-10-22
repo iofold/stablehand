@@ -683,6 +683,8 @@ describe('ClaudeAgentsHarness', () => {
         name: 'stablehand',
         tools: [expect.objectContaining({ name: 'ctx-tool' })],
       });
+      // `tools` restricts the built-in set; `allowedTools` only auto-approves.
+      expect(queryCall?.options.tools).toEqual(['native-read']);
       expect(queryCall?.options.allowedTools).toEqual(['native-read', 'mcp__stablehand__*']);
       expect(queryCall?.options.disallowedTools).toEqual([]);
       expect(queryCall?.options.mcpServers).toEqual({
@@ -701,25 +703,43 @@ describe('ClaudeAgentsHarness', () => {
 
     it.each([
       {
+        label: 'default (no policy)',
+        nativeToolPolicy: undefined,
+        tools: undefined,
+        allowedTools: [],
+        disallowedTools: [],
+      },
+      {
         label: 'all',
         nativeToolPolicy: { policy: 'all' } as NativeToolPolicy,
+        tools: undefined,
         allowedTools: [],
+        disallowedTools: [],
+      },
+      {
+        label: 'allow',
+        nativeToolPolicy: { policy: 'allow', names: ['Bash', 'Grep'] } as NativeToolPolicy,
+        tools: ['Bash', 'Grep'],
+        allowedTools: ['Bash', 'Grep', 'mcp__stablehand__*'],
         disallowedTools: [],
       },
       {
         label: 'deny',
         nativeToolPolicy: { policy: 'deny', names: ['Bash'] } as NativeToolPolicy,
+        tools: undefined,
         allowedTools: [],
         disallowedTools: ['Bash'],
       },
       {
         label: 'none',
         nativeToolPolicy: { policy: 'none' } as NativeToolPolicy,
+        tools: [],
         allowedTools: ['mcp__stablehand__*'],
         disallowedTools: [],
       },
     ])('enforces the $label native-tool policy', async ({
       nativeToolPolicy,
+      tools,
       allowedTools,
       disallowedTools,
     }) => {
@@ -743,8 +763,20 @@ describe('ClaudeAgentsHarness', () => {
       const queryCall = mockQuery.mock.calls[0]?.[0];
       await session.close();
 
+      // The SDK `tools` option is the built-in allowlist: `[]` disables every
+      // built-in, a name list exposes only those built-ins, and leaving it
+      // unset keeps the SDK default set. `allowedTools` alone does not
+      // restrict anything (it only skips permission prompts).
+      if (tools === undefined) {
+        expect(queryCall?.options).not.toHaveProperty('tools');
+      } else {
+        expect(queryCall?.options.tools).toEqual(tools);
+      }
       expect(queryCall?.options.allowedTools).toEqual(allowedTools);
       expect(queryCall?.options.disallowedTools).toEqual(disallowedTools);
+      expect(queryCall?.options.mcpServers).toEqual({
+        stablehand: { type: 'sdk', name: 'stablehand' },
+      });
     });
 
     it('commits a native /goal result even when Claude only returns terminal result text', async () => {
@@ -859,6 +891,7 @@ describe('ClaudeAgentsHarness', () => {
       await session.close();
 
       const queryCall = mockQuery.mock.calls[0]?.[0];
+      expect(queryCall?.options.tools).toEqual(['Skill']);
       expect(queryCall?.options.allowedTools).toEqual(['Skill', 'mcp__stablehand__*']);
     });
 
@@ -903,6 +936,7 @@ describe('ClaudeAgentsHarness', () => {
       await session.close();
 
       const queryCall = mockQuery.mock.calls[0]?.[0];
+      expect(queryCall?.options.tools).toEqual(['Agent', 'Skill']);
       expect(queryCall?.options.allowedTools).toEqual(['Agent', 'Skill', 'mcp__stablehand__*']);
       expect(queryCall?.options.agents).toEqual({
         reviewer: {
@@ -911,6 +945,45 @@ describe('ClaudeAgentsHarness', () => {
           skills: ['code-review'],
         },
       });
+    });
+
+    it('does not add Agent behind an allow policy and warns that subagents are unreachable', async () => {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+      mockQuery.mockImplementation(() => sdkStream([{
+        type: 'result',
+        subtype: 'success',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }]));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      try {
+        const session = await harness.openSession(makeConfig({
+          nativeToolPolicy: { policy: 'allow', names: ['Read'] },
+          harnessConfigJson: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            apiKeyRef: 'anthropic',
+            subagents: {
+              reviewer: { description: 'Reviews code', prompt: 'Review the code.', tools: ['Read', 'Bash'] },
+            },
+          }),
+        }));
+        await collectEvents(session.deliverTurn(
+          { messages: [makeMessage('user', 'Hello')], turnId: 'turn-1' },
+          {},
+        ));
+        await session.close();
+
+        const queryCall = mockQuery.mock.calls[0]?.[0];
+        expect(queryCall?.options.tools).toEqual(['Read']);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('Add "Agent" to nativeToolPolicy.names'));
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     it('logs Claude hook lifecycle messages surfaced by the SDK', async () => {

@@ -40,6 +40,8 @@ spec:
 
     When asked to test subagents, delegate to one of them.
     When asked about skills, describe what skills you have loaded.
+  # The allow list is the exact set of built-in Claude tools the agent gets:
+  # Agent reaches the subagents above and Skill loads the workspace skills.
   nativeToolPolicy:
     policy: allow
     names:
@@ -49,6 +51,8 @@ spec:
       - Bash
       - Grep
       - Glob
+      - Agent
+      - Skill
   workspace:
     content:
       files:

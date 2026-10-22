@@ -54,6 +54,8 @@ In the Claude Agents harness, subagents are defined as a map (Record) in `harnes
 *   `model`: Model ID override (e.g., `sonnet`, `opus`, `haiku`, or a full ID like `claude-sonnet-4-6`).
 *   `maxTurns`: Maximum agentic turns before stopping.
 
+Subagents are started through Claude's built-in `Agent` tool, and skills are loaded through the built-in `Skill` tool. If `nativeToolPolicy` is `allow`, its `names` are the only built-in tools the agent gets, so add `Agent` to use subagents and `Skill` to use skills. `none` turns off both. A subagent never gets a built-in tool that the parent doesn't have, even if its own `tools` list names it.
+
 **Example Manifest:**
 
 ```yaml
