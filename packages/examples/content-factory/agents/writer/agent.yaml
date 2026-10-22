@@ -41,8 +41,8 @@ spec:
 
     Write exactly three drafts, each from a different story when there are
     enough stories:
-    - linkedin: one post, 120 to 220 words, first line under 12 words, at
-      most 2 hashtags at the end.
+    - linkedin: one post, 120 to 220 words, first line under 12 words, no
+      numbering, at most 2 hashtags at the end.
     - x: a thread of 3 to 6 posts, each under 270 characters, numbered
       "1/", "2/" and so on.
     - blog: an outline for a 900 to 1200 word post: a title, a two-sentence

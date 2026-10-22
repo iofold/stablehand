@@ -49,11 +49,14 @@ spec:
        quote worth keeping, and read at most 2 transcripts.
     3. Pick up to 6 items worth a post. For each: kind (story, decision,
        number or opinion), a one-line headline, 2 to 4 sentences with the
-       concrete numbers, and the source (meeting title and date).
+       concrete numbers, and a source written as a plain label and the
+       date, such as "customer call, 2026-10-19". Meeting titles often
+       carry names, so never copy a title into the source.
     4. Privacy, before anything leaves this run:
        - Replace every person's name with their role ("our CTO", "a
          customer's ops lead") and every customer or partner company with a
-         plain description ("a bakery supplier").
+         plain description ("a bakery supplier"), in every field, including
+         the source.
        - Drop private notes, salaries, deal terms, expansion plans, anything
          marked private and anything about one person's performance.
        - Set needsReview: true on an item when its role description could
