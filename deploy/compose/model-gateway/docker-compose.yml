@@ -22,7 +22,7 @@ services:
     build:
       context: .
       dockerfile: deploy/compose/model-gateway/Dockerfile
-    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-model-gateway:${STABLEHAND_IMAGE_TAG:-latest}
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-gateway:${STABLEHAND_IMAGE_TAG:-latest}
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?set LITELLM_SALT_KEY}
@@ -61,7 +61,7 @@ services:
     build:
       context: .
       dockerfile: deploy/compose/model-gateway/Dockerfile
-    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-model-gateway:${STABLEHAND_IMAGE_TAG:-latest}
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-gateway:${STABLEHAND_IMAGE_TAG:-latest}
     entrypoint: ["/app/.venv/bin/python", "/opt/stablehand/bootstrap_keys.py"]
     command: []
     environment:

@@ -10,7 +10,7 @@ services:
   gallery:
     build:
       context: extensions/artifact-gallery
-    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-artifact-gallery:${STABLEHAND_IMAGE_TAG:-latest}
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-gallery:${STABLEHAND_IMAGE_TAG:-latest}
     environment:
       STABLEHAND_BASE_URL: http://orchestrator:3001
       STABLEHAND_API_KEY: ${GALLERY_API_KEY:-}

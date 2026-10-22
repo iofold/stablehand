@@ -4,10 +4,11 @@ name: Images
 # overlays name: ghcr.io/<owner>/stablehand-<name>. install.sh pulls these and
 # falls back to a local build when a tag is missing.
 #
-# Tags:
-#   push to master  -> latest, master, sha-<full commit sha>
-#   tag v1.2.3      -> 1.2.3, 1.2, sha-<full commit sha>
-# STABLEHAND_IMAGE_TAG in .env picks one; install.sh tries sha-<HEAD> first.
+# Each image is built natively on an amd64 and an arm64 runner, pushed by
+# digest, then joined into one multi-arch tag set:
+#   push to master  -> latest, master, sha-<7-char commit>
+#   tag v1.2.3      -> 1.2.3, 1.2, sha-<7-char commit>
+# STABLEHAND_IMAGE_TAG picks one; install.sh tries sha-<HEAD> first.
 
 on:
   push:
@@ -24,17 +25,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  image:
-    name: ${{ matrix.image }}
+  build:
+    name: ${{ matrix.image }} (${{ matrix.platform }})
     # Only the public repository publishes. Forks and private mirrors of it
     # must not push to the same package names.
     if: github.repository == 'iofold/stablehand'
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
+        image:
+          - stablehand-orchestrator
+          - stablehand-ui
+          - stablehand-egress
+          - stablehand-harness-langgraph
+          - stablehand-harness-claude-agents
+          - stablehand-harness-pi-agent
+          - stablehand-gallery
+          - stablehand-gateway
+        platform: [linux/amd64, linux/arm64]
         include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
           - image: stablehand-orchestrator
             context: .
             file: Dockerfile
@@ -59,18 +74,27 @@ jobs:
             context: .
             file: Dockerfile.sandbox
             target: harness-pi-agent
-          - image: stablehand-artifact-gallery
+          - image: stablehand-gallery
             context: extensions/artifact-gallery
             file: extensions/artifact-gallery/Dockerfile
             target: ''
-          - image: stablehand-model-gateway
+          - image: stablehand-gateway
             context: .
             file: deploy/compose/model-gateway/Dockerfile
             target: ''
     steps:
+      - name: Platform pair
+        run: |
+          platform='${{ matrix.platform }}'
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-qemu-action@v3
+      - name: Labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -81,7 +105,66 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Tags and labels
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ env.PLATFORM_PAIR }}
+
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest='${{ steps.build.outputs.digest }}'
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.image }}-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: ${{ matrix.image }} (tags)
+    needs: build
+    if: github.repository == 'iofold/stablehand'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - stablehand-orchestrator
+          - stablehand-ui
+          - stablehand-egress
+          - stablehand-harness-langgraph
+          - stablehand-harness-claude-agents
+          - stablehand-harness-pi-agent
+          - stablehand-gallery
+          - stablehand-gateway
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ matrix.image }}-linux-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -91,20 +174,14 @@ jobs:
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,format=long
-          labels: |
-            org.opencontainers.image.title=${{ matrix.image }}
-            org.opencontainers.image.licenses=MIT
+            type=sha
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.file }}
-          target: ${{ matrix.target }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      - name: Create the multi-arch tags
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}@sha256:%s ' *)
+
+      - name: Inspect
+        run: docker buildx imagetools inspect 'ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.meta.outputs.version }}'

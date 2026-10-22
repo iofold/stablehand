@@ -14,14 +14,29 @@ interface ComposeFile {
   networks?: Record<string, { name?: string }>;
 }
 
+interface MatrixInclude {
+  image?: string;
+  platform?: string;
+  runner?: string;
+  context?: string;
+  file?: string;
+  target?: string;
+}
+
 interface ImagesWorkflow {
+  permissions?: Record<string, string>;
   jobs: {
-    image: {
+    build: {
       if?: string;
-      strategy: { matrix: { include: Array<{ image: string; context: string; file: string; target: string }> } };
+      'runs-on': string;
+      strategy: { matrix: { image: string[]; platform: string[]; include: MatrixInclude[] } };
+    };
+    merge: {
+      if?: string;
+      needs: string;
+      strategy: { matrix: { image: string[] } };
     };
   };
-  permissions?: Record<string, string>;
 }
 
 const COMPOSE_FILES = [
@@ -58,28 +73,44 @@ function builtImages(): Map<string, { context: string; file: string; target: str
 describe('prebuilt images', () => {
   it('names every image the stack builds after the published GHCR package', () => {
     expect([...builtImages().keys()].sort()).toEqual([
-      'stablehand-artifact-gallery',
       'stablehand-egress',
+      'stablehand-gallery',
+      'stablehand-gateway',
       'stablehand-harness-claude-agents',
       'stablehand-harness-langgraph',
       'stablehand-harness-pi-agent',
-      'stablehand-model-gateway',
       'stablehand-orchestrator',
       'stablehand-ui',
     ]);
   });
 
-  it('publishes each of those images from the same Dockerfile and target', () => {
+  it('publishes each of those images from the same Dockerfile and target, for amd64 and arm64', () => {
     const workflow = readYaml<ImagesWorkflow>('.github/workflows/images.yml');
-    const matrix = new Map(
-      workflow.jobs.image.strategy.matrix.include.map((entry) => [
-        entry.image,
-        { context: entry.context, file: entry.file, target: entry.target ?? '' },
-      ]),
+    const { build, merge } = workflow.jobs;
+    const recipes = new Map(
+      build.strategy.matrix.include
+        .filter((entry) => entry.image)
+        .map((entry) => [
+          entry.image as string,
+          { context: entry.context, file: entry.file, target: entry.target ?? '' },
+        ]),
     );
-    expect(Object.fromEntries(matrix)).toEqual(Object.fromEntries(builtImages()));
+    expect(Object.fromEntries(recipes)).toEqual(Object.fromEntries(builtImages()));
+    expect([...build.strategy.matrix.image].sort()).toEqual([...recipes.keys()].sort());
+    expect(merge.strategy.matrix.image).toEqual(build.strategy.matrix.image);
+
+    // Native runners per platform, no emulation.
+    expect(build.strategy.matrix.platform).toEqual(['linux/amd64', 'linux/arm64']);
+    const runners = Object.fromEntries(
+      build.strategy.matrix.include
+        .filter((entry) => entry.platform)
+        .map((entry) => [entry.platform as string, entry.runner]),
+    );
+    expect(runners).toEqual({ 'linux/amd64': 'ubuntu-24.04', 'linux/arm64': 'ubuntu-24.04-arm' });
+
     expect(workflow.permissions?.packages).toBe('write');
-    expect(workflow.jobs.image.if).toBe("github.repository == 'iofold/stablehand'");
+    expect(build.if).toBe("github.repository == 'iofold/stablehand'");
+    expect(merge.if).toBe("github.repository == 'iofold/stablehand'");
   });
 
   it('points the orchestrator at the sandbox images and network compose creates', () => {
