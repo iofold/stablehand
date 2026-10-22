@@ -80,7 +80,7 @@ docs/
 - **Visually verify UI changes** — After any change that touches routes returning data to the UI, API response shapes, or frontend components:
   1. Rebuild the Docker stack (`docker compose up --build -d`)
   2. Use `agent-browser` to navigate the affected screens, interact with them, and save screenshots/snapshots/console/error/network evidence under `.tmp/`
-  3. Feed each screenshot to `look_at` with a specific critique goal (e.g., "Are sessions listed? Do status badges render? Any broken layouts?")
+  3. Review each screenshot against a specific critique goal (e.g., "Are sessions listed? Do status badges render? Any broken layouts?"), using a vision-capable model if one is available
   4. Fix any issues surfaced before marking the task complete
   This catches shape mismatches, empty states, and rendering failures that unit tests miss.
 
