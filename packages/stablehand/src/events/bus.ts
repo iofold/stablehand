@@ -150,6 +150,23 @@ export type EventMap = {
     _triggerDepth?: number;
     timestamp: number;
   };
+  /**
+   * A trigger firing was dead-lettered (ctx-v6ef): the target refused the run
+   * for a non-retryable reason, or retries ran out. The durable record is the
+   * `trigger_firings` row with status 'failed'; this event is its notice.
+   */
+  'trigger.failed': {
+    triggerId: string;
+    agentId: string;
+    /** Type of the source event that matched the trigger. */
+    eventType: string;
+    eventSeq: number;
+    errorCode: string;
+    error: string;
+    attempts: number;
+    _triggerDepth?: number;
+    timestamp: number;
+  };
   'message.committed': {
     turnId: string;
     agentId: string;

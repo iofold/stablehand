@@ -1,4 +1,5 @@
 const UNIQUE_VIOLATION_CODE = '23505';
+const FOREIGN_KEY_VIOLATION_CODE = '23503';
 const MAX_CAUSE_DEPTH = 5;
 
 /**
@@ -39,6 +40,20 @@ export function isUniqueConstraintViolation(err: unknown, constraintName?: strin
       || record.constraint === constraintName
       || (typeof record.message === 'string' && record.message.includes(constraintName))
     ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when the error (or any error on its cause chain) is a postgres foreign
+ * key violation, e.g. a child insert racing a cascade delete of its parent.
+ */
+export function isForeignKeyViolation(err: unknown): boolean {
+  for (const level of causeChain(err)) {
+    if (typeof level === 'object' && level !== null
+      && (level as { code?: unknown }).code === FOREIGN_KEY_VIOLATION_CODE) {
       return true;
     }
   }

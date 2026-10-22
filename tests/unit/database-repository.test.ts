@@ -6805,6 +6805,54 @@ describe('DatabaseRepository', () => {
       expect(await repo.hasTriggerFiring(trigger.id, 124)).toBe(false);
     });
 
+    it('records dead-lettered trigger firings that settle the event and list newest first (ctx-v6ef)', async () => {
+      const trigger = await repo.saveTrigger({
+        id: 'trigger-failure-test',
+        agentId,
+        eventType: 'custom.poison',
+        selector: null,
+        taskTemplate: 'run',
+        enabled: true,
+        createdAt: Date.now(),
+      });
+      const failure = {
+        triggerId: trigger.id,
+        eventType: 'custom.poison',
+        errorCode: 'agent_mode_not_allowed',
+        error: 'Agent mode "interactive" does not allow background turns',
+        attempts: 1,
+      };
+      const first = await repo.recordTriggerFiringFailure({ ...failure, eventSeq: 200 });
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      const second = await repo.recordTriggerFiringFailure({ ...failure, eventSeq: 201, attempts: 8 });
+      // Settled either way: neither a repeat failure nor a late success overwrites it.
+      expect(await repo.recordTriggerFiringFailure({ ...failure, eventSeq: 200 })).toBeUndefined();
+      expect(await repo.recordTriggerFiring(trigger.id, 200)).toBeUndefined();
+      await repo.recordTriggerFiring(trigger.id, 202);
+      expect(await repo.recordTriggerFiringFailure({ ...failure, eventSeq: 202 })).toBeUndefined();
+
+      expect(first).toMatchObject({ status: 'failed', eventSeq: 200, attempts: 1 });
+      expect(await repo.hasTriggerFiring(trigger.id, 200)).toBe(true);
+
+      const listed = await repo.listTriggerFiringFailures({ agentId });
+      expect(listed.map((row) => row.id)).toEqual([second?.id, first?.id]);
+      expect(listed[0]).toMatchObject({
+        triggerId: trigger.id,
+        agentId,
+        eventType: 'custom.poison',
+        eventSeq: 201,
+        errorCode: 'agent_mode_not_allowed',
+        attempts: 8,
+        status: 'failed',
+      });
+      expect(await repo.listTriggerFiringFailures({ triggerId: trigger.id, limit: 1 })).toHaveLength(1);
+      expect(await repo.listTriggerFiringFailures({ triggerId: 'no-such-trigger' })).toEqual([]);
+
+      // A trigger deleted meanwhile has no history left to append to.
+      expect(await repo.recordTriggerFiringFailure({ ...failure, triggerId: 'deleted-trigger', eventSeq: 300 }))
+        .toBeUndefined();
+    });
+
   });
 
   // --- Budget spend aggregation ---

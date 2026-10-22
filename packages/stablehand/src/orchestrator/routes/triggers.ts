@@ -12,7 +12,11 @@ import {
   IngestQueueFullError,
   type CanonicalIngestAdmission,
 } from '../canonical-ingest-admission.js';
-import { TriggerListResponseSchema, TriggerSchema } from '@stablehand/contracts';
+import {
+  TriggerFiringFailureListResponseSchema,
+  TriggerListResponseSchema,
+  TriggerSchema,
+} from '@stablehand/contracts';
 
 export interface TriggerRouteOptions {
   triggerManager: EventTriggerManager;
@@ -99,6 +103,39 @@ export async function triggerRoutes(
     async (request: FastifyRequest) => {
       const query = request.query as { agentId?: string };
       return TriggerListResponseSchema.parse(triggerManager.list(query.agentId));
+    },
+  );
+
+  // GET /api/triggers/failures — Dead-lettered firings, newest first (ctx-v6ef)
+  app.get(
+    '/failures',
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const query = request.query as { triggerId?: string; agentId?: string; limit?: string };
+      let limit: number | undefined;
+      if (query.limit !== undefined) {
+        limit = Number(query.limit);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+          return reply.status(400).send({ error: 'limit must be an integer between 1 and 500' });
+        }
+      }
+      const rows = await db.listTriggerFiringFailures({
+        ...(query.triggerId ? { triggerId: query.triggerId } : {}),
+        ...(query.agentId ? { agentId: query.agentId } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      return TriggerFiringFailureListResponseSchema.parse({
+        failures: rows.map((row) => ({
+          id: row.id,
+          triggerId: row.triggerId,
+          agentId: row.agentId,
+          eventType: row.eventType,
+          eventSeq: row.eventSeq,
+          errorCode: row.errorCode,
+          error: row.error,
+          attempts: row.attempts,
+          createdAt: row.createdAt,
+        })),
+      });
     },
   );
 

@@ -105,6 +105,7 @@ The TypedEventBus emits the following events:
 - `client.connected` — SSE client connected
 - `client.disconnected` — SSE client disconnected
 - `trigger.fired` — Event trigger matched and fired background run
+- `trigger.failed` — Event trigger matched but no run started: the target refused it (for example an `interactive`-only agent) or retries ran out. The firing is kept as a failed row, listed by `GET /api/triggers/failures`
 - `custom` — User-emitted custom event via emit-event tool
 
 Relevant code:

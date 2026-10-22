@@ -807,6 +807,14 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       UNIQUE(trigger_id, event_seq)
     )
   `;
+  // ctx-v6ef: a firing row settles (trigger, event seq) either way. 'failed'
+  // rows are the trigger dead letters: the run was refused (non-retryable) or
+  // retries ran out, and the spine cursor moved past the event.
+  await sql`ALTER TABLE trigger_firings ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'fired'`;
+  await sql`ALTER TABLE trigger_firings ADD COLUMN IF NOT EXISTS event_type TEXT`;
+  await sql`ALTER TABLE trigger_firings ADD COLUMN IF NOT EXISTS error_code TEXT`;
+  await sql`ALTER TABLE trigger_firings ADD COLUMN IF NOT EXISTS error TEXT`;
+  await sql`ALTER TABLE trigger_firings ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 1`;
 
   // ── 10c. schedules (optionally → agents) ──────────────────────────
   await sql`
@@ -1259,6 +1267,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   // trigger_firings
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_firings_trigger_event_seq ON trigger_firings(trigger_id, event_seq)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_trigger_firings_event_seq ON trigger_firings(event_seq)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_trigger_firings_failed ON trigger_firings(created_at) WHERE status = 'failed'`;
 
   // pending_interrupts
   await sql`DROP INDEX IF EXISTS idx_interrupts_agent_session`;

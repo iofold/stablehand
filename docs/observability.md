@@ -125,7 +125,7 @@ sandbox-session, feedback, and trigger events, including:
 - `interrupt.requested` / `interrupt.resolved`
 - `ag_ui.event`
 - `feedback.received`
-- `trigger.fired`
+- `trigger.fired` / `trigger.failed`
 
 ### Querying Events
 

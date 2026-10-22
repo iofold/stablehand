@@ -79,6 +79,8 @@ import {
   type EventStatsResponse,
   TriggerListResponseSchema,
   type Trigger,
+  TriggerFiringFailureListResponseSchema,
+  type TriggerFiringFailure,
 } from '@stablehand/contracts';
 
 const API_BASE = '/api';
@@ -472,11 +474,21 @@ export async function deleteAgent(id: string): Promise<void> {
 
 // ── Trigger operations ──────────────────────────────────────────────
 
-export type { Trigger };
+export type { Trigger, TriggerFiringFailure };
 
 export async function fetchTriggers(agentId?: string): Promise<Trigger[]> {
   const response = await apiFetch<unknown>(withQuery(`${API_BASE}/triggers`, { agentId }));
   return TriggerListResponseSchema.parse(response);
+}
+
+/** Dead-lettered trigger firings, newest first. */
+export async function fetchTriggerFailures(params: {
+  agentId?: string;
+  triggerId?: string;
+  limit?: number;
+} = {}): Promise<TriggerFiringFailure[]> {
+  const response = await apiFetch<unknown>(withQuery(`${API_BASE}/triggers/failures`, params));
+  return TriggerFiringFailureListResponseSchema.parse(response).failures;
 }
 
 export async function createTrigger(data: {

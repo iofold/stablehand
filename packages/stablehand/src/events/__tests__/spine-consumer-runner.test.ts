@@ -46,10 +46,24 @@ function createHarness(rows: EventFrameRow[], consumer: SpineConsumer) {
   return { runner, db, emitLive: (frame: PersistedFrame) => subscriber?.([frame]) };
 }
 
-function createDurableTriggerHarness() {
+interface RecordedFailure {
+  triggerId: string;
+  eventSeq: number;
+  eventType: string;
+  errorCode: string;
+  error: string;
+  attempts: number;
+}
+
+function createDurableTriggerHarness(runnerOptions: {
+  maxAttempts?: number;
+  retryBaseDelayMs?: number;
+  retryMaxDelayMs?: number;
+} = {}) {
   const rows: EventFrameRow[] = [];
   const cursors = new Map<string, number>();
   const triggerFirings = new Set<string>();
+  const failures: RecordedFailure[] = [];
   let seq = 0;
   const persistFrames = async (
     frames: Array<Omit<EventFrameRow, 'seq' | 'createdAt'>>,
@@ -95,6 +109,15 @@ function createDurableTriggerHarness() {
       triggerFirings.add(key);
       return { id: `firing-${eventSeq}`, triggerId, eventSeq, createdAt: Date.now() };
     }),
+    recordTriggerFiringFailure: vi.fn(async (failure: RecordedFailure) => {
+      const key = `${failure.triggerId}:${failure.eventSeq}`;
+      if (triggerFirings.has(key)) {
+        return undefined;
+      }
+      triggerFirings.add(key);
+      failures.push(failure);
+      return { id: `failed-${failure.eventSeq}`, status: 'failed', createdAt: Date.now(), ...failure };
+    }),
   };
   const canonicalLog = new CanonicalLog({ db: db as never, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
   const eventBus = new TypedEventBus({
@@ -115,8 +138,21 @@ function createDurableTriggerHarness() {
     consumers: [createTriggerSpineConsumer(triggerManager)],
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     rescanIntervalMs: 60_000,
+    ...runnerOptions,
   });
-  return { db, eventBus, triggerManager, runner, onFire, cursors };
+  return { db, eventBus, triggerManager, runner, onFire, cursors, failures, rows };
+}
+
+/** The error TurnStartupService throws for an interactive-only target (statusCode 409). */
+function modeNotAllowedError(): Error {
+  return Object.assign(
+    new Error('Agent mode "interactive" does not allow background turns'),
+    { code: 'agent_mode_not_allowed', statusCode: 409 },
+  );
+}
+
+function queueFullError(): Error {
+  return Object.assign(new Error('Turn queue is full for agent agent-1'), { code: 'queue_full', statusCode: 429 });
 }
 
 async function flushMicrotasks(): Promise<void> {
@@ -211,6 +247,233 @@ describe('SpineConsumerRunner', () => {
     expect(onFire).toHaveBeenCalledWith('agent-1', 'process missed', trigger.id, 1, 1);
     expect(db.advanceSpineCursor).toHaveBeenCalledWith('event-triggers', 1);
     expect(cursors.get('event-triggers')).toBe(1);
+    runner.stop();
+  });
+});
+
+describe('SpineConsumerRunner bounded retries (ctx-v6ef)', () => {
+  function createRetryHarness(
+    rows: EventFrameRow[],
+    consumer: SpineConsumer,
+    options: { maxAttempts?: number; retryBaseDelayMs?: number; now?: () => number } = {},
+  ) {
+    const cursors = new Map<string, number>();
+    const db = {
+      getSpineCursor: vi.fn(async (name: string) => cursors.get(name) ?? 0),
+      getSourceEventsSince: vi.fn(async (afterSeq: number) => rows.filter((row) => row.seq > afterSeq)),
+      advanceSpineCursor: vi.fn(async (name: string, lastSeq: number) => {
+        cursors.set(name, lastSeq);
+        return { consumer: name, lastSeq, updatedAt: Date.now() };
+      }),
+    };
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const runner = new SpineConsumerRunner({
+      canonicalLog: { subscribe: vi.fn(() => () => undefined) },
+      db,
+      consumers: [consumer],
+      logger,
+      rescanIntervalMs: 60_000,
+      retryMaxDelayMs: 60_000,
+      ...options,
+    });
+    return { runner, db, cursors, logger };
+  }
+
+  it('waits out the backoff instead of redelivering a failed event on every rescan', async () => {
+    let now = 1_000_000;
+    const handle = vi.fn()
+      .mockRejectedValueOnce(new Error('transient'))
+      .mockResolvedValue(undefined);
+    const { runner, cursors } = createRetryHarness(
+      [sourceRow(1)],
+      { name: 'test', wants: () => true, handle },
+      { retryBaseDelayMs: 30_000, now: () => now },
+    );
+
+    await runner.start();
+    expect(handle).toHaveBeenCalledTimes(1);
+    expect(cursors.get('test')).toBeUndefined();
+
+    now += 29_000;
+    await runner.catchUpAll();
+    expect(handle).toHaveBeenCalledTimes(1);
+
+    now += 1_000;
+    await runner.catchUpAll();
+    expect(handle).toHaveBeenCalledTimes(2);
+    expect(cursors.get('test')).toBe(1);
+    runner.stop();
+  });
+
+  it('dead-letters a poison event after the attempt budget and catches up past it', async () => {
+    const poison = new Error('always fails');
+    const handle = vi.fn(async (event: { seq: number }) => {
+      if (event.seq === 1) throw poison;
+    });
+    const deadLetter = vi.fn().mockResolvedValue(undefined);
+    const { runner, cursors, logger } = createRetryHarness(
+      [sourceRow(1), sourceRow(2)],
+      { name: 'test', wants: () => true, handle, deadLetter },
+      { maxAttempts: 3, retryBaseDelayMs: 1 },
+    );
+
+    await runner.start();
+    await vi.waitFor(() => expect(cursors.get('test')).toBe(2));
+
+    expect(handle.mock.calls.filter(([event]) => event.seq === 1)).toHaveLength(3);
+    expect(deadLetter).toHaveBeenCalledTimes(1);
+    expect(deadLetter).toHaveBeenCalledWith(expect.objectContaining({ seq: 1 }), poison, 3);
+    expect(handle).toHaveBeenCalledWith(expect.objectContaining({ seq: 2 }));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('gave up on seq 1'), poison);
+    runner.stop();
+  });
+
+  it('holds the cursor when the dead letter itself cannot be recorded', async () => {
+    const handle = vi.fn().mockRejectedValue(new Error('always fails'));
+    const deadLetter = vi.fn().mockRejectedValue(new Error('db down'));
+    const { runner, db } = createRetryHarness(
+      [sourceRow(1)],
+      { name: 'test', wants: () => true, handle, deadLetter },
+      { maxAttempts: 1, retryBaseDelayMs: 60_000 },
+    );
+
+    await runner.start();
+
+    expect(deadLetter).toHaveBeenCalledTimes(1);
+    expect(db.advanceSpineCursor).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
+  it('keeps retrying, without skipping, consumers that have no dead-letter hook', async () => {
+    const handle = vi.fn().mockRejectedValue(new Error('always fails'));
+    const { runner, db } = createRetryHarness(
+      [sourceRow(1)],
+      { name: 'test', wants: () => true, handle },
+      { maxAttempts: 1, retryBaseDelayMs: 1 },
+    );
+
+    await runner.start();
+    await vi.waitFor(() => expect(handle.mock.calls.length).toBeGreaterThanOrEqual(3));
+
+    expect(db.advanceSpineCursor).not.toHaveBeenCalled();
+    runner.stop();
+  });
+});
+
+describe('event-trigger consumer failure handling (ctx-v6ef)', () => {
+  it('dead-letters a non-retryable firing on first delivery and keeps the spine moving', async () => {
+    const { triggerManager, runner, onFire, cursors, failures, rows } = createDurableTriggerHarness();
+    onFire.mockImplementation(async (agentId: string) => {
+      if (agentId === 'interactive-agent') throw modeNotAllowedError();
+    });
+    await triggerManager.start();
+    const poisonTrigger = await triggerManager.register({
+      agentId: 'interactive-agent',
+      eventType: 'custom.poison',
+      taskTemplate: 'never runs',
+      enabled: true,
+    });
+    await triggerManager.register({
+      agentId: 'background-agent',
+      eventType: 'custom.ready',
+      taskTemplate: 'process {{payload.value}}',
+      enabled: true,
+    });
+    await triggerManager.emitCustomEventAsync('custom.poison', 'agent-0', { value: 'x' });
+    await triggerManager.emitCustomEventAsync('custom.ready', 'agent-0', { value: 'next' });
+
+    await runner.start();
+
+    expect(failures).toEqual([{
+      triggerId: poisonTrigger.id,
+      eventSeq: 1,
+      eventType: 'custom.poison',
+      errorCode: 'agent_mode_not_allowed',
+      error: 'Agent mode "interactive" does not allow background turns',
+      attempts: 1,
+    }]);
+    expect(onFire).toHaveBeenCalledWith('background-agent', 'process next', expect.any(String), 1, 2);
+    expect(cursors.get('event-triggers')).toBeGreaterThanOrEqual(2);
+    const notice = rows.find((row) => row.sourceType === 'trigger.failed');
+    expect(JSON.parse(notice?.sourcePayload ?? '{}')).toMatchObject({
+      triggerId: poisonTrigger.id,
+      agentId: 'interactive-agent',
+      eventType: 'custom.poison',
+      eventSeq: 1,
+      errorCode: 'agent_mode_not_allowed',
+      attempts: 1,
+      _triggerDepth: 1,
+    });
+
+    // Settled: a later rescan does not try the poison firing again.
+    onFire.mockClear();
+    await runner.catchUpAll();
+    expect(onFire).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
+  it('retries a transient firing failure and fires once it recovers', async () => {
+    const { triggerManager, runner, onFire, db, cursors, failures } = createDurableTriggerHarness({
+      retryBaseDelayMs: 5,
+    });
+    onFire
+      .mockRejectedValueOnce(queueFullError())
+      .mockResolvedValue(undefined);
+    await triggerManager.start();
+    const trigger = await triggerManager.register({
+      agentId: 'agent-1',
+      eventType: 'custom.ready',
+      taskTemplate: 'process {{payload.value}}',
+      enabled: true,
+    });
+    await triggerManager.emitCustomEventAsync('custom.ready', 'agent-0', { value: 'later' });
+
+    await runner.start();
+    expect(cursors.get('event-triggers')).toBeUndefined();
+
+    await vi.waitFor(() => expect(cursors.get('event-triggers')).toBe(1));
+    expect(onFire).toHaveBeenCalledTimes(2);
+    expect(db.recordTriggerFiring).toHaveBeenCalledWith(trigger.id, 1);
+    expect(failures).toEqual([]);
+    runner.stop();
+  });
+
+  it('dead-letters a firing whose retries run out, then catches up past it', async () => {
+    const { triggerManager, runner, onFire, cursors, failures } = createDurableTriggerHarness({
+      maxAttempts: 3,
+      retryBaseDelayMs: 1,
+    });
+    onFire.mockImplementation(async (agentId: string) => {
+      if (agentId === 'busy-agent') throw queueFullError();
+    });
+    await triggerManager.start();
+    const busyTrigger = await triggerManager.register({
+      agentId: 'busy-agent',
+      eventType: 'custom.busy',
+      taskTemplate: 'busy',
+      enabled: true,
+    });
+    await triggerManager.register({
+      agentId: 'idle-agent',
+      eventType: 'custom.next',
+      taskTemplate: 'next',
+      enabled: true,
+    });
+    await triggerManager.emitCustomEventAsync('custom.busy', 'agent-0', {});
+    await triggerManager.emitCustomEventAsync('custom.next', 'agent-0', {});
+
+    await runner.start();
+    await vi.waitFor(() => expect(cursors.get('event-triggers')).toBeGreaterThanOrEqual(2));
+
+    expect(onFire.mock.calls.filter(([agentId]) => agentId === 'busy-agent')).toHaveLength(3);
+    expect(failures).toEqual([expect.objectContaining({
+      triggerId: busyTrigger.id,
+      eventSeq: 1,
+      errorCode: 'queue_full',
+      error: 'Gave up after 3 attempts: Turn queue is full for agent agent-1',
+      attempts: 3,
+    })]);
+    expect(onFire).toHaveBeenCalledWith('idle-agent', 'next', expect.any(String), 1, 2);
     runner.stop();
   });
 });

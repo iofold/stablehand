@@ -6,6 +6,7 @@ import { useAgentsStore } from '@/stores/agents';
 import {
   deleteTrigger,
   fetchEventTypes,
+  fetchTriggerFailures,
   fetchTriggers,
   updateTrigger,
 } from '@/lib/api';
@@ -16,6 +17,7 @@ vi.mock('@/lib/api', async () => {
   return {
     ...actual,
     fetchTriggers: vi.fn(),
+    fetchTriggerFailures: vi.fn(),
     fetchEventTypes: vi.fn(),
     updateTrigger: vi.fn(),
     deleteTrigger: vi.fn(),
@@ -23,6 +25,7 @@ vi.mock('@/lib/api', async () => {
 });
 
 const fetchTriggersMock = vi.mocked(fetchTriggers);
+const fetchTriggerFailuresMock = vi.mocked(fetchTriggerFailures);
 const fetchEventTypesMock = vi.mocked(fetchEventTypes);
 const updateTriggerMock = vi.mocked(updateTrigger);
 const deleteTriggerMock = vi.mocked(deleteTrigger);
@@ -70,6 +73,7 @@ describe('TriggersPage', () => {
       enabled: true,
       createdAt: 1_755_000_000_000,
     }]);
+    fetchTriggerFailuresMock.mockResolvedValue([]);
     fetchEventTypesMock.mockResolvedValue({ types: ['turn.completed'] });
     updateTriggerMock.mockResolvedValue({ id: 'trigger-1' } as never);
     deleteTriggerMock.mockResolvedValue(undefined);
@@ -81,6 +85,55 @@ describe('TriggersPage', () => {
     });
     container.remove();
     vi.clearAllMocks();
+  });
+
+  it('shows events that matched a trigger but did not start a run', async () => {
+    fetchTriggerFailuresMock.mockResolvedValue([
+      {
+        id: 'failure-2',
+        triggerId: 'trigger-1',
+        agentId: 'agent-1',
+        eventType: 'turn.completed',
+        eventSeq: 12,
+        errorCode: 'agent_mode_not_allowed',
+        error: 'Agent mode "interactive" does not allow background turns',
+        attempts: 1,
+        createdAt: 1_755_000_002_000,
+      },
+      {
+        id: 'failure-1',
+        triggerId: 'trigger-1',
+        agentId: 'agent-1',
+        eventType: 'turn.completed',
+        eventSeq: 11,
+        errorCode: 'queue_full',
+        error: 'Gave up after 8 attempts: queue full',
+        attempts: 8,
+        createdAt: 1_755_000_001_000,
+      },
+    ]);
+
+    act(() => {
+      root.render(<TriggersPage />);
+    });
+    await flushEffects();
+
+    const summary = container.querySelector('[data-testid="trigger-failures"]');
+    expect(summary?.textContent).toContain('2 events did not start a run');
+    expect(summary?.textContent).toContain('Latest: Agent mode "interactive" does not allow background turns');
+  });
+
+  it('keeps the trigger list usable when failed runs cannot be loaded', async () => {
+    fetchTriggerFailuresMock.mockRejectedValueOnce(new Error('failures down'));
+
+    act(() => {
+      root.render(<TriggersPage />);
+    });
+    await flushEffects();
+
+    expect(container.textContent).toContain('turn.completed');
+    expect(container.querySelector('[data-testid="trigger-failures"]')).toBeNull();
+    expect(container.textContent).not.toContain('Failed to load triggers.');
   });
 
   it('shows a blocking retryable error on trigger load failures', async () => {

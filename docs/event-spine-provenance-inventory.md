@@ -23,6 +23,7 @@ for a single bus event.
 | `client.connected` | `system` | 1 | Verbatim typed bus payload. |
 | `client.disconnected` | `system` | 1 | Verbatim typed bus payload. |
 | `trigger.fired` | `system` | 1 | Verbatim typed bus payload. |
+| `trigger.failed` | `system` | 1 | Verbatim typed bus payload. |
 | `message.committed` | `run` | 1 | `CUSTOM name: stablehand.message.committed`. |
 | `turn.pending` | `run` | 1 | `CUSTOM name: stablehand.turn.pending`. |
 | `ag_ui.event` | `run` | 1 | Passthrough AG-UI frame type from `payload.event.type`, defaulting to `CUSTOM`. |

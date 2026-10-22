@@ -112,6 +112,31 @@ export const TriggerSchema = z.strictObject({
 export type Trigger = z.infer<typeof TriggerSchema>;
 export const TriggerListResponseSchema = z.array(TriggerSchema);
 
+// ── GET /api/triggers/failures (ctx-v6ef) ─────────────────────────────
+/**
+ * A dead-lettered trigger firing: the matching event did not start a run,
+ * either because the target refused it (non-retryable, attempts = 1) or
+ * because retries ran out. The event spine has moved past it.
+ */
+export const TriggerFiringFailureSchema = z.strictObject({
+  id: z.string(),
+  triggerId: z.string(),
+  agentId: z.string(),
+  /** Type of the source event that matched; null on rows from before ctx-v6ef. */
+  eventType: z.string().nullable(),
+  eventSeq: z.number().int().nonnegative(),
+  /** Machine token, e.g. `agent_mode_not_allowed`, `queue_full`, `trigger_fire_failed`. */
+  errorCode: z.string().nullable(),
+  error: z.string().nullable(),
+  attempts: z.number().int().positive(),
+  createdAt: EpochMillisSchema,
+});
+export type TriggerFiringFailure = z.infer<typeof TriggerFiringFailureSchema>;
+export const TriggerFiringFailureListResponseSchema = z.strictObject({
+  failures: z.array(TriggerFiringFailureSchema),
+});
+export type TriggerFiringFailureListResponse = z.infer<typeof TriggerFiringFailureListResponseSchema>;
+
 // ── Typed throttle bodies (U6) ────────────────────────────────────────
 // Convention (S12/R3): `error` is the human sentence, `code` the machine
 // token; every throttle mirrors its Retry-After header as `retryAfterSec`.

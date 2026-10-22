@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TypedEventBus } from '../bus.js';
 import { EventTriggerManager, TriggerConflictError } from '../trigger-manager.js';
+import { RetryableTriggerFireError } from '../trigger-errors.js';
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { SpineRawEvent } from '../spine-consumer-runner.js';
 
@@ -12,6 +13,7 @@ function createDbMock() {
     getTriggerBySignature: vi.fn().mockResolvedValue(undefined),
     hasTriggerFiring: vi.fn().mockResolvedValue(false),
     recordTriggerFiring: vi.fn().mockResolvedValue({ id: 'firing-1' }),
+    recordTriggerFiringFailure: vi.fn().mockResolvedValue({ id: 'failed-1' }),
   } as unknown as DatabaseRepository & {
     getTriggers: ReturnType<typeof vi.fn>;
     saveTrigger: ReturnType<typeof vi.fn>;
@@ -19,6 +21,7 @@ function createDbMock() {
     getTriggerBySignature: ReturnType<typeof vi.fn>;
     hasTriggerFiring: ReturnType<typeof vi.fn>;
     recordTriggerFiring: ReturnType<typeof vi.fn>;
+    recordTriggerFiringFailure: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -234,5 +237,96 @@ describe('EventTriggerManager durable mutations', () => {
     expect(db.recordTriggerFiring).toHaveBeenCalledWith(expect.any(String), 42);
     await manager.handleRawEvent(rawEvent({ seq: 43 }));
     expect(onFire).toHaveBeenCalledOnce();
+  });
+
+  it('settles a non-retryable firing as a dead letter instead of holding the cursor', async () => {
+    const { manager, db, onFire, bus } = createManager();
+    const notices: unknown[] = [];
+    bus.on('trigger.failed', (payload) => {
+      notices.push(payload);
+    });
+    onFire.mockRejectedValueOnce(Object.assign(
+      new Error('Agent mode "interactive" does not allow background turns'),
+      { code: 'agent_mode_not_allowed' },
+    ));
+    const trigger = await manager.register({
+      agentId: 'agent-1',
+      eventType: 'custom.ready',
+      taskTemplate: 'process',
+      enabled: true,
+    });
+
+    await expect(manager.handleRawEvent(rawEvent())).resolves.toBeUndefined();
+
+    expect(db.recordTriggerFiring).not.toHaveBeenCalled();
+    expect(db.recordTriggerFiringFailure).toHaveBeenCalledWith({
+      triggerId: trigger.id,
+      eventSeq: 42,
+      eventType: 'custom.ready',
+      errorCode: 'agent_mode_not_allowed',
+      error: 'Agent mode "interactive" does not allow background turns',
+      attempts: 1,
+    });
+    await vi.waitFor(() => expect(notices).toEqual([expect.objectContaining({
+      triggerId: trigger.id,
+      agentId: 'agent-1',
+      eventSeq: 42,
+      errorCode: 'agent_mode_not_allowed',
+    })]));
+  });
+
+  it('rethrows retryable firing failures so the spine runner retries them', async () => {
+    const { manager, db, onFire } = createManager();
+    onFire.mockRejectedValueOnce(Object.assign(new Error('queue full'), { code: 'queue_full' }));
+    const trigger = await manager.register({
+      agentId: 'agent-1',
+      eventType: 'custom.ready',
+      taskTemplate: 'process',
+      enabled: true,
+    });
+
+    const failure = await manager.handleRawEvent(rawEvent()).catch((err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(RetryableTriggerFireError);
+    expect((failure as RetryableTriggerFireError).failures).toEqual([{
+      triggerId: trigger.id,
+      agentId: 'agent-1',
+      failure: { retryable: true, code: 'queue_full', message: 'queue full' },
+    }]);
+    expect(db.recordTriggerFiringFailure).not.toHaveBeenCalled();
+  });
+
+  it('dead-letters only the triggers that have not settled when retries run out', async () => {
+    const { manager, db } = createManager();
+    const settled = await manager.register({
+      agentId: 'agent-1',
+      eventType: 'custom.ready',
+      taskTemplate: 'done already',
+      enabled: true,
+    });
+    const pending = await manager.register({
+      agentId: 'agent-2',
+      eventType: 'custom.ready',
+      taskTemplate: 'still failing',
+      enabled: true,
+    });
+    db.hasTriggerFiring.mockImplementation(async (triggerId: string) => triggerId === settled.id);
+    const error = new RetryableTriggerFireError('custom.ready', 42, [{
+      triggerId: pending.id,
+      agentId: 'agent-2',
+      failure: { retryable: true, code: 'queue_full', message: 'queue full' },
+    }]);
+
+    await manager.deadLetterRawEvent(rawEvent(), error, 8);
+
+    expect(db.recordTriggerFiringFailure).toHaveBeenCalledTimes(1);
+    expect(db.recordTriggerFiringFailure).toHaveBeenCalledWith({
+      triggerId: pending.id,
+      eventSeq: 42,
+      eventType: 'custom.ready',
+      errorCode: 'queue_full',
+      error: 'Gave up after 8 attempts: queue full',
+      attempts: 8,
+    });
   });
 });

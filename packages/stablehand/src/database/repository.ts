@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { DrizzleDb } from './connection.js';
 import * as pgSchema from './schema-pg.js';
 import { sanitizeDbJsonValue, sanitizeDbText, sanitizeDbValue } from '../util/sanitize.js';
-import { isUniqueConstraintViolation } from './errors.js';
+import { isForeignKeyViolation, isUniqueConstraintViolation } from './errors.js';
 import {
   SANDBOX_SESSION_STATUSES,
   projectConversationStatus,
@@ -4363,6 +4363,88 @@ export class DatabaseRepository {
     return row;
   }
 
+  /**
+   * Dead-letter one trigger firing (ctx-v6ef): the run was refused for a
+   * non-retryable reason or retries ran out. The row settles (trigger, seq)
+   * exactly like a successful firing, so replays skip it and the spine cursor
+   * can move on. A firing already settled either way is left untouched
+   * (returns undefined), and so is a trigger deleted in the meantime: its
+   * history went with it via the cascade.
+   */
+  async recordTriggerFiringFailure(input: {
+    triggerId: string;
+    eventSeq: number;
+    eventType: string;
+    errorCode: string;
+    error: string;
+    attempts: number;
+  }): Promise<TriggerFiringRow | undefined> {
+    const sanitizedTriggerId = sanitizeDbText(input.triggerId, 'triggerFirings.triggerId');
+    try {
+      const [row] = await this.db
+        .insert(this.schema.triggerFirings)
+        .values({
+          triggerId: sanitizedTriggerId,
+          eventSeq: input.eventSeq,
+          createdAt: Date.now(),
+          status: 'failed',
+          eventType: sanitizeDbText(input.eventType, 'triggerFirings.eventType'),
+          errorCode: sanitizeDbText(input.errorCode, 'triggerFirings.errorCode'),
+          error: sanitizeDbText(input.error, 'triggerFirings.error'),
+          attempts: input.attempts,
+        })
+        .onConflictDoNothing({
+          target: [
+            this.schema.triggerFirings.triggerId,
+            this.schema.triggerFirings.eventSeq,
+          ],
+        })
+        .returning();
+      return row;
+    } catch (err) {
+      if (isForeignKeyViolation(err)) {
+        return undefined;
+      }
+      throw err;
+    }
+  }
+
+  /** Newest-first trigger dead letters, optionally scoped to one trigger or target agent. */
+  async listTriggerFiringFailures(options: {
+    triggerId?: string;
+    agentId?: string;
+    limit?: number;
+  } = {}): Promise<Array<TriggerFiringRow & { agentId: string }>> {
+    const conditions: SQL[] = [eq(this.schema.triggerFirings.status, 'failed')];
+    if (options.triggerId) {
+      conditions.push(eq(
+        this.schema.triggerFirings.triggerId,
+        sanitizeDbText(options.triggerId, 'triggerFirings.triggerId'),
+      ));
+    }
+    if (options.agentId) {
+      conditions.push(eq(
+        this.schema.eventTriggers.agentId,
+        sanitizeDbText(options.agentId, 'eventTriggers.agentId'),
+      ));
+    }
+    const rows = await this.db
+      .select({
+        firing: this.schema.triggerFirings,
+        agentId: this.schema.eventTriggers.agentId,
+      })
+      .from(this.schema.triggerFirings)
+      .innerJoin(
+        this.schema.eventTriggers,
+        eq(this.schema.eventTriggers.id, this.schema.triggerFirings.triggerId),
+      )
+      .where(and(...conditions))
+      .orderBy(desc(this.schema.triggerFirings.createdAt), desc(this.schema.triggerFirings.eventSeq))
+      .limit(Math.min(Math.max(options.limit ?? 100, 1), 500));
+    return rows.map((row) => ({ ...row.firing, agentId: row.agentId }));
+  }
+
+  /** True once (trigger, seq) is settled: fired, or dead-lettered as failed. */
   async hasTriggerFiring(triggerId: string, eventSeq: number): Promise<boolean> {
     const sanitizedTriggerId = sanitizeDbText(triggerId, 'triggerFirings.triggerId');
     const row = await this.db.query.triggerFirings.findFirst({

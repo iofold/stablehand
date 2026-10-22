@@ -12,11 +12,13 @@ import { cn } from '@/lib/utils';
 import { useAgentsStore } from '@/stores/agents';
 import {
   fetchTriggers,
+  fetchTriggerFailures,
   createTrigger,
   updateTrigger,
   deleteTrigger,
   fetchEventTypes,
   type Trigger,
+  type TriggerFiringFailure,
 } from '@/lib/api';
 import { AlertBanner } from '@/components/ui/AlertBanner';
 import { PageShell } from '@/components/ui/PageShell';
@@ -37,6 +39,37 @@ const EMPTY_FORM: TriggerFormData = {
   selector: '',
   enabled: true,
 };
+
+const FAILURE_FETCH_LIMIT = 100;
+
+function groupFailuresByTrigger(failures: TriggerFiringFailure[]): Record<string, TriggerFiringFailure[]> {
+  const grouped: Record<string, TriggerFiringFailure[]> = {};
+  for (const failure of failures) {
+    (grouped[failure.triggerId] ??= []).push(failure);
+  }
+  return grouped;
+}
+
+/** Events that matched a trigger but did not start a run; `failures` is newest first. */
+function TriggerFailureSummary({ failures }: { failures: TriggerFiringFailure[] }) {
+  const [latest] = failures;
+  if (!latest) return null;
+  const count = failures.length >= FAILURE_FETCH_LIMIT
+    ? `${FAILURE_FETCH_LIMIT}+ events`
+    : failures.length === 1 ? '1 event' : `${failures.length} events`;
+  const reason = latest.error ?? latest.errorCode ?? 'Unknown reason';
+  return (
+    <div
+      data-testid="trigger-failures"
+      className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200 space-y-0.5"
+    >
+      <p className="font-medium">{count} did not start a run</p>
+      <p className="line-clamp-2 text-amber-200/80" title={reason}>
+        Latest: {reason}
+      </p>
+    </div>
+  );
+}
 
 export function TriggersPage() {
   const agents = useAgentsStore((s) => s.agents);
@@ -66,6 +99,9 @@ export function TriggersPage() {
   // Per-row inline error (id -> message). Cleared on row interaction or reload.
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
 
+  // Events that matched a trigger but did not start a run (newest first).
+  const [failuresByTrigger, setFailuresByTrigger] = useState<Record<string, TriggerFiringFailure[]>>({});
+
   const agentNameMap = useMemo(() => {
     const map: Record<string, string> = {};
     for (const a of agents) map[a.id] = a.name;
@@ -94,6 +130,18 @@ export function TriggersPage() {
       console.debug('[Triggers] Load failed:', err);
     } finally {
       setLoading(false);
+    }
+
+    // Failed runs are supplementary: the trigger list stays usable without them.
+    try {
+      const failures = await fetchTriggerFailures({
+        agentId: agentFilter || undefined,
+        limit: FAILURE_FETCH_LIMIT,
+      });
+      setFailuresByTrigger(groupFailuresByTrigger(failures));
+    } catch (err) {
+      setFailuresByTrigger({});
+      console.debug('[Triggers] Failed-run load failed:', err);
     }
   }, [agentFilter]);
 
@@ -477,6 +525,8 @@ export function TriggersPage() {
                     {trigger.taskTemplate}
                   </p>
                 </div>
+
+                <TriggerFailureSummary failures={failuresByTrigger[trigger.id] ?? []} />
 
                 {/* Status badge */}
                 <div className="flex items-center justify-between">

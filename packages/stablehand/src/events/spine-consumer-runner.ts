@@ -17,6 +17,14 @@ export interface SpineConsumer {
   name: string;
   wants(sourceType: string): boolean;
   handle(event: SpineRawEvent): Promise<void>;
+  /**
+   * Durably record an event this consumer is giving up on after `maxAttempts`
+   * failed catch-up deliveries (ADR-017 amendment, ctx-v6ef). Resolving lets
+   * the cursor move past the event; throwing holds it and the give-up is
+   * retried after backoff. Consumers without this hook keep retrying with
+   * capped backoff and never skip an event.
+   */
+  deadLetter?(event: SpineRawEvent, error: unknown, attempts: number): Promise<void>;
 }
 
 interface Logger {
@@ -32,10 +40,27 @@ export interface SpineConsumerRunnerDeps {
   logger: Logger;
   rescanIntervalMs?: number;
   batchSize?: number;
+  /** Catch-up deliveries of one event before a consumer's deadLetter hook runs. */
+  maxAttempts?: number;
+  /** Delay before the second delivery; doubles per attempt up to retryMaxDelayMs. */
+  retryBaseDelayMs?: number;
+  retryMaxDelayMs?: number;
+  now?: () => number;
 }
 
 const DEFAULT_RESCAN_INTERVAL_MS = 30_000;
 const DEFAULT_BATCH_SIZE = 500;
+// 8 deliveries spaced 5 s, 10 s, 20 s, ... capped at 5 min: about ten minutes
+// of retries before a consumer with a deadLetter hook gives up on an event.
+export const DEFAULT_SPINE_MAX_ATTEMPTS = 8;
+export const DEFAULT_SPINE_RETRY_BASE_DELAY_MS = 5_000;
+export const DEFAULT_SPINE_RETRY_MAX_DELAY_MS = 300_000;
+
+interface RetryState {
+  seq: number;
+  attempts: number;
+  nextAttemptAt: number;
+}
 
 function parseSourcePayload(row: Pick<EventFrameRow, 'seq' | 'sourcePayload'>): Record<string, unknown> | null {
   if (!row.sourcePayload) {
@@ -99,20 +124,36 @@ function frameToRawEvent(frame: PersistedFrame): SpineRawEvent | null {
  * This avoids skipping lower seqs that might commit after a higher seq while
  * still making live delivery fast. Consumer effects must therefore be
  * idempotent by event seq.
+ *
+ * A failed catch-up delivery holds the cursor and is retried with exponential
+ * backoff. After `maxAttempts` deliveries, a consumer that implements
+ * `deadLetter` durably records the event and the cursor moves on, so one
+ * poison event cannot block the events behind it (ctx-v6ef). Consumers settle
+ * their own non-retryable failures inside `handle` without throwing.
  */
 export class SpineConsumerRunner {
   private readonly consumers: SpineConsumer[];
   private readonly rescanIntervalMs: number;
   private readonly batchSize: number;
+  private readonly maxAttempts: number;
+  private readonly retryBaseDelayMs: number;
+  private readonly retryMaxDelayMs: number;
+  private readonly now: () => number;
   private running = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private unsubscribe: (() => void) | null = null;
   private catchUpInProgress = new Set<string>();
+  private readonly retryState = new Map<string, RetryState>();
+  private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly deps: SpineConsumerRunnerDeps) {
     this.consumers = deps.consumers;
     this.rescanIntervalMs = deps.rescanIntervalMs ?? DEFAULT_RESCAN_INTERVAL_MS;
     this.batchSize = deps.batchSize ?? DEFAULT_BATCH_SIZE;
+    this.maxAttempts = Math.max(1, deps.maxAttempts ?? DEFAULT_SPINE_MAX_ATTEMPTS);
+    this.retryBaseDelayMs = deps.retryBaseDelayMs ?? DEFAULT_SPINE_RETRY_BASE_DELAY_MS;
+    this.retryMaxDelayMs = deps.retryMaxDelayMs ?? DEFAULT_SPINE_RETRY_MAX_DELAY_MS;
+    this.now = deps.now ?? Date.now;
   }
 
   async start(): Promise<void> {
@@ -143,6 +184,11 @@ export class SpineConsumerRunner {
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.catchUpInProgress.clear();
+    for (const retryTimer of this.retryTimers.values()) {
+      clearTimeout(retryTimer);
+    }
+    this.retryTimers.clear();
+    this.retryState.clear();
   }
 
   async catchUpAll(): Promise<void> {
@@ -172,7 +218,8 @@ export class SpineConsumerRunner {
     this.catchUpInProgress.add(consumer.name);
     try {
       let cursor = await this.deps.db.getSpineCursor(consumer.name);
-      while (this.running) {
+      let holding = false;
+      while (this.running && !holding) {
         const rows = await this.deps.db.getSourceEventsSince(cursor, this.batchSize);
         if (rows.length === 0) {
           break;
@@ -180,7 +227,11 @@ export class SpineConsumerRunner {
         for (const row of rows) {
           const event = rowToRawEvent(row);
           if (event && consumer.wants(event.sourceType)) {
-            await consumer.handle(event);
+            if (!await this.deliver(consumer, event)) {
+              // Hold the cursor behind this event until a retry settles it.
+              holding = true;
+              break;
+            }
           } else if (!event) {
             this.deps.logger.warn(
               `[SpineConsumerRunner] skipping malformed source event row seq ${row.seq} for ${consumer.name}`,
@@ -198,5 +249,86 @@ export class SpineConsumerRunner {
     } finally {
       this.catchUpInProgress.delete(consumer.name);
     }
+  }
+
+  /**
+   * One ordered catch-up delivery. Resolves true once the event is settled
+   * (handled, or dead-lettered after the attempt budget) and the cursor may
+   * advance; false while the cursor must hold behind it.
+   */
+  private async deliver(consumer: SpineConsumer, event: SpineRawEvent): Promise<boolean> {
+    const state = this.retryState.get(consumer.name);
+    const pending = state?.seq === event.seq ? state : undefined;
+    if (pending && this.now() < pending.nextAttemptAt) {
+      this.scheduleRetry(consumer, pending.nextAttemptAt - this.now());
+      return false;
+    }
+
+    try {
+      await consumer.handle(event);
+    } catch (err) {
+      const attempts = (pending?.attempts ?? 0) + 1;
+      if (consumer.deadLetter && attempts >= this.maxAttempts) {
+        return this.giveUp(consumer, event, err, attempts);
+      }
+      const delayMs = this.holdForRetry(consumer, event.seq, attempts);
+      this.deps.logger.error(
+        `[SpineConsumerRunner] ${consumer.name} failed seq ${event.seq} (${event.sourceType}), `
+        + `attempt ${attempts}${consumer.deadLetter ? ` of ${this.maxAttempts}` : ''}; retrying in ${delayMs}ms:`,
+        err,
+      );
+      return false;
+    }
+
+    this.retryState.delete(consumer.name);
+    return true;
+  }
+
+  private async giveUp(
+    consumer: SpineConsumer,
+    event: SpineRawEvent,
+    err: unknown,
+    attempts: number,
+  ): Promise<boolean> {
+    try {
+      await consumer.deadLetter?.(event, err, attempts);
+    } catch (deadLetterErr) {
+      const delayMs = this.holdForRetry(consumer, event.seq, attempts);
+      this.deps.logger.error(
+        `[SpineConsumerRunner] ${consumer.name} could not dead-letter seq ${event.seq} (${event.sourceType}); `
+        + `holding the cursor and retrying in ${delayMs}ms:`,
+        deadLetterErr,
+      );
+      return false;
+    }
+    this.retryState.delete(consumer.name);
+    this.deps.logger.warn(
+      `[SpineConsumerRunner] ${consumer.name} gave up on seq ${event.seq} (${event.sourceType}) after `
+      + `${attempts} attempts; dead-lettered it and moved on:`,
+      err,
+    );
+    return true;
+  }
+
+  private holdForRetry(consumer: SpineConsumer, seq: number, attempts: number): number {
+    const delayMs = Math.min(this.retryMaxDelayMs, this.retryBaseDelayMs * 2 ** (attempts - 1));
+    this.retryState.set(consumer.name, { seq, attempts, nextAttemptAt: this.now() + delayMs });
+    this.scheduleRetry(consumer, delayMs);
+    return delayMs;
+  }
+
+  private scheduleRetry(consumer: SpineConsumer, delayMs: number): void {
+    if (!this.running || this.retryTimers.has(consumer.name)) {
+      return;
+    }
+    const retryTimer = setTimeout(() => {
+      this.retryTimers.delete(consumer.name);
+      this.catchUpConsumer(consumer).catch((err) => this.deps.logger.error(
+        `[SpineConsumerRunner] retry catch-up failed for ${consumer.name}:`,
+        err,
+      ));
+    }, Math.max(0, delayMs));
+    retryTimer.unref?.();
+    this.retryTimers.set(consumer.name, retryTimer);
   }
 }

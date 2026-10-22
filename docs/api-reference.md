@@ -1561,7 +1561,46 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
 
 - **Query params:** None.
 - **Response:** trigger object.
-- **Notes:** Returns `404` if `agentId` does not exist.
+- **Notes:** Returns `404` if `agentId` does not exist. A matching event starts a
+  **background** run on the agent, so its `mode` must be `background` or `both`.
+  When the run cannot start, the firing is recorded as failed (see
+  `GET /api/triggers/failures`) and a `trigger.failed` event is published.
+  Refusals that retrying cannot fix (`agent_mode_not_allowed`, `budget_exceeded`,
+  `tag_conflict`, `tag_not_provisioned`, `trigger_target_not_found`,
+  `trigger_target_misconfigured`, `invalid_trigger_input`) fail on the first
+  attempt. Other errors, such as `queue_full`, are retried with backoff for about
+  ten minutes first. Either way, later events keep flowing.
+
+#### `GET /api/triggers/failures`
+
+- **Description:** Lists trigger firings that did not start a run, newest first.
+- **Query params:** `triggerId` (optional), `agentId` (optional, the trigger's
+  target agent), `limit` (optional, 1–500, default 100).
+- **Response:**
+
+```json
+{
+  "failures": [
+    {
+      "id": "8d0f5f8e-3c1a-4e57-9d2b-6a1c0e7b4f21",
+      "triggerId": "2f4e6d8c-0a1b-4c3d-9e5f-7a9b1d3f5c7e",
+      "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+      "eventType": "analysis.complete",
+      "eventSeq": 48213,
+      "errorCode": "agent_mode_not_allowed",
+      "error": "Agent mode \"interactive\" does not allow background turns",
+      "attempts": 1,
+      "createdAt": 1761134400000
+    }
+  ]
+}
+```
+
+- **Notes:** `attempts` is 1 for immediate refusals and the retry count when
+  retries ran out (`error` then starts with `Gave up after N attempts:`). Failed
+  firings are not replayed automatically: fix the cause and emit the event again.
+  Deleting a trigger deletes its failure history. Returns `400` for an invalid
+  `limit`.
 
 #### `GET /api/triggers`
 

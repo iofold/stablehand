@@ -372,9 +372,16 @@ export const triggerFirings = pgTable('trigger_firings', {
   triggerId: text('trigger_id').notNull().references(() => eventTriggers.id, { onDelete: 'cascade' }),
   eventSeq: bigint('event_seq', { mode: 'number' }).notNull(),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  /** 'fired' = run admitted; 'failed' = dead letter (refused or retries exhausted). */
+  status: text('status', { enum: ['fired', 'failed'] }).notNull().default('fired'),
+  eventType: text('event_type'),
+  errorCode: text('error_code'),
+  error: text('error'),
+  attempts: integer('attempts').notNull().default(1),
 }, (table) => ({
   triggerEventSeqIdx: uniqueIndex('idx_trigger_firings_trigger_event_seq').on(table.triggerId, table.eventSeq),
   eventSeqIdx: index('idx_trigger_firings_event_seq').on(table.eventSeq),
+  failedIdx: index('idx_trigger_firings_failed').on(table.createdAt).where(sql`${table.status} = 'failed'`),
 }));
 
 export const schedules = pgTable('schedules', {

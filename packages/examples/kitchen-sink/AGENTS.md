@@ -63,7 +63,8 @@ langgraph-analyst  --[analysis.complete]--> claude-writer  --[report.ready]--> p
 3. **Auditor** (PI, `mode: both`) — Triggered by both events, logs audit trail, emits `audit.logged`
 
 Triggers start **background** runs, so every trigger target must declare `mode: background` or
-`mode: both`. An `interactive`-only target refuses the run (`agent_mode_not_allowed`). `both`
+`mode: both`. An `interactive`-only target refuses the run (`agent_mode_not_allowed`); the firing
+is recorded as failed and listed by `GET /api/triggers/failures` and on the Triggers page. `both`
 keeps the writer and auditor available for direct chat too.
 `tests/integration/kitchen-sink-chain.test.ts` seeds this directory with `seed.ts` against a real
 orchestrator and checks that every trigger-started run is admitted.

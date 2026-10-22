@@ -185,7 +185,7 @@ interrupt.requested, interrupt.resolved,
 feedback.received,
 agent.created, agent.deleted,
 client.connected, client.disconnected,
-trigger.fired,
+trigger.fired, trigger.failed,
 custom (type: string, payload: object)
 ```
 

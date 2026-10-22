@@ -92,6 +92,7 @@ export const KNOWN_BUS_EVENT_NAMES: readonly string[] = [
   'client.connected',
   'client.disconnected',
   'trigger.fired',
+  'trigger.failed',
   'message.committed',
   'message.updated',
   'turn.pending',

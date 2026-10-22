@@ -56,3 +56,34 @@ throws on retryable resume failures so the cursor does not advance.
   claim/lease or `FOR UPDATE SKIP LOCKED` semantics.
 - New business consumers should use the runner instead of adding bus listeners
   or separate polling tables.
+
+## Amendment: bounded retries and dead letters (2026-10-22, ctx-v6ef)
+
+Holding the cursor on every failure made one poison event block a consumer's
+catch-up forever: a trigger whose target refused background runs
+(`agent_mode_not_allowed`) was retried every 30 s indefinitely, and every event
+behind it waited.
+
+- **Consumers settle non-retryable failures themselves.** The trigger consumer
+  classifies each fire error. Errors that retrying cannot fix (target mode,
+  budget or tag policy, missing or misconfigured agent, invalid input) are
+  written at once as a `trigger_firings` row with `status = 'failed'`,
+  `error_code`, `error` and `attempts`, a `trigger.failed` event is published,
+  and `handle` resolves. The row settles `(trigger_id, event_seq)` just like a
+  successful firing, so replays skip it.
+- **The runner bounds retryable failures.** A failed catch-up delivery holds
+  the cursor and is retried with exponential backoff (5 s doubling to a 5 min
+  cap) instead of on every rescan. After 8 deliveries (about ten minutes) the
+  runner calls the consumer's optional `deadLetter(event, error, attempts)`;
+  once that resolves, the cursor moves past the event. If the dead letter
+  cannot be written, the cursor still holds. Retry state is in memory, so a
+  restart grants a fresh attempt budget.
+- **Consumers without a `deadLetter` hook never skip.** They keep the
+  original hold-and-retry semantics, now with capped backoff. The webhook
+  relay is one: its failures are database faults, and it must not drop
+  deliveries.
+- **Failures are visible.** `GET /api/triggers/failures` lists dead-lettered
+  firings (newest first, filterable by trigger or agent), and the Triggers page
+  shows them on each trigger card. A dead-lettered firing is not replayed
+  automatically; fix the cause and re-emit the event if the run is still
+  wanted.

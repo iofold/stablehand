@@ -99,6 +99,7 @@ const EXPECTED_ROUTE_ACCESS: Readonly<Record<string, ExpectedRouteAccess>> = {
   'GET /api/settings': 'master',
   'PUT /api/settings': 'master',
   'GET /api/triggers': 'master',
+  'GET /api/triggers/failures': 'master',
   'POST /api/triggers': 'master',
   'GET /api/triggers/:id': 'master',
   'PUT /api/triggers/:id': 'master',
@@ -179,7 +180,7 @@ describe('API auth route coverage', () => {
         : ((route as typeof route & { capability?: CapabilityVerb }).capability ?? 'master'),
     ]));
 
-    expect(routes).toHaveLength(82);
+    expect(routes).toHaveLength(83);
     expect(Object.keys(actual)).toHaveLength(routes.length);
     expect(actual).toEqual(EXPECTED_ROUTE_ACCESS);
   });
@@ -192,7 +193,7 @@ describe('API auth route coverage', () => {
         return { method: route.slice(0, separator), url: route.slice(separator + 1) };
       });
 
-    expect(masterOnlyRoutes).toHaveLength(39);
+    expect(masterOnlyRoutes).toHaveLength(40);
     for (const route of masterOnlyRoutes) {
       const res = await app.inject({
         method: route.method,

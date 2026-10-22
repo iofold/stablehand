@@ -173,6 +173,16 @@ const EVENT_MAP_SAMPLES: { [K in EventName]: EventMap[K] } = {
     turnId: 'turn-1',
     timestamp: 1_000,
   },
+  'trigger.failed': {
+    triggerId: 'trigger-1',
+    agentId: 'agent-1',
+    eventType: 'custom.ready',
+    eventSeq: 42,
+    errorCode: 'agent_mode_not_allowed',
+    error: 'Agent mode "interactive" does not allow background turns',
+    attempts: 1,
+    timestamp: 1_000,
+  },
   'message.committed': {
     turnId: 'turn-1',
     agentId: 'agent-1',

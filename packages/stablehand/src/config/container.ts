@@ -15,6 +15,7 @@ import { SSEManager } from '../orchestrator/sse.js';
 import { InterruptManager } from '../orchestrator/interrupt.js';
 import { createTriggerSpineConsumer, EventTriggerManager, type TriggerRunCallback } from '../events/trigger-manager.js';
 import { SpineConsumerRunner } from '../events/spine-consumer-runner.js';
+import { TriggerTargetError } from '../events/trigger-errors.js';
 import { AgentTurnService } from '../orchestrator/agent-turn-service.js';
 import { CallbackDispatcher } from '../orchestrator/callback-dispatcher.js';
 import { createGuardedFetch } from '../util/egress.js';
@@ -139,9 +140,20 @@ export function createTriggerRunCallback({
 }: TriggerRunCallbackDeps): TriggerRunCallback {
   return async (agentId, task, triggerId, triggerDepth, eventSeq) => {
     const agent = await db.getAgent(agentId);
+    // ctx-v6ef: these used to log and return, which recorded the firing as a
+    // success. They are permanent until someone fixes the agent, so the
+    // trigger manager dead-letters them without holding the spine cursor.
     if (!agent) {
-      console.error(`[EventTriggerManager] agent ${agentId} not found for trigger ${triggerId}`);
-      return;
+      throw new TriggerTargetError(
+        'trigger_target_not_found',
+        `Agent ${agentId} targeted by trigger ${triggerId} no longer exists`,
+      );
+    }
+    if (!agent.harness) {
+      throw new TriggerTargetError(
+        'trigger_target_misconfigured',
+        `Agent ${agentId} targeted by trigger ${triggerId} has no harness`,
+      );
     }
     const requestedTurnId = eventSeq === undefined
       ? undefined

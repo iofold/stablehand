@@ -12,6 +12,11 @@ import type { EventTrigger } from './triggers.js';
 import { interpolateTemplate } from './triggers.js';
 import { matchesSelector } from './wait-condition.js';
 import type { SpineConsumer, SpineRawEvent } from './spine-consumer-runner.js';
+import {
+  classifyTriggerFireError,
+  RetryableTriggerFireError,
+  type TriggerFireFailure,
+} from './trigger-errors.js';
 
 /** Maximum trigger depth to prevent infinite trigger chains. */
 export const MAX_TRIGGER_DEPTH = 5;
@@ -81,7 +86,15 @@ export function createTriggerSpineConsumer(manager: EventTriggerManager): SpineC
     name: 'event-triggers',
     wants: (sourceType) => manager.hasEnabledTriggerForEvent(sourceType),
     handle: (event) => manager.handleRawEvent(event),
+    deadLetter: (event, error, attempts) => manager.deadLetterRawEvent(event, error, attempts),
   };
+}
+
+/** Custom events nest the caller's fields under `payload`; selectors and templates see both levels. */
+function flattenEventPayload(payloadObj: Record<string, unknown>): Record<string, unknown> {
+  return 'payload' in payloadObj && typeof payloadObj.payload === 'object' && payloadObj.payload !== null
+    ? { ...payloadObj, ...(payloadObj.payload as Record<string, unknown>) }
+    : payloadObj;
 }
 
 /**
@@ -373,23 +386,10 @@ export class EventTriggerManager {
     }
 
     const firedAgents = new Set<string>();
-    const fireFailures: unknown[] = [];
+    const unsettled: Array<{ trigger: EventTrigger; err: unknown; failure: TriggerFireFailure }> = [];
+    const flatPayload = flattenEventPayload(payloadObj);
 
-    for (const trigger of this.triggers.values()) {
-      if (!trigger.enabled) continue;
-      if (this.retiredAgentIds.has(trigger.agentId)) continue;
-      if (trigger.eventType !== eventType) continue;
-
-      // Check selector match
-      if (trigger.selector && Object.keys(trigger.selector).length > 0) {
-        // For custom events, the payload fields may be nested under 'payload'
-        const matchTarget = 'payload' in payloadObj && typeof payloadObj.payload === 'object'
-          ? { ...payloadObj, ...(payloadObj.payload as Record<string, unknown>) }
-          : payloadObj;
-
-        if (!matchesSelector(matchTarget, trigger.selector)) continue;
-      }
-
+    for (const trigger of this.matchingTriggers(eventType, flatPayload)) {
       if (firedAgents.has(trigger.agentId)) continue;
       if (eventSeq !== undefined && await this.db.hasTriggerFiring(trigger.id, eventSeq)) {
         firedAgents.add(trigger.agentId);
@@ -397,41 +397,153 @@ export class EventTriggerManager {
       }
       if (this.retiredAgentIds.has(trigger.agentId)) continue;
 
-      // Interpolate the task template
-      const flatPayload = 'payload' in payloadObj && typeof payloadObj.payload === 'object'
-        ? { ...payloadObj, ...(payloadObj.payload as Record<string, unknown>) }
-        : payloadObj;
       const task = interpolateTemplate(trigger.taskTemplate, flatPayload);
 
-      // Fire the run — errors are isolated per trigger within this event,
-      // then rethrown so the spine cursor holds (ADR-017, ctx-mcef).
-      const operation = this.fireTrigger(
-        trigger,
-        task,
-        currentDepth,
-        eventSeq,
-      );
+      // Fire the run — errors are isolated per trigger within this event.
       try {
-        await operation;
+        await this.fireTrigger(trigger, task, currentDepth, eventSeq);
         firedAgents.add(trigger.agentId);
-
-        // Emit trigger.fired event (as a custom event to avoid circular typed emit)
         console.log(`[EventTriggerManager] trigger ${trigger.id} fired for agent ${trigger.agentId}`);
       } catch (err) {
+        const failure = classifyTriggerFireError(err);
+        if (eventSeq !== undefined && !failure.retryable) {
+          // ctx-v6ef: retrying cannot change the outcome (e.g. the target is
+          // interactive-only), so settle the firing as a dead letter now and
+          // let the cursor move past the event.
+          await this.deadLetterFiring(trigger, eventType, eventSeq, failure, 1, currentDepth);
+          continue;
+        }
         console.error(
           `[EventTriggerManager] failed to fire trigger ${trigger.id} for agent ${trigger.agentId}:`,
           err,
         );
-        fireFailures.push(err);
+        unsettled.push({ trigger, err, failure });
       }
     }
 
-    if (fireFailures.length > 0) {
-      // ctx-mcef: swallowing this let the cursor advance and lost the
-      // dispatch forever. Rethrowing holds the cursor; catch-up replays in
-      // ~30s, and the deterministic trigger turn id plus the firing-row
-      // unique index make the retry effectively-once.
-      throw fireFailures[0];
+    const [firstUnsettled] = unsettled;
+    if (!firstUnsettled) {
+      return;
+    }
+    // ctx-mcef: swallowing a retryable failure let the cursor advance and lost
+    // the dispatch forever. Rethrowing holds the cursor; the spine runner
+    // retries with backoff and, once its attempt budget is spent, calls
+    // deadLetterRawEvent (ctx-v6ef). The deterministic trigger turn id plus
+    // the firing-row unique index make each retry effectively-once.
+    if (eventSeq === undefined) {
+      throw firstUnsettled.err;
+    }
+    throw new RetryableTriggerFireError(
+      eventType,
+      eventSeq,
+      unsettled.map(({ trigger, failure }) => ({ triggerId: trigger.id, agentId: trigger.agentId, failure })),
+      { cause: firstUnsettled.err },
+    );
+  }
+
+  /**
+   * Spine runner give-up hook (ctx-v6ef): after the retry budget for a source
+   * event is spent, dead-letter every matching trigger that has not settled
+   * for it yet, so the cursor can move past the event.
+   */
+  async deadLetterRawEvent(event: SpineRawEvent, error: unknown, attempts: number): Promise<void> {
+    const payloadObj = event.payload;
+    const currentDepth = typeof payloadObj._triggerDepth === 'number' ? payloadObj._triggerDepth : 0;
+    if (currentDepth >= this.maxDepth) {
+      return;
+    }
+    const reasons = new Map<string, TriggerFireFailure>();
+    if (error instanceof RetryableTriggerFireError) {
+      for (const { triggerId, failure } of error.failures) {
+        reasons.set(triggerId, failure);
+      }
+    }
+    const fallback = classifyTriggerFireError(error);
+    const firedAgents = new Set<string>();
+    for (const trigger of this.matchingTriggers(event.sourceType, flattenEventPayload(payloadObj))) {
+      if (firedAgents.has(trigger.agentId)) continue;
+      if (await this.db.hasTriggerFiring(trigger.id, event.seq)) {
+        firedAgents.add(trigger.agentId);
+        continue;
+      }
+      const failure = reasons.get(trigger.id) ?? fallback;
+      await this.deadLetterFiring(
+        trigger,
+        event.sourceType,
+        event.seq,
+        { ...failure, message: `Gave up after ${attempts} attempts: ${failure.message}` },
+        attempts,
+        currentDepth,
+      );
+    }
+  }
+
+  /** Enabled, live triggers whose event type and selector match the (flattened) payload. */
+  private *matchingTriggers(eventType: string, flatPayload: Record<string, unknown>): Generator<EventTrigger> {
+    for (const trigger of this.triggers.values()) {
+      if (!trigger.enabled) continue;
+      if (this.retiredAgentIds.has(trigger.agentId)) continue;
+      if (trigger.eventType !== eventType) continue;
+      if (
+        trigger.selector
+        && Object.keys(trigger.selector).length > 0
+        && !matchesSelector(flatPayload, trigger.selector)
+      ) {
+        continue;
+      }
+      yield trigger;
+    }
+  }
+
+  /**
+   * Durably record a failed firing, then publish `trigger.failed`. The row is
+   * what settles the firing; the event is a notice, so a publish failure is
+   * logged rather than thrown.
+   */
+  private async deadLetterFiring(
+    trigger: EventTrigger,
+    eventType: string,
+    eventSeq: number,
+    failure: TriggerFireFailure,
+    attempts: number,
+    currentDepth: number,
+  ): Promise<void> {
+    const row = await this.db.recordTriggerFiringFailure({
+      triggerId: trigger.id,
+      eventSeq,
+      eventType,
+      errorCode: failure.code,
+      error: failure.message,
+      attempts,
+    });
+    if (!row) {
+      // Already settled (a concurrent live/catch-up delivery won) or the
+      // trigger was deleted meanwhile: nothing new to report.
+      return;
+    }
+    console.warn(
+      `[EventTriggerManager] trigger ${trigger.id} for agent ${trigger.agentId} failed on ${eventType} `
+      + `seq ${eventSeq} after ${attempts} attempt(s) [${failure.code}]: ${failure.message}`,
+    );
+    try {
+      await this.eventBus.emitAsync('trigger.failed', {
+        triggerId: trigger.id,
+        agentId: trigger.agentId,
+        eventType,
+        eventSeq,
+        errorCode: failure.code,
+        error: failure.message,
+        attempts,
+        // A trigger on trigger.failed is a cascade like any other.
+        _triggerDepth: currentDepth + 1,
+        timestamp: Date.now(),
+      });
+    } catch (err) {
+      console.error(
+        `[EventTriggerManager] recorded failed firing for trigger ${trigger.id} seq ${eventSeq} `
+        + 'but could not publish trigger.failed:',
+        err,
+      );
     }
   }
 
