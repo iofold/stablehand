@@ -1,7 +1,7 @@
 # Stablehand Architecture
 
 > Status: Current shipped architecture as of 2026-08-14.
-> The sandbox execution migration shipped; its requirements spec is archived at [docs/plans/shipped/2026-03-17-sandbox-execution-requirements.md](plans/shipped/2026-03-17-sandbox-execution-requirements.md).
+> The sandbox execution migration shipped.
 
 ## Purpose
 
@@ -323,4 +323,4 @@ If a document describes any of the following as current behavior, treat it as fu
 - VM snapshots or exact process-state resume
 - Graph or vector-backed retrieval as a first-class runtime subsystem
 
-That future work is tracked in plan documents; the original sandbox migration spec is archived at [2026-03-17-sandbox-execution-requirements.md](plans/shipped/2026-03-17-sandbox-execution-requirements.md).
+That future work is tracked separately.

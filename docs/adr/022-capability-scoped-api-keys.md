@@ -3,9 +3,7 @@
 Date: 2026-08-14 (decision 2026-08-03, shipped 2026-08-13, WO-5)
 Status: Accepted
 
-Full design rationale:
-[docs/plans/shipped/2026-07-27-scoped-api-keys.md](../plans/shipped/2026-07-27-scoped-api-keys.md)
-and the operator guide [docs/scoped-api-keys.md](../scoped-api-keys.md).
+Operator guide: [docs/scoped-api-keys.md](../scoped-api-keys.md).
 This ADR records the load-bearing decisions.
 
 ## Decisions

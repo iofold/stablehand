@@ -7,11 +7,9 @@ contracts; it never calls a harness adapter directly.
 
 ## Evergreen findings
 
-The maintained conclusions, operating envelope, known bottlenecks, and open
-correctness risks from accepted and rejected runs live in
-[`docs/performance-findings.md`](../../docs/performance-findings.md). Use the
-dated reports in `docs/verification/` as immutable evidence and update the
-synthesis only when a later accepted run changes a conclusion.
+Keep a dated report for every accepted or rejected run, treat those reports as
+immutable evidence, and update your maintained conclusions only when a later
+accepted run changes one.
 
 ## Run it
 

@@ -57,7 +57,7 @@ certification, fixed in 75adc069).
   test debris — operational hygiene (quiescing between benchmark runs) became
   part of the perf-run discipline.
 - Certified under load: the ten-wave dev2 endurance run
-  (docs/verification/2026-08-13-dev2-endurance-certification.md, 2,430 turns,
+  (2026-08-13, 2,430 turns,
   0 failures) is the first live-fire certification of this path.
 - Follow-ups tracked: demand-driven idle reclaim when queued turns wait on
   idle-held slots (ctx-v78a); concurrent-admission cap overshoot by in-flight

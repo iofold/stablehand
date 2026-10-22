@@ -65,7 +65,7 @@ docker compose down
 pnpm test
 
 # Run browser E2E certification against an already-running stack
-# (see docs/verification/e2e-testing-journey.md)
+# (see docs/e2e-testing-journey.md)
 ```
 
 ### Service Endpoints
@@ -190,7 +190,6 @@ The shipped UI includes:
 | [Checkpoint & Resume](docs/checkpoint-resume.md) | Session suspend, checkpoint, and resume lifecycle |
 | [Container Lifecycle](docs/container-lifecycle.md) | Idle checkpointing, restore, and reconciliation |
 | [Observability](docs/observability.md) | Monitoring, logging, and debugging your deployment |
-| [Performance Findings](docs/performance-findings.md) | Maintained benchmark conclusions, operating envelope, and open scaling risks |
 | [Debugging Harnesses](docs/debugging-harnesses.md) | Troubleshooting agent execution inside sandbox containers |
 | [Event Pipeline Mapping](docs/event-pipeline-mapping.md) | Proto → TypeScript → AG-UI event conversion reference |
 

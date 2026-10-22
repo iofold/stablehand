@@ -18,7 +18,6 @@ not change spend rows, limits, TTL settings or settlement/reset policy.
 
 The narrow fix is not a general hard-budget certification. An independently
 reproduced expired-counter/late-settlement defect remains in the pinned release.
-See [the verification and pending rollout plan](../../../docs/verification/2026-09-28-litellm-budget-reseed-backport.md).
 
 For the exact live-image base verified against dev2's full OCI configuration
 and all 27 root filesystem layers,

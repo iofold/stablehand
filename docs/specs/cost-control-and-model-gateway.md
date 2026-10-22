@@ -1162,9 +1162,9 @@ migration, and the Agents Monitor API/UI fixtures.
 | LiteLLM spend adapter | new `packages/stablehand/src/cost-control/litellm/` |
 | Turn/event/proto projection | `packages/stablehand/src/orchestrator/turn-finalizer.ts`, `turn-terminal-publisher.ts`, `agent-turn-service.ts`, `routes/agents/helpers.ts`, `routes/agents/crud.ts`, `webhook-relay.ts`, `canonical/frames.ts`, `packages/stablehand/src/events/bus.ts`, `packages/sandbox-daemon/src/sandbox/proto-convert.ts`, generated proto |
 | Client and UI | `packages/client`, `packages/react`, `packages/ui/src/lib/api.ts`, `components/settings/BudgetsSection.tsx`, `components/dashboard/AgentCard.tsx`, `components/agent/AgentOverviewTab.tsx`, `AgentTurnsTab.tsx` |
-| Pilot atomic consumer update | `../pilot-app/apps/api/src/stablehand/drizzle-webhook-store.ts`, `webhook-inbox.ts`, `turn-coordinator.ts`, `conversation-access.ts`, `apps/api/src/routes/agents.ts`, `apps/api/src/db/schema.ts`, `apps/web/src/api/client.ts`, `apps/web/src/pages/AgentsMonitor.tsx` |
+| Downstream consumer update | The consuming application's webhook store, webhook inbox, turn coordinator, conversation-access checks, agent routes and schema |
 | Examples and external evaluation certification | `packages/examples/kitchen-sink/agents/`, `packages/create-stablehand/src/scaffold.ts`, `tests/integration/scaffold.test.ts`, new harness-matrix certification fixtures |
-| Dev1/dev2 and harness images | `docker-compose.yml`, `Dockerfile.sandbox`, `deploy/k3s/dev2/manifests.yaml`, `deploy/k3s/dev2/deploy-dev2.sh`, `docs/environment-variables.md` |
+| Deployments and harness images | `docker-compose.yml`, `Dockerfile.sandbox`, deployment manifests and deploy scripts, `docs/environment-variables.md` |
 
 Keep the new LiteLLM adapter, call-ledger projection, and reconciliation loop
 under `packages/stablehand/src/cost-control/`. Do not relocate the currently

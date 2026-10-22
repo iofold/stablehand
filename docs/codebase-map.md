@@ -56,7 +56,7 @@ HTTP/UI request
 | Settings | DB/env-backed runtime knobs for timeouts, limits, resource defaults, and tar sizes. |
 | Webhooks | `callback_outbox` with claim/retry for subscribed run/tool/message/feedback/custom events. |
 | Schedules | Persistent recurring Croner clocks emit canonical `custom.*` events into triggers, event history, and webhooks. |
-| Deployment | Docker-first local stack; dev2 k3s deploy scripts under `deploy/k3s/dev2`. |
+| Deployment | Docker-first local stack (`docker-compose.yml`); the orchestrator also has a Kubernetes driver. |
 
 ## Important Boundaries
 
@@ -111,7 +111,6 @@ HTTP/UI request
 - `docs/api-reference.md`
 - `docs/container-lifecycle.md`
 - `docs/environment-variables.md`
-- `docs/release-gates.md`
 - package-local `AGENTS.md` files
 
 Historical plans, audits, and research docs should keep their original context, but add a status note when they are easy to mistake for current behavior.
