@@ -79,6 +79,13 @@ export const HarnessTurnLimitsSchema = z.strictObject({
   maxModelCalls: z.number().int().positive().max(100_000).optional(),
   maxToolCalls: z.number().int().positive().max(100_000).optional(),
   maxSubagents: z.number().int().positive().max(10_000).optional(),
+  /**
+   * Spend cap for one run (turn), in US dollars. Enforced mid-run by the
+   * model gateway through the session's own gateway key, so it needs the
+   * gateway with per-session keys; without it only admission-time budget
+   * policies apply. The run stops with a `budget_reached` outcome.
+   */
+  maxCostUsd: z.number().positive().max(100_000).optional(),
 });
 
 const LangGraphSubagentSchema = z.strictObject({

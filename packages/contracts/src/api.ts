@@ -19,6 +19,7 @@ import {
   WorkspaceRelativePathSchema,
 } from './harness.js';
 import { TurnUsageSchema } from './usage.js';
+import { TurnStopReasonSchema } from './budgets.js';
 
 const UnknownRecordSchema = z.record(z.string(), z.unknown());
 const StringRecordSchema = z.record(z.string(), z.string());
@@ -213,6 +214,9 @@ export const TurnSchema = z.strictObject({
   startedAt: EpochMillisecondsSchema,
   completedAt: EpochMillisecondsSchema.nullable(),
   error: z.string().nullable(),
+  // Typed reason for a terminal error, e.g. a run stopped at its spend cap.
+  // Omitted when the turn ended without one.
+  stopReason: TurnStopReasonSchema.optional(),
   taskDescription: z.string().nullable(),
   conversationMessageCount: z.number().int().nonnegative().optional(),
   restoreAttempts: z.number().int().nonnegative().nullable().optional(),

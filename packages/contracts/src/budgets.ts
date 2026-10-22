@@ -178,6 +178,48 @@ export const BudgetExceededResponseSchema = z.strictObject({
   limit: PositiveFiniteSchema,
 });
 
+/**
+ * Error code carried by a run that the model gateway stopped mid-run because
+ * the run's own spend cap ran out (a per-run limit or the remaining headroom
+ * of a blocking budget policy). Distinct from `budget_exceeded`, which is the
+ * admission-time refusal of a run that never started.
+ */
+export const BUDGET_REACHED_CODE = 'budget_reached';
+
+/**
+ * Error code for a gateway budget refusal Stablehand did not set: an
+ * operations-owned ceiling on the shared gateway credential. It never names a
+ * Stablehand policy or bucket.
+ */
+export const MODEL_GATEWAY_BUDGET_EXCEEDED_CODE = 'model_gateway_budget_exceeded';
+
+export const TurnSpendCapSourceSchema = z.enum([
+  // harnessConfig.limits.maxCostUsd on the agent definition
+  'run_limit',
+  // remaining headroom of a matching blocking budget policy at run start
+  'budget_policy',
+]);
+
+/** Why a terminal turn stopped, when that reason is a typed outcome. */
+export const TurnStopReasonSchema = z.discriminatedUnion('code', [
+  z.strictObject({
+    code: z.literal(BUDGET_REACHED_CODE),
+    source: TurnSpendCapSourceSchema,
+    /** The run's spend cap in USD. */
+    capUsd: z.number().finite().nonnegative(),
+    /** Spend the gateway had counted against the cap when it refused; null when unknown. */
+    spentUsd: z.number().finite().nonnegative().nullable(),
+    policyId: z.string().trim().min(1).optional(),
+    policyName: z.string().trim().min(1).optional(),
+    bucket: z.string().optional(),
+  }),
+  z.strictObject({
+    code: z.literal(MODEL_GATEWAY_BUDGET_EXCEEDED_CODE),
+    spentUsd: z.number().finite().nonnegative().nullable(),
+    limitUsd: z.number().finite().nonnegative().nullable(),
+  }),
+]);
+
 export type BudgetWindow = z.infer<typeof BudgetWindowSchema>;
 export type BudgetMetric = z.infer<typeof BudgetMetricSchema>;
 export type BudgetLimits = z.infer<typeof BudgetLimitsSchema>;
@@ -192,3 +234,5 @@ export type BudgetMetricStatus = z.infer<typeof BudgetMetricStatusSchema>;
 export type BudgetSpendResponse = z.infer<typeof BudgetSpendResponseSchema>;
 export type AgentBudgetStatus = z.infer<typeof AgentBudgetStatusSchema>;
 export type BudgetExceededResponse = z.infer<typeof BudgetExceededResponseSchema>;
+export type TurnSpendCapSource = z.infer<typeof TurnSpendCapSourceSchema>;
+export type TurnStopReason = z.infer<typeof TurnStopReasonSchema>;

@@ -13,6 +13,7 @@ import {
 } from './ids.js';
 import { TurnUsageSchema } from './usage.js';
 import { ToolCallStateSchema } from './api.js';
+import { TurnStopReasonSchema } from './budgets.js';
 
 const UnknownRecordSchema = z.record(z.string(), z.unknown());
 const TimestampSchema = z.number().int().nonnegative().optional();
@@ -96,6 +97,9 @@ export const RunErrorEventSchema = z.strictObject({
   ...RunFrameIdentity,
   message: z.string(),
   status: z.string().optional(),
+  // AG-UI's optional machine-readable error code, e.g. 'budget_reached'.
+  code: z.string().optional(),
+  stopReason: TurnStopReasonSchema.optional(),
 });
 
 export const TextMessageStartEventSchema = z.strictObject({

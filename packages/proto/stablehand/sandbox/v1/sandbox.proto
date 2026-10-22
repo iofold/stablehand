@@ -284,6 +284,12 @@ message ErrorEvent {
   string message = 1;
   optional string stack_trace = 2;
   string category = 3;
+  // Machine-readable terminal reason, e.g. "model_gateway_budget_exceeded".
+  // Absent for untyped failures.
+  optional string code = 4;
+  // JSON object with code-specific facts (for a budget refusal: spentUsd and
+  // capUsd as the gateway reported them). Never carries credentials.
+  optional string details_json = 5;
 }
 
 message DoneEvent {
