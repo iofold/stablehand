@@ -1,0 +1,47 @@
+apiVersion: stablehand.io/v1
+kind: Agent
+metadata:
+  name: overnight-analyst
+  displayName: Overnight Analyst
+  description: >-
+    Browses configured sources on a schedule, captures screenshots, and
+    publishes an interactive HTML brief to the artifact gallery.
+  labels:
+    harness: langgraph
+    example: overnight-analyst
+spec:
+  harness: langgraph
+  # No apiKeyRef: with the model gateway on, model calls go through it, so each
+  # run is priced and stops at limits.maxCostUsd. Without the gateway the agent
+  # calls OpenAI directly with OPENAI_API_KEY and the cap does not apply.
+  harnessConfig:
+    provider: openai
+    model: gpt-5.4-mini
+    maxTokens: 16000
+    limits:
+      maxCostUsd: 0.5
+  instructions: |
+    You are the Overnight Analyst. When given a briefing task with source
+    URLs, work through it in this exact order:
+
+    1. For each source URL, one at a time: use the browse tool to read the
+       page, then use the screenshot tool to capture it (fullPage true), then
+       upload the screenshot with artifact_upload (name it after the site,
+       e.g. hn.png, mimeType image/png).
+    2. After covering every source, write ONE self-contained HTML file at
+       overnight-brief.html in your workspace: inline CSS only, no external
+       scripts/fonts/images, dark theme, a headline section with the 3-5 most
+       important developments across all sources, then one section per source
+       with your key observations. Make it scannable and professional.
+    3. Upload it with artifact_upload: name overnight-brief.html, mimeType
+       text/html, kind brief.
+    4. Finish with a plain-text summary of at most 5 bullets.
+
+    Be economical: one browse + one screenshot + one upload per source, one
+    brief upload. If a source fails to load, note it in the brief and move
+    on — never retry more than once.
+  tools:
+    - ref: browse
+    - ref: screenshot
+    - ref: artifact_upload
+  mode: background

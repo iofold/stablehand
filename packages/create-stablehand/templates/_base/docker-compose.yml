@@ -1,0 +1,158 @@
+# Stablehand for {{packageName}}, on prebuilt images from ghcr.io/iofold.
+# Your agents/ and tools/ are mounted into the orchestrator, which registers
+# them at startup. After editing them: docker compose restart orchestrator
+#
+# The sandbox-* services only make sure the agent images are on this machine;
+# the orchestrator starts one sandbox container per run from them.
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: stablehand
+      POSTGRES_PASSWORD: stablehand
+      POSTGRES_DB: stablehand
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stablehand"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  orchestrator:
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-orchestrator:${STABLEHAND_IMAGE_TAG:-{{imageTag}}}
+    environment:
+      DATABASE_URL: postgres://stablehand:stablehand@postgres:5432/stablehand
+      STABLEHAND_PRESET: docker
+      STABLEHAND_UI_MODE: disabled
+      NODE_ENV: production
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      SECRET_MASTER_KEY: ${SECRET_MASTER_KEY:?set SECRET_MASTER_KEY in .env}
+      STABLEHAND_API_TOKEN: ${STABLEHAND_API_TOKEN:?set STABLEHAND_API_TOKEN in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${UI_PORT:-3200}}
+      STABLEHAND_DATA_VOLUME: ${COMPOSE_PROJECT_NAME}_stablehand-data
+      STABLEHAND_SANDBOX_EGRESS_PROXY_URL: http://egress:8080
+      STABLEHAND_SANDBOX_EGRESS_CA_VOLUME: ${COMPOSE_PROJECT_NAME}_egress-ca-public
+      STABLEHAND_IMAGE_PREFIX: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-harness
+      STABLEHAND_SANDBOX_IMAGE_TAG: ${STABLEHAND_IMAGE_TAG:-{{imageTag}}}
+      STABLEHAND_SANDBOX_NETWORK: ${STABLEHAND_SANDBOX_NETWORK:-stablehand-agents}
+      STABLEHAND_EGRESS_ALLOWLIST: ${STABLEHAND_EGRESS_ALLOWLIST:-gallery}
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:${MINIO_API_PORT:-9000}}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-stablehand}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-stablehand-dev}
+      S3_BUCKET: stablehand-artifacts
+      S3_REGION: us-east-1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - stablehand-data:/app/project/.stablehand
+      - ./agents:/app/project/agents:ro
+      - ./tools:/app/project/tools:ro
+    ports:
+      - "${API_PORT:-3002}:3001"
+    networks:
+      - default
+      - stablehand-agents
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      egress:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The sandboxes' only route out: an allowlist proxy. Add rules in .env with
+  # STABLEHAND_EGRESS_EXTRA_ALLOW.
+  egress:
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-egress:${STABLEHAND_IMAGE_TAG:-{{imageTag}}}
+    environment:
+      STABLEHAND_EGRESS_EXTRA_ALLOW: ${STABLEHAND_EGRESS_EXTRA_ALLOW:-}
+    volumes:
+      - egress-ca:/home/mitmproxy/.mitmproxy
+      - egress-ca-public:/srv/egress-ca
+    networks:
+      - default
+      - stablehand-agents
+    restart: unless-stopped
+
+  ui:
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-ui:${STABLEHAND_IMAGE_TAG:-{{imageTag}}}
+    ports:
+      - "${UI_PORT:-3200}:80"
+    depends_on:
+      - orchestrator
+    restart: unless-stopped
+
+  # S3-compatible file store for the files agents publish.
+  minio:
+    image: rustfs/rustfs:1.0.0
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-stablehand}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-stablehand-dev}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+    volumes:
+      - minio-data:/data
+    networks:
+      - default
+      - stablehand-agents
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Public gallery of the files agents publish. Turn it on with
+  # COMPOSE_PROFILES=gallery and a scoped key in GALLERY_API_KEY.
+  gallery:
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-gallery:${STABLEHAND_IMAGE_TAG:-{{imageTag}}}
+    profiles: [gallery]
+    environment:
+      STABLEHAND_BASE_URL: http://orchestrator:3001
+      STABLEHAND_API_KEY: ${GALLERY_API_KEY:-}
+      GALLERY_WEBHOOK_SECRET: ${GALLERY_WEBHOOK_SECRET:-}
+      GALLERY_PUBLIC_URL: http://gallery:8090
+      GALLERY_DATA_DIR: /data
+    ports:
+      - "${GALLERY_PORT:-8090}:8090"
+    volumes:
+      - gallery-data:/data
+    depends_on:
+      - orchestrator
+    restart: unless-stopped
+
+  sandbox-langgraph:
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-harness-langgraph:${STABLEHAND_IMAGE_TAG:-{{imageTag}}}
+    entrypoint: ["true"]
+    restart: "no"
+
+  sandbox-claude-agents:
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-harness-claude-agents:${STABLEHAND_IMAGE_TAG:-{{imageTag}}}
+    entrypoint: ["true"]
+    restart: "no"
+
+  sandbox-pi-agent:
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-harness-pi-agent:${STABLEHAND_IMAGE_TAG:-{{imageTag}}}
+    entrypoint: ["true"]
+    restart: "no"
+
+volumes:
+  pgdata:
+  stablehand-data:
+  minio-data:
+  egress-ca:
+  egress-ca-public:
+  gallery-data:
+
+networks:
+  # Internal: sandboxes reach the internet only through the egress service.
+  stablehand-agents:
+    driver: bridge
+    name: ${STABLEHAND_SANDBOX_NETWORK:-stablehand-agents}
+    internal: true

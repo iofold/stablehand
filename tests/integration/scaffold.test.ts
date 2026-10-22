@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parseManifestString, validateManifest } from '@stablehand/manifest';
+import { parse as parseYaml } from 'yaml';
 
 const CLI_PATH = join(
   __dirname,
@@ -26,6 +27,7 @@ describe('create-stablehand scaffold', () => {
     execSync(`node ${CLI_PATH} ${projectDir}`, {
       encoding: 'utf-8',
       timeout: 15_000,
+      env: { ...process.env, OPENAI_API_KEY: '' },
     });
   });
 
@@ -47,8 +49,10 @@ describe('create-stablehand scaffold', () => {
     'tools/search-files.ts',
     'tests/assistant.test.ts',
     '.gitignore',
+    '.env',
     '.env.example',
     'README.md',
+    'docker-compose.yml',
   ];
 
   for (const file of expectedFiles) {
@@ -88,10 +92,11 @@ describe('create-stablehand scaffold', () => {
       expect(pkg.type).toBe('module');
     });
 
-    it('has stablehand dependency', () => {
+    it('depends on the published packages at this release', () => {
       const deps = pkg.dependencies as Record<string, string>;
-      expect(deps).toHaveProperty('stablehand');
-      expect(deps).toHaveProperty('@stablehand/manifest');
+      const version = (JSON.parse(readFileSync(join(CLI_PATH, '..', '..', 'package.json'), 'utf-8')) as { version: string }).version;
+      expect(deps.stablehand).toBe(`^${version}`);
+      expect(deps['@stablehand/manifest']).toBe(`^${version}`);
     });
 
     it('has vitest devDependency', () => {
@@ -158,6 +163,10 @@ describe('create-stablehand scaffold', () => {
   });
 
   describe('retired scaffold output', () => {
+    it('does not emit a local Dockerfile: the stack runs on prebuilt images', () => {
+      expect(existsSync(join(projectDir, 'Dockerfile'))).toBe(false);
+    });
+
     it('does not emit stale config, policies, feedback, or TypeScript agent files', () => {
       expect(existsSync(join(projectDir, 'stablehand.config.ts'))).toBe(false);
       expect(existsSync(join(projectDir, 'agents', 'assistant', 'agent.ts'))).toBe(false);
@@ -189,14 +198,54 @@ describe('create-stablehand scaffold', () => {
 
   // --- .env.example ---
 
-  describe('.env.example', () => {
-    it('contains OPENAI_API_KEY placeholder', () => {
-      const content = readFileSync(
-        join(projectDir, '.env.example'),
-        'utf-8',
+  describe('.env', () => {
+    it('holds generated secrets, readable only by the owner', () => {
+      const env = readFileSync(join(projectDir, '.env'), 'utf-8');
+      expect(env).toMatch(/^SECRET_MASTER_KEY=[0-9a-f]{64}$/m);
+      expect(env).toMatch(/^STABLEHAND_API_TOKEN=[0-9a-f]{64}$/m);
+      expect(env).toMatch(/^OPENAI_API_KEY=$/m);
+      expect(statSync(join(projectDir, '.env')).mode & 0o077).toBe(0);
+    });
+
+    it('ships an .env.example with blank values only', () => {
+      const example = readFileSync(join(projectDir, '.env.example'), 'utf-8');
+      expect(example).toContain('OPENAI_API_KEY=');
+      expect(example).not.toMatch(/=[0-9a-f]{32,}/);
+    });
+  });
+
+  describe('docker-compose.yml', () => {
+    interface Compose {
+      services: Record<string, { image?: string; build?: unknown; volumes?: string[]; environment?: Record<string, string> }>;
+    }
+    let compose: Compose;
+
+    beforeAll(() => {
+      compose = parseYaml(readFileSync(join(projectDir, 'docker-compose.yml'), 'utf-8')) as Compose;
+    });
+
+    it('runs the full stack, including file storage and the egress proxy', () => {
+      expect(Object.keys(compose.services)).toEqual(expect.arrayContaining([
+        'postgres', 'orchestrator', 'ui', 'minio', 'egress',
+        'sandbox-langgraph', 'sandbox-claude-agents', 'sandbox-pi-agent',
+      ]));
+    });
+
+    it('uses prebuilt images and never builds', () => {
+      for (const [name, service] of Object.entries(compose.services)) {
+        expect(service.build, name).toBeUndefined();
+        expect(service.image, name).toBeTruthy();
+      }
+      expect(compose.services.orchestrator.image).toMatch(
+        /^\$\{STABLEHAND_IMAGE_REGISTRY:-ghcr\.io\/iofold\}\/stablehand-orchestrator:\$\{STABLEHAND_IMAGE_TAG:-\d+\.\d+\.\d+\}$/,
       );
-      expect(content).toContain('OPENAI_MODEL=gpt-5.4-mini');
-      expect(content).toContain('OPENAI_API_KEY');
+    });
+
+    it('mounts the project agents and tools into the orchestrator', () => {
+      expect(compose.services.orchestrator.volumes).toEqual(expect.arrayContaining([
+        './agents:/app/project/agents:ro',
+        './tools:/app/project/tools:ro',
+      ]));
     });
   });
 
@@ -210,5 +259,58 @@ describe('create-stablehand scaffold', () => {
       );
       expect(content).toContain("import { defineTool } from 'stablehand'");
     });
+  });
+});
+
+describe('create-stablehand templates', () => {
+  let root: string;
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'stablehand-templates-'));
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('lists the templates', () => {
+    const out = execSync(`node ${CLI_PATH} --list-templates`, { encoding: 'utf-8' });
+    expect(out).toContain('assistant');
+    expect(out).toContain('overnight-analyst');
+  });
+
+  it('scaffolds the Overnight Analyst with the example\'s exact manifest', () => {
+    const dir = join(root, 'analyst');
+    execSync(`node ${CLI_PATH} ${dir} --template overnight-analyst`, {
+      encoding: 'utf-8',
+      env: { ...process.env, OPENAI_API_KEY: 'sk-test-key' },
+    });
+
+    const manifest = readFileSync(join(dir, 'agents', 'overnight-analyst', 'agent.yaml'), 'utf-8');
+    const example = readFileSync(
+      join(__dirname, '..', '..', 'packages', 'examples', 'overnight-analyst', 'agents', 'overnight-analyst', 'agent.yaml'),
+      'utf-8',
+    );
+    expect(manifest).toBe(example);
+    expect(validateManifest(parseManifestString(manifest)).metadata.name).toBe('overnight-analyst');
+
+    const env = readFileSync(join(dir, '.env'), 'utf-8');
+    expect(env).toContain('OPENAI_API_KEY=sk-test-key');
+    expect(env).toContain('STABLEHAND_EGRESS_EXTRA_ALLOW="GET *;HEAD *"');
+    expect(env).toContain('COMPOSE_PROFILES=gallery');
+
+    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')) as { scripts: Record<string, string> };
+    expect(pkg.scripts.seed).toContain('-e API_URL=http://localhost:3001');
+    expect(pkg.scripts['run-once']).toContain('run-once.ts');
+    expect(existsSync(join(dir, 'tools', 'read-file.ts'))).toBe(false);
+  });
+
+  it('refuses an unknown template and a non-empty directory', () => {
+    expect(() => execSync(`node ${CLI_PATH} ${join(root, 'x')} --template nope`, { stdio: 'pipe' })).toThrow();
+    const busy = join(root, 'busy');
+    mkdirSync(busy);
+    writeFileSync(join(busy, 'keep.txt'), 'mine');
+    expect(() => execSync(`node ${CLI_PATH} ${busy}`, { stdio: 'pipe' })).toThrow();
+    expect(readFileSync(join(busy, 'keep.txt'), 'utf-8')).toBe('mine');
   });
 });

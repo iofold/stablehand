@@ -1,15 +1,36 @@
 {
   "name": "create-stablehand",
   "version": "0.1.0",
+  "description": "Create a Stablehand project: agents, tools and a Docker Compose stack on prebuilt images",
   "license": "MIT",
+  "author": "iofold",
+  "homepage": "https://github.com/iofold/stablehand/tree/master/packages/create-stablehand#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iofold/stablehand.git",
+    "directory": "packages/create-stablehand"
+  },
+  "bugs": {
+    "url": "https://github.com/iofold/stablehand/issues"
+  },
   "type": "module",
-  "description": "Scaffold a new Stablehand project",
   "bin": {
     "create-stablehand": "./dist/index.js"
   },
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "prompts": "^2.4.0",
@@ -20,8 +41,5 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.8.0",
     "vitest": "^3.0.0"
-  },
-  "engines": {
-    "node": ">=22.0.0"
   }
 }
