@@ -366,3 +366,82 @@ describe('BudgetEnforcer.onTurnCompleted', () => {
     }));
   });
 });
+
+describe('BudgetEnforcer.costHeadroom', () => {
+  const COST_DOC = {
+    selector: { team: 'growth' },
+    window: 'month-to-date',
+    limits: { costUsd: 10 },
+    actions: [{ threshold: 0.9, action: 'block' }],
+  };
+
+  function makeDb(
+    policies: Array<{ id: string; name: string; enabled: boolean; doc: unknown }>,
+    spendByPolicy: Record<string, { totalTokens: number | null; costUsd: number | null; turns: number }>,
+  ) {
+    const selectorToPolicy = new Map(policies.map((policy) => [
+      JSON.stringify((policy.doc as { selector?: unknown }).selector),
+      policy.id,
+    ]));
+    return {
+      listBudgetPolicies: vi.fn().mockResolvedValue(policies),
+      getBudgetSpend: vi.fn(async (selector: Record<string, string>) => {
+        const policyId = selectorToPolicy.get(JSON.stringify(selector));
+        const spend = policyId ? spendByPolicy[policyId] : undefined;
+        if (!spend) throw new Error('unexpected spend query');
+        return spend;
+      }),
+      getTurn: vi.fn(),
+    };
+  }
+
+  it('returns what is left before the block threshold of the tightest cost policy', async () => {
+    const db = makeDb([
+      { id: 'p1', name: 'Growth team', enabled: true, doc: COST_DOC },
+      {
+        id: 'p2',
+        name: 'Everyone',
+        enabled: true,
+        doc: { ...COST_DOC, selector: {}, limits: { costUsd: 100 } },
+      },
+    ], {
+      p1: { totalTokens: 1, costUsd: 8.5, turns: 4 },
+      p2: { totalTokens: 1, costUsd: 20, turns: 9 },
+    });
+    const enforcer = new BudgetEnforcer({ db: db as never, logger: silentLogger });
+
+    const headroom = await enforcer.costHeadroom({ team: 'growth' });
+
+    expect(headroom).toEqual({
+      remainingUsd: expect.closeTo(0.5, 10),
+      limitUsd: 9,
+      spentUsd: 8.5,
+      policyId: 'p1',
+      policyName: 'Growth team',
+    });
+  });
+
+  it('ignores warn-only, token-only, unpriced and unreadable policies (fail-open)', async () => {
+    const db = makeDb([
+      { id: 'warn', name: 'warn only', enabled: true, doc: { ...COST_DOC, selector: { a: '1' }, actions: [{ threshold: 0.5, action: 'warn' }] } },
+      { id: 'tokens', name: 'tokens', enabled: true, doc: { ...VALID_DOC, selector: { b: '1' }, groupBy: undefined } },
+      { id: 'unpriced', name: 'unpriced', enabled: true, doc: { ...COST_DOC, selector: { c: '1' } } },
+      { id: 'broken', name: 'broken', enabled: true, doc: { ...COST_DOC, selector: { d: '1' } } },
+    ], {
+      unpriced: { totalTokens: 10, costUsd: null, turns: 1 },
+    });
+    const enforcer = new BudgetEnforcer({ db: db as never, logger: silentLogger });
+
+    await expect(enforcer.costHeadroom({ a: '1', b: '1', c: '1', d: '1' })).resolves.toBeNull();
+  });
+
+  it('never reports negative headroom', async () => {
+    const db = makeDb(
+      [{ id: 'p1', name: 'Growth team', enabled: true, doc: COST_DOC }],
+      { p1: { totalTokens: 1, costUsd: 12, turns: 4 } },
+    );
+    const enforcer = new BudgetEnforcer({ db: db as never, logger: silentLogger });
+
+    await expect(enforcer.costHeadroom({ team: 'growth' })).resolves.toMatchObject({ remainingUsd: 0 });
+  });
+});

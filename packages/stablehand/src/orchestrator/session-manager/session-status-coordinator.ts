@@ -23,6 +23,12 @@ export interface SessionStatusCoordinatorDeps {
   >;
   logger: Logger;
   stateStore?: Pick<SessionStatePort, 'getSessionById'>;
+  /**
+   * Called after a session leaves its runtime behind (CHECKPOINTED or
+   * TERMINATED), e.g. to revoke its gateway key. Fire-and-forget; the
+   * callback owns its own error handling.
+   */
+  onRuntimeReleased?: (sessionId: string, toStatus: SessionStatus) => void;
 }
 
 export interface SessionStatusTransition {
@@ -147,6 +153,13 @@ export class SessionStatusCoordinator {
     this.deps.logger.debug(
       `[SessionStatusCoordinator] session ${sessionId}: ${currentStatus} -> ${toStatus}`,
     );
+
+    if (
+      currentStatus !== toStatus
+      && (toStatus === 'CHECKPOINTED' || toStatus === 'TERMINATED')
+    ) {
+      this.deps.onRuntimeReleased?.(sessionId, toStatus);
+    }
   }
 }
 

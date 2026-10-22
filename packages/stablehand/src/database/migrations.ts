@@ -381,6 +381,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       started_at BIGINT NOT NULL,
       completed_at BIGINT,
       error TEXT,
+      stop_reason JSONB,
       input_tokens BIGINT,
       output_tokens BIGINT,
       total_tokens BIGINT,
@@ -417,6 +418,8 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS usage_reconciled_at BIGINT`;
   await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS next_message_seq BIGINT NOT NULL DEFAULT 0`;
   await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS terminal_published_seq BIGINT`;
+  // Typed terminal reason, e.g. a run stopped at its spend cap (ctx-ycek).
+  await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS stop_reason JSONB`;
   // ctx-iqzy T2: queued_at = queue-admission time; started_at is restamped at
   // activation and means execution start. Backfill legacy rows from the old
   // startedAt (which WAS admission time before this change).

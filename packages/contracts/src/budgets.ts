@@ -236,3 +236,49 @@ export type AgentBudgetStatus = z.infer<typeof AgentBudgetStatusSchema>;
 export type BudgetExceededResponse = z.infer<typeof BudgetExceededResponseSchema>;
 export type TurnSpendCapSource = z.infer<typeof TurnSpendCapSourceSchema>;
 export type TurnStopReason = z.infer<typeof TurnStopReasonSchema>;
+
+/** Dollar amount for stop-reason copy: cents above a cent, two significant digits below. */
+export function formatSpendUsd(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '$0';
+  if (value < 0.0001) return '<$0.0001';
+  if (value < 0.01) return `$${Number(value.toPrecision(2))}`;
+  return `$${value.toFixed(2)}`;
+}
+
+/**
+ * Plain-language description of a typed stop, shared by the API's turn error
+ * text and the dashboard banner so both say the same thing. States the
+ * consequence for the run, not the gateway mechanism.
+ */
+export function describeTurnStopReason(reason: TurnStopReason): { summary: string; detail: string | null } {
+  if (reason.code === BUDGET_REACHED_CODE) {
+    const spent = reason.spentUsd !== null ? `It had spent ${formatSpendUsd(reason.spentUsd)}.` : null;
+    const summary = `Stopped: this run reached its ${formatSpendUsd(reason.capUsd)} spend cap`;
+    if (reason.source === 'budget_policy') {
+      const where = reason.policyName
+        ? `the "${reason.policyName}" budget${reason.bucket ? ` for ${reason.bucket}` : ''}`
+        : 'its budget';
+      return {
+        summary,
+        detail: [`That was what remained of ${where} when the run started.`, spent].filter(Boolean).join(' '),
+      };
+    }
+    return {
+      summary,
+      detail: [spent, 'The cap is this agent\'s per-run spend limit.'].filter(Boolean).join(' '),
+    };
+  }
+  const amounts = reason.limitUsd !== null
+    ? ` (${reason.spentUsd !== null ? `${formatSpendUsd(reason.spentUsd)} of ` : ''}${formatSpendUsd(reason.limitUsd)})`
+    : '';
+  return {
+    summary: 'Stopped: the model gateway refused further model calls for budget',
+    detail: `The gateway's own spending limit was reached${amounts}. New runs fail the same way until an operator raises it.`,
+  };
+}
+
+/** One-line form of {@link describeTurnStopReason}, used as the turn's error text. */
+export function turnStopReasonMessage(reason: TurnStopReason): string {
+  const { summary, detail } = describeTurnStopReason(reason);
+  return detail ? `${summary}. ${detail}` : `${summary}.`;
+}

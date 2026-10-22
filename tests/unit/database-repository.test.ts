@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { CanonicalStreamEventSchema } from '@stablehand/contracts';
+import { CanonicalStreamEventSchema, TurnSchema } from '@stablehand/contracts';
 import type { SandboxSessionStatus } from '@stablehand/shared';
 import {
   createTestDb,
@@ -9,6 +9,7 @@ import {
 import { createDatabase } from '../../packages/stablehand/src/database/connection.js';
 import { DatabaseRepository } from '../../packages/stablehand/src/database/repository.js';
 import { isUniqueConstraintViolation } from '../../packages/stablehand/src/database/errors.js';
+import { toApiAgentTurn } from '../../packages/stablehand/src/orchestrator/routes/agents/helpers.js';
 import {
   createInitialChatState,
   reduceStablehandChatState,
@@ -5299,6 +5300,36 @@ describe('DatabaseRepository', () => {
       expect(readback?.error).toBe('first writer wins');
       expect(readback?.status).toBe('error');
       expect(readback?.terminalPublishedSeq).toBeNull();
+    });
+
+    it('persists a typed stop reason and serves it on the turn API projection', async () => {
+      const conversation = await repo.createConversation(agentId);
+      const turn = await repo.createTurn({ agentId, conversationId: conversation.id, mode: 'interactive' });
+      const stopReason = {
+        code: 'budget_reached' as const,
+        source: 'run_limit' as const,
+        capUsd: 0.05,
+        spentUsd: 0.0512,
+      };
+
+      expect(await repo.finalizeTurnIfOpen(turn.id, {
+        completedAt: Date.now(),
+        error: 'Stopped: this run reached its $0.05 spend cap.',
+        stopReason,
+        status: 'error',
+      })).toBe(true);
+
+      const readback = await repo.getTurn(turn.id);
+      expect(readback?.stopReason).toEqual(stopReason);
+      const projected = toApiAgentTurn(readback!);
+      expect(projected.stopReason).toEqual(stopReason);
+      expect(TurnSchema.parse(projected).stopReason).toEqual(stopReason);
+
+      const untyped = await repo.createTurn({ agentId, conversationId: conversation.id, mode: 'interactive' });
+      await repo.finalizeTurnIfOpen(untyped.id, { completedAt: Date.now(), error: 'boom', status: 'error' });
+      const untypedReadback = await repo.getTurn(untyped.id);
+      expect(untypedReadback?.stopReason).toBeNull();
+      expect(toApiAgentTurn(untypedReadback!)).not.toHaveProperty('stopReason');
     });
 
     it('retains encrypted turn credentials until terminal finalization wins', async () => {

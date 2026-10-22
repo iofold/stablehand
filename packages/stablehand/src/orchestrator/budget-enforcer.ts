@@ -37,6 +37,17 @@ interface MatchedPolicy {
   bucketLabel?: string;
 }
 
+/** Remaining spend under the tightest blocking cost policy that matches a run. */
+export interface PolicyCostHeadroom {
+  remainingUsd: number;
+  /** The policy's blocking point in USD (limit × block threshold). */
+  limitUsd: number;
+  spentUsd: number;
+  policyId: string;
+  policyName: string;
+  bucket?: string;
+}
+
 const TAG = '[BudgetEnforcer]';
 
 /**
@@ -87,6 +98,55 @@ export class BudgetEnforcer {
         throw new BudgetExceededError(match.policyId, match.policyName, match.bucketLabel, tripped.status);
       }
     }
+  }
+
+  /**
+   * The tightest remaining USD headroom across matching policies that block
+   * on a `costUsd` limit, for capping a run mid-flight. Advisory snapshot:
+   * the spend ledger lags reconciliation, and token/turn limits are not
+   * converted to dollars. Fail-open like admission — a policy whose spend is
+   * unknown or unreadable contributes no cap.
+   */
+  async costHeadroom(tags: Record<string, string>): Promise<PolicyCostHeadroom | null> {
+    const matched = await this.matchPolicies(tags);
+    let tightest: PolicyCostHeadroom | null = null;
+    for (const match of matched) {
+      const costLimit = match.doc.limits.costUsd;
+      const blockAt = match.doc.actions
+        .filter((action) => action.action === 'block')
+        .reduce<number | null>(
+          (lowest, action) => (lowest === null ? action.threshold : Math.min(lowest, action.threshold)),
+          null,
+        );
+      if (costLimit === undefined || blockAt === null) continue;
+
+      let spend: BudgetSpend;
+      try {
+        spend = await this.deps.db.getBudgetSpend(
+          match.doc.selector,
+          windowStartMs(match.doc.window, Date.now()),
+          match.bucket,
+        );
+      } catch (err) {
+        this.deps.logger.error(`${TAG} spend query failed for policy ${match.policyId}; no run cap from it (fail-open):`, err);
+        continue;
+      }
+      if (spend.costUsd === null) continue;
+
+      const limitUsd = costLimit * blockAt;
+      const remainingUsd = Math.max(0, limitUsd - spend.costUsd);
+      if (!tightest || remainingUsd < tightest.remainingUsd) {
+        tightest = {
+          remainingUsd,
+          limitUsd,
+          spentUsd: spend.costUsd,
+          policyId: match.policyId,
+          policyName: match.policyName,
+          ...(match.bucketLabel ? { bucket: match.bucketLabel } : {}),
+        };
+      }
+    }
+    return tightest;
   }
 
   /**

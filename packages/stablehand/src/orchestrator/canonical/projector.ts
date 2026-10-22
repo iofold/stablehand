@@ -203,6 +203,11 @@ export class CanonicalProjector {
             // AG-UI spec field for RUN_ERROR is top-level `message`.
             message: p.error ?? (p.status === 'cancelled' ? 'Run cancelled' : 'Run failed'),
             status: p.status,
+            // AG-UI's optional machine-readable code; the typed stop rides
+            // along so a replaying client can render it without a refetch.
+            ...(p.status === 'error' && p.stopReason
+              ? { code: p.stopReason.code, stopReason: p.stopReason }
+              : {}),
             timestamp: p.timestamp,
           }));
         }

@@ -5,6 +5,10 @@ import {
   BudgetPolicyDocSchema,
   BudgetPolicyPatchInputSchema,
   BudgetSpendResponseSchema,
+  TurnStopReasonSchema,
+  describeTurnStopReason,
+  formatSpendUsd,
+  turnStopReasonMessage,
 } from './budgets.js';
 
 const VALID_DOC = {
@@ -117,5 +121,73 @@ describe('budget API schemas', () => {
 
     expect(response.buckets.map(({ bucket }) => bucket.kind))
       .toEqual(['all', 'untagged', 'tag']);
+  });
+});
+
+describe('turn stop reasons', () => {
+  it('accepts the two typed stops and rejects unknown codes or fields', () => {
+    expect(TurnStopReasonSchema.parse({
+      code: 'budget_reached',
+      source: 'run_limit',
+      capUsd: 0.05,
+      spentUsd: 0.0512,
+    })).toMatchObject({ code: 'budget_reached' });
+    expect(TurnStopReasonSchema.parse({
+      code: 'model_gateway_budget_exceeded',
+      spentUsd: null,
+      limitUsd: null,
+    })).toMatchObject({ code: 'model_gateway_budget_exceeded' });
+    expect(() => TurnStopReasonSchema.parse({ code: 'budget_exceeded' })).toThrow();
+    expect(() => TurnStopReasonSchema.parse({
+      code: 'budget_reached',
+      source: 'run_limit',
+      capUsd: 1,
+      spentUsd: null,
+      apiKey: 'nope',
+    })).toThrow();
+  });
+
+  it('formats small and ordinary dollar amounts readably', () => {
+    expect(formatSpendUsd(0.05)).toBe('$0.05');
+    expect(formatSpendUsd(12.5)).toBe('$12.50');
+    expect(formatSpendUsd(0.0012)).toBe('$0.0012');
+    expect(formatSpendUsd(0.00000004)).toBe('<$0.0001');
+    expect(formatSpendUsd(0)).toBe('$0');
+  });
+
+  it('describes a per-run cap stop by its consequence', () => {
+    expect(describeTurnStopReason({
+      code: 'budget_reached',
+      source: 'run_limit',
+      capUsd: 0.05,
+      spentUsd: 0.0512,
+    })).toEqual({
+      summary: 'Stopped: this run reached its $0.05 spend cap',
+      detail: 'It had spent $0.05. The cap is this agent\'s per-run spend limit.',
+    });
+  });
+
+  it('names the budget whose remaining headroom capped the run', () => {
+    expect(turnStopReasonMessage({
+      code: 'budget_reached',
+      source: 'budget_policy',
+      capUsd: 1.25,
+      spentUsd: null,
+      policyName: 'Growth team',
+      bucket: 'team=growth',
+    })).toBe(
+      'Stopped: this run reached its $1.25 spend cap. That was what remained of the "Growth team" budget for team=growth when the run started.',
+    );
+  });
+
+  it('attributes a gateway ceiling to the gateway, never to a Stablehand budget', () => {
+    const { summary, detail } = describeTurnStopReason({
+      code: 'model_gateway_budget_exceeded',
+      spentUsd: 100.2,
+      limitUsd: 100,
+    });
+    expect(summary).toBe('Stopped: the model gateway refused further model calls for budget');
+    expect(detail).toContain('($100.20 of $100.00)');
+    expect(detail).not.toMatch(/policy|"/);
   });
 });

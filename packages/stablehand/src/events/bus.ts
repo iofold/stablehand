@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type { TurnUsage } from '@stablehand/contracts';
+import type { TurnSpendCapSource, TurnStopReason, TurnUsage } from '@stablehand/contracts';
 
 export type EventMap = {
   'turn.started': {
@@ -74,6 +74,8 @@ export type EventMap = {
     conversationId: string;
     status: 'completed' | 'error' | 'cancelled';
     error?: string;
+    /** Typed reason for an error status, e.g. budget_reached. Not part of the webhook payload. */
+    stopReason?: TurnStopReason;
     durationMs: number;
     /** Canonical finish-time usage. Gateway cost may still be pending. */
     usage: TurnUsage | null;
@@ -90,6 +92,25 @@ export type EventMap = {
     spent: number;
     limit: number;
     agentId: string;
+    timestamp: number;
+  };
+  /**
+   * A run was stopped mid-flight because it reached its spend cap (the
+   * gateway refused further model calls). Emitted just before its terminal
+   * RUN_ERROR; the run's turn carries the same numbers as its stopReason.
+   */
+  'budget.reached': {
+    turnId: string;
+    agentId: string;
+    conversationId: string;
+    sandboxSessionId?: string;
+    source: TurnSpendCapSource;
+    capUsd: number;
+    /** Spend the gateway had counted against the cap; null when unknown. */
+    spentUsd: number | null;
+    policyId?: string;
+    policyName?: string;
+    bucket?: string;
     timestamp: number;
   };
   'artifact.created': {

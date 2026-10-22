@@ -211,3 +211,53 @@ describe('TurnFinalizer (ADR-014)', () => {
     expect(deriveTurnStatus({})).toBe('completed');
   });
 });
+
+describe('TurnFinalizer typed stop reasons (ctx-ycek)', () => {
+  const STOP = {
+    code: 'budget_reached' as const,
+    source: 'run_limit' as const,
+    capUsd: 0.05,
+    spentUsd: 0.0512,
+  };
+
+  it('persists and publishes the stop reason with an error terminal', async () => {
+    const deps = createDeps();
+    const finalizer = new TurnFinalizer(deps);
+
+    await finalizer.finalize({ ...BASE_PARAMS, stopReason: STOP });
+
+    expect(deps.db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+      'turn-1',
+      expect.objectContaining({ status: 'error', stopReason: STOP }),
+    );
+    expect(deps.eventBus.emitAsync).toHaveBeenCalledWith(
+      'turn.completed',
+      expect.objectContaining({ status: 'error', stopReason: STOP }),
+    );
+  });
+
+  it('never attaches a stop reason to a non-error terminal', async () => {
+    const deps = createDeps();
+    const finalizer = new TurnFinalizer(deps);
+
+    await finalizer.finalize({ ...BASE_PARAMS, status: 'cancelled', stopReason: STOP });
+
+    expect(deps.db.finalizeTurnIfOpen.mock.calls[0]?.[1]).not.toHaveProperty('stopReason');
+    expect(deps.eventBus.emitAsync.mock.calls[0]?.[1]).not.toHaveProperty('stopReason');
+  });
+
+  it('rebuilds the stop reason from the durable row when repairing publication', async () => {
+    const deps = createDeps({
+      finalizeResult: false,
+      turn: { ...BASE_TURN, stopReason: STOP } as typeof BASE_TURN,
+    });
+    const finalizer = new TurnFinalizer(deps);
+
+    await finalizer.finalize(BASE_PARAMS);
+
+    expect(deps.eventBus.emitAsync).toHaveBeenCalledWith(
+      'turn.completed',
+      expect.objectContaining({ status: 'error', stopReason: STOP }),
+    );
+  });
+});

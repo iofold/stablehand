@@ -62,6 +62,9 @@ export class SandboxSessionManager {
       containerManager: deps.containerManager,
       db: deps.db,
       buildSandboxSecrets: deps.buildSandboxSecrets,
+      ...(deps.releaseSandboxCredentials
+        ? { releaseSandboxCredentials: deps.releaseSandboxCredentials }
+        : {}),
       resolveToolsForAgent: deps.resolveToolsForAgent ?? (() => []),
       checkConcurrencyLimit: (agentId, options) => this.turnOrchestrator.checkConcurrencyLimit(agentId, options),
       resolveRuntimeDefinitionHash,
@@ -74,6 +77,9 @@ export class SandboxSessionManager {
       statusCoordinator: this.statusCoordinator,
       stateStore: this.stateStore,
       buildSandboxSecrets: deps.buildSandboxSecrets,
+      ...(deps.releaseSandboxCredentials
+        ? { releaseSandboxCredentials: deps.releaseSandboxCredentials }
+        : {}),
       resolveToolsForAgent: deps.resolveToolsForAgent ?? (() => []),
       workspaceDiffService: deps.workspaceDiffService,
       logger: deps.logger,

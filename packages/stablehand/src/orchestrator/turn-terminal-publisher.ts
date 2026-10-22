@@ -31,6 +31,7 @@ export function turnCompletedPayload(turn: TurnSelect): EventMap['turn.completed
     conversationId: turn.conversationId ?? '',
     status: turn.status,
     ...(turn.error ? { error: turn.error } : {}),
+    ...(turn.status === 'error' && turn.stopReason ? { stopReason: turn.stopReason } : {}),
     durationMs: Math.max(0, turn.completedAt - turn.startedAt),
     usage: materializeTurnUsage(turn),
     timestamp: turn.completedAt,

@@ -2040,3 +2040,158 @@ describe('AgentTurnService — daemon-converted tool events (ctx-sub0)', () => {
     ]));
   });
 });
+
+describe('AgentTurnService spend-cap stops (ctx-ycek)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function fakeTurnSpendCaps(cap: { capUsd: number; source: 'run_limit' | 'budget_policy'; policyId?: string; policyName?: string } | null) {
+    return {
+      prepareTurn: vi.fn().mockResolvedValue(cap),
+      capForTurn: vi.fn().mockReturnValue(cap),
+      settleTurn: vi.fn(),
+    };
+  }
+
+  const budgetRefusal: StreamEvent = {
+    type: 'RUN_ERROR',
+    timestamp: 2,
+    runId: 'run-1',
+    error: 'Stopped: the model gateway refused further model calls because this run reached its spend cap.',
+    code: 'model_gateway_budget_exceeded',
+    details: { spentUsd: 0.0512, capUsd: 0.05 },
+  };
+
+  it('arms the run cap after the session is known and before the turn is delivered', async () => {
+    const turnSpendCaps = fakeTurnSpendCaps({ capUsd: 0.05, source: 'run_limit' });
+    const { sessionManager } = await executeEvents([
+      { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', delta: 'done' },
+      { type: 'RUN_FINISHED', timestamp: 2, runId: 'run-1' },
+    ], {
+      params: { agentDef: { ...makeAgentDef(), harnessConfig: { model: 'm', limits: { maxCostUsd: 0.05 } } } },
+      configure: (ctx) => {
+        ctx.deps.turnSpendCaps = turnSpendCaps;
+      },
+    });
+
+    expect(turnSpendCaps.prepareTurn).toHaveBeenCalledWith({
+      sessionId: 'sandbox-1',
+      turnId: 'run-1',
+      harnessConfig: { model: 'm', limits: { maxCostUsd: 0.05 } },
+      continuation: false,
+    });
+    expect(turnSpendCaps.prepareTurn.mock.invocationCallOrder[0]).toBeLessThan(
+      sessionManager.startTurn.mock.invocationCallOrder[0]!,
+    );
+    expect(turnSpendCaps.settleTurn).toHaveBeenCalledWith('run-1');
+  });
+
+  it('ends a run refused at its cap as budget_reached with spent vs cap and a budget.reached event', async () => {
+    const turnSpendCaps = fakeTurnSpendCaps({ capUsd: 0.05, source: 'run_limit' });
+    const { db, eventBus } = await executeEvents([
+      { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', delta: 'Working on step 3' },
+      budgetRefusal,
+    ], {
+      deps: { eventBus: createEventBusMock() },
+      configure: (ctx) => {
+        ctx.deps.turnSpendCaps = turnSpendCaps;
+      },
+    });
+
+    const expectedStop = {
+      code: 'budget_reached',
+      source: 'run_limit',
+      capUsd: 0.05,
+      spentUsd: 0.0512,
+    };
+    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        status: 'error',
+        error: 'Stopped: this run reached its $0.05 spend cap. It had spent $0.05. The cap is this agent\'s per-run spend limit.',
+        stopReason: expectedStop,
+      }),
+      expectedDeliveryFence(),
+    );
+    const emit = (eventBus as MockEventBus).emit;
+    const reached = emit.mock.calls.filter(([name]) => name === 'budget.reached');
+    expect(reached).toEqual([[
+      'budget.reached',
+      expect.objectContaining({
+        turnId: 'run-1',
+        agentId: 'agent-1',
+        conversationId: 'conv-1',
+        sandboxSessionId: 'sandbox-1',
+        source: 'run_limit',
+        capUsd: 0.05,
+        spentUsd: 0.0512,
+      }),
+      expectedDeliveryPersistenceContext(),
+    ]]);
+    const completed = emit.mock.calls.filter(([name]) => name === 'turn.completed');
+    expect(completed[0]?.[1]).toMatchObject({ status: 'error', stopReason: expectedStop });
+    // The partial work before the stop is kept.
+    expect(db.addCanonicalMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'assistant', content: 'Working on step 3' }),
+      expectedDeliveryFence(),
+    );
+  });
+
+  it('names the budget policy whose remaining headroom capped the run', async () => {
+    const turnSpendCaps = fakeTurnSpendCaps({
+      capUsd: 1.25,
+      source: 'budget_policy',
+      policyId: 'p1',
+      policyName: 'Growth team',
+    });
+    const { db } = await executeEvents([budgetRefusal], {
+      configure: (ctx) => {
+        ctx.deps.turnSpendCaps = turnSpendCaps;
+      },
+    });
+
+    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        error: expect.stringContaining('remained of the "Growth team" budget'),
+        stopReason: expect.objectContaining({ code: 'budget_reached', source: 'budget_policy', policyName: 'Growth team' }),
+      }),
+      expectedDeliveryFence(),
+    );
+  });
+
+  it('reports a gateway budget refusal under no Stablehand cap as the gateway ceiling', async () => {
+    const eventBus = createEventBusMock();
+    const { db } = await executeEvents([{
+      type: 'RUN_ERROR',
+      timestamp: 1,
+      runId: 'run-1',
+      // An older sandbox without the typed code still says what happened.
+      error: '429 Budget has been exceeded! Key=stablehand-runtime Current cost: 100.2, Max budget: 100',
+    }], { deps: { eventBus } });
+
+    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        status: 'error',
+        stopReason: { code: 'model_gateway_budget_exceeded', spentUsd: null, limitUsd: null },
+      }),
+      expectedDeliveryFence(),
+    );
+    expect(eventBus.emit.mock.calls.some(([name]) => name === 'budget.reached')).toBe(false);
+  });
+
+  it('leaves ordinary failures untyped', async () => {
+    const { db } = await executeEvents([
+      { type: 'RUN_ERROR', timestamp: 1, runId: 'run-1', error: 'tool execution failed' },
+    ]);
+
+    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ error: 'tool execution failed' }),
+      expectedDeliveryFence(),
+    );
+    expect(db.finalizeTurnIfOpen.mock.calls[0]?.[1]).not.toHaveProperty('stopReason');
+  });
+});

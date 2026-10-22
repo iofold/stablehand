@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import { pgTable, text, bigint, boolean, serial, integer, index, jsonb, uniqueIndex, doublePrecision, check } from 'drizzle-orm/pg-core';
 import { randomUUID } from 'node:crypto';
 import type { SandboxSessionStatus } from '@stablehand/shared';
-import type { TurnUsage } from '@stablehand/contracts';
+import type { TurnStopReason, TurnUsage } from '@stablehand/contracts';
 
 export type TurnStatus = 'queued' | 'running' | 'completed' | 'error' | 'cancelled';
 export type ModelGatewayTurnMode = 'gateway_only' | 'mixed';
@@ -98,6 +98,9 @@ export const turns = pgTable('turns', {
   startedAt: bigint('started_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   completedAt: bigint('completed_at', { mode: 'number' }),
   error: text('error'),
+  // Typed reason for a terminal error (e.g. budget_reached with spent vs cap);
+  // null for untyped failures and successful turns.
+  stopReason: jsonb('stop_reason').$type<TurnStopReason>(),
   // Token usage reported by the harness at turn completion; null when the
   // harness did not report usage (distinct from a real zero).
   inputTokens: bigint('input_tokens', { mode: 'number' }),

@@ -384,3 +384,55 @@ describe('CanonicalProjector (ADR-015)', () => {
     }
   });
 });
+
+describe('CanonicalProjector spend-cap stops (ctx-ycek)', () => {
+  const STOP = {
+    code: 'budget_reached' as const,
+    source: 'run_limit' as const,
+    capUsd: 0.05,
+    spentUsd: 0.0512,
+  };
+
+  it('puts the typed stop on the RUN_ERROR frame and keeps it strictly parseable', () => {
+    const projector = new CanonicalProjector();
+
+    const frames = projector.project('turn.completed', {
+      turnId: 'turn-1', sandboxSessionId: 'sandbox-1', agentId: 'agent-1', conversationId: 'conv-1',
+      status: 'error', error: 'Stopped: this run reached its $0.05 spend cap.', stopReason: STOP,
+      durationMs: 5, usage: null, timestamp: T,
+    });
+    const runError = frames.find((frame) => frame.type === 'RUN_ERROR');
+
+    expect(runError?.body).toMatchObject({
+      message: 'Stopped: this run reached its $0.05 spend cap.',
+      code: 'budget_reached',
+      stopReason: STOP,
+    });
+    expect(() => CanonicalStreamEventSchema.parse(runError?.body)).not.toThrow();
+  });
+
+  it('persists budget.reached verbatim on the system channel', () => {
+    const projector = new CanonicalProjector();
+    const payload = {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      sandboxSessionId: 'sandbox-1',
+      source: 'run_limit',
+      capUsd: 0.05,
+      spentUsd: 0.0512,
+      timestamp: T,
+    };
+
+    const [frame] = projector.project('budget.reached', payload);
+
+    expect(frame).toMatchObject({
+      type: 'budget.reached',
+      channel: 'system',
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      conversationId: 'conv-1',
+      body: payload,
+    });
+  });
+});

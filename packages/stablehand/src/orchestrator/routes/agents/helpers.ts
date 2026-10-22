@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { chown, readdir, stat } from 'node:fs/promises';
 import type { FastifyRequest } from 'fastify';
 import { projectTurnStatus } from '@stablehand/shared';
-import { AgentSchema, type Agent } from '@stablehand/contracts';
+import { AgentSchema, type Agent, type TurnStopReason } from '@stablehand/contracts';
 
 import type { HarnessConfigSchemas } from '@stablehand/sandbox-daemon/harness/schemas';
 import { ensureAgentWorkspace as ensureAgentWorkspaceShared } from '../../../workspace/ensure.js';
@@ -153,7 +153,7 @@ export function toAgentResponse(agent: StoredAgent): Agent {
 }
 
 export function toApiAgentTurn(
-  turn: { id: string; agentId: string; conversationId: string | null; sandboxSessionId: string | null; status: string; mode: string; taskDescription: string | null; queuedAt: number; startedAt: number; completedAt: number | null; error: string | null; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; costUsd?: number | null; gatewayMode?: string | null; gatewayCorrelationId?: string | null; usageReconciledAt?: number | null; tags?: Record<string, string> | null },
+  turn: { id: string; agentId: string; conversationId: string | null; sandboxSessionId: string | null; status: string; mode: string; taskDescription: string | null; queuedAt: number; startedAt: number; completedAt: number | null; error: string | null; stopReason?: TurnStopReason | null; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; costUsd?: number | null; gatewayMode?: string | null; gatewayCorrelationId?: string | null; usageReconciledAt?: number | null; tags?: Record<string, string> | null },
   sandboxSession?: {
     status: string;
     restoreAttempts?: number | null;
@@ -178,6 +178,7 @@ export function toApiAgentTurn(
     startedAt: turn.startedAt,
     completedAt: turn.completedAt ?? null,
     error: turn.error ?? null,
+    ...(turn.stopReason && status === 'ERROR' ? { stopReason: turn.stopReason } : {}),
     taskDescription: turn.taskDescription ?? null,
     ...(conversationMessageCount !== undefined ? { conversationMessageCount } : {}),
     ...(sandboxSession?.restoreAttempts !== undefined ? { restoreAttempts: sandboxSession.restoreAttempts } : {}),

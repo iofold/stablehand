@@ -49,6 +49,7 @@ import {
 import { acquireSandboxSessionLifecycleOperation } from '../sandbox-session-lifecycle-operation.js';
 import { acquireSandboxSessionRestoreLease } from '../sandbox-session-restore-lease.js';
 import type {
+  BuildSandboxSecrets,
   HarnessGrpcClient,
   Logger,
   SessionRecoveryAuthority,
@@ -160,7 +161,8 @@ export interface SessionRecoveryCoordinatorDeps {
   >;
   statusCoordinator: SessionStatusCoordinator;
   stateStore: SessionStatePort;
-  buildSandboxSecrets: (agentId: string) => Promise<Readonly<Record<string, string>>>;
+  buildSandboxSecrets: BuildSandboxSecrets;
+  releaseSandboxCredentials?: (sessionId: string) => Promise<void>;
   resolveToolsForAgent: (
     toolNames: string[],
     builtinToolPolicy?: BuiltinToolPolicy,
@@ -466,7 +468,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       restoreLease.signal.throwIfAborted();
       const runtimeInstanceToken = createRuntimeInstanceToken();
       const stableSandboxSecrets = {
-        ...(await this.deps.buildSandboxSecrets(dbSession.agentId)),
+        ...(await this.deps.buildSandboxSecrets(dbSession.agentId, { sessionId })),
         ...getGrpcCallbackSandboxSecrets(sessionId, dbSession.agentId),
         [RUNTIME_INSTANCE_TOKEN_ENV]: runtimeInstanceToken,
       };
@@ -620,6 +622,8 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         if (createdContainer) {
           await this.rollbackCreatedContainer(sessionId, createdContainer);
         }
+        // The restore never produced a runtime: drop the key minted for it.
+        await this.deps.releaseSandboxCredentials?.(sessionId);
         throw err;
       }
 

@@ -43,6 +43,7 @@ import type { SandboxSessionManager } from '../orchestrator/sandbox-session-mana
 import { SandboxSessionManager as SandboxSessionManagerImpl } from '../orchestrator/sandbox-session-manager.js';
 import { SessionStateStore } from '../orchestrator/session-manager/session-state-store.js';
 import { SessionStatusCoordinator } from '../orchestrator/session-manager/session-status-coordinator.js';
+import type { SandboxSecretsContext } from '../orchestrator/session-manager/types.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
 import { LocalToolProvider } from '../tool/providers/local.js';
 import { ArtifactToolProvider } from '../tool/providers/artifact.js';
@@ -63,11 +64,14 @@ import { VALID_WEBHOOK_EVENTS } from '../orchestrator/webhook-events.js';
 import { ToolLocation } from '@stablehand/proto/sandbox/v1';
 import type { BuiltinToolPolicy } from '@stablehand/contracts';
 import {
+  MODEL_GATEWAY_SANDBOX_ENV,
   mergeSandboxSecrets,
   resolveModelGatewayConfig,
 } from '../cost-control/model-gateway-config.js';
 import { LiteLLMSpendClient } from '../cost-control/litellm-spend-client.js';
 import { ModelGatewayReconciler } from '../cost-control/model-gateway-reconciler.js';
+import { LiteLLMKeyClient } from '../cost-control/litellm-key-client.js';
+import { SessionGatewayKeyManager } from '../cost-control/session-gateway-keys.js';
 import type { ModelGatewayStatusConfig } from '../orchestrator/routes/model-gateway.js';
 import { createRuntimeDefinitionFingerprint } from '../orchestrator/session-manager/runtime-definition-fingerprint.js';
 import { ScheduleService } from '../schedules/index.js';
@@ -406,11 +410,53 @@ export async function createContainer(
     error: (msg: string, ...args: unknown[]) => console.error('[LifecyclePolicy]', msg, ...args),
     debug: (msg: string, ...args: unknown[]) => console.debug('[LifecyclePolicy]', msg, ...args),
   };
+  // Tag-based budget policies: block at turn admission, warn on threshold
+  // crossings observed at turn completion (usage is only known at done), and
+  // cap runs mid-flight through per-session gateway keys when available.
+  const budgetEnforcer = new BudgetEnforcer({ db, eventBus, logger: console });
+
+  // Per-session gateway keys (ctx-ycek): each sandbox session gets its own
+  // LiteLLM key, capped per run, so the gateway stops a run at its spend cap
+  // mid-flight. Needs the gateway plus an admin key; otherwise sandboxes share
+  // the runtime key and budgets apply at admission only, as before.
+  const sessionGatewayKeys = modelGatewayConfig.enabled && modelGatewayConfig.adminKey
+    ? new SessionGatewayKeyManager({
+      client: new LiteLLMKeyClient({
+        baseUrl: modelGatewayConfig.baseUrl,
+        adminKey: modelGatewayConfig.adminKey,
+      }),
+      runtimeKey: modelGatewayConfig.runtimeKey,
+      getTurnTags: async (turnId) => (await db.getTurn(turnId))?.tags ?? {},
+      resolvePolicyHeadroom: (tags) => budgetEnforcer.costHeadroom(tags),
+      logger: {
+        info: (msg: string, ...args: unknown[]) => console.log(msg, ...args),
+        warn: (msg: string, ...args: unknown[]) => console.warn(msg, ...args),
+        error: (msg: string, ...args: unknown[]) => console.error(msg, ...args),
+      },
+    })
+    : undefined;
+  if (modelGatewayConfig.enabled && !sessionGatewayKeys) {
+    console.warn(
+      '[ModelGateway] STABLEHAND_MODEL_GATEWAY_ADMIN_KEY is not set: sandboxes share one runtime key, '
+      + 'so budgets are enforced when a run starts but runs are not stopped mid-flight at a spend cap.',
+    );
+  }
+  const releaseSandboxCredentials = sessionGatewayKeys
+    ? (sessionId: string) => sessionGatewayKeys.revokeSessionKey(sessionId)
+    : undefined;
+
   const sessionStateStore = new SessionStateStore();
   const sessionStatusCoordinator = new SessionStatusCoordinator({
     db,
     logger: sessionManagerLogger,
     stateStore: sessionStateStore,
+    ...(releaseSandboxCredentials
+      ? {
+        onRuntimeReleased: (sessionId: string) => {
+          void releaseSandboxCredentials(sessionId);
+        },
+      }
+      : {}),
   });
 
   const lifecyclePolicy = new ContainerLifecyclePolicy({
@@ -463,7 +509,10 @@ export async function createContainer(
     'LANGSMITH_WORKSPACE_ID',
   ] as const;
 
-  async function buildSandboxSecrets(agentId: string): Promise<Readonly<Record<string, string>>> {
+  async function buildSandboxSecrets(
+    agentId: string,
+    context?: SandboxSecretsContext,
+  ): Promise<Readonly<Record<string, string>>> {
     const envSecrets = Object.fromEntries(
       SANDBOX_SECRET_ALLOWLIST
         .filter((key) => process.env[key])
@@ -478,12 +527,24 @@ export async function createContainer(
       entries.filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
     );
 
-    return mergeSandboxSecrets({
+    const merged = mergeSandboxSecrets({
       ...envSecrets,
       ...agentSecrets,
     }, modelGatewayConfig.enabled
       ? modelGatewayConfig.sandboxEnvironment
       : undefined);
+    if (!sessionGatewayKeys || !context) {
+      return merged;
+    }
+    // The session's own key replaces the shared runtime key; on failure the
+    // shared key stays (logged by the manager).
+    const sessionKey = await sessionGatewayKeys.mintSessionKey({
+      sessionId: context.sessionId,
+      agentId,
+    });
+    return sessionKey
+      ? Object.freeze({ ...merged, [MODEL_GATEWAY_SANDBOX_ENV.runtimeKey]: sessionKey })
+      : merged;
   }
 
   async function resolveRuntimeDefinitionHash(
@@ -558,6 +619,7 @@ export async function createContainer(
     maxConcurrentSessionsPerAgent: startupSettings.maxConcurrentSessionsPerAgent,
     interruptManager,
     buildSandboxSecrets,
+    ...(releaseSandboxCredentials ? { releaseSandboxCredentials } : {}),
     resolveRuntimeDefinitionHash,
     resolveToolsForAgent,
     dataDir,
@@ -601,11 +663,9 @@ export async function createContainer(
     sessionManager: realSessionManager,
     eventBus,
     sessionTurnService,
+    ...(sessionGatewayKeys ? { turnSpendCaps: sessionGatewayKeys } : {}),
   });
   agentTurnServiceHolder.current = agentTurnService;
-  // Tag-based budget policies: block at turn admission, warn on threshold
-  // crossings observed at turn completion (usage is only known at done).
-  const budgetEnforcer = new BudgetEnforcer({ db, eventBus, logger: console });
   eventBus.on('turn.completed', (payload) => {
     void budgetEnforcer.onTurnCompleted(payload as EventMap['turn.completed']);
   });

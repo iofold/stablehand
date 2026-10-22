@@ -219,3 +219,64 @@ describe('SessionStatusCoordinator', () => {
     );
   });
 });
+
+describe('SessionStatusCoordinator runtime release hook (ctx-ycek)', () => {
+  function makeCoordinator(onRuntimeReleased = vi.fn()) {
+    const db = {
+      updateSandboxSessionMetadata: vi.fn().mockResolvedValue(undefined),
+      completeSandboxSessionLifecycleOperation: vi.fn().mockResolvedValue(true),
+    };
+    const coordinator = new SessionStatusCoordinator({
+      db,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      onRuntimeReleased,
+    });
+    return { coordinator, db, onRuntimeReleased };
+  }
+
+  const lifecycleOperation = { ownerId: 'owner-1', fenceToken: 1 };
+
+  it('reports a session whose runtime was checkpointed or terminated', async () => {
+    const { coordinator, onRuntimeReleased } = makeCoordinator();
+
+    await coordinator.transition({
+      sessionId: 's1',
+      fromStatus: 'ACTIVE',
+      toStatus: 'CHECKPOINTED',
+      clearRuntime: true,
+      lifecycleOperation,
+    });
+    await coordinator.transition({
+      sessionId: 's2',
+      fromStatus: 'ACTIVE',
+      toStatus: 'TERMINATED',
+      clearRuntime: true,
+      lifecycleOperation,
+    });
+
+    expect(onRuntimeReleased.mock.calls).toEqual([
+      ['s1', 'CHECKPOINTED'],
+      ['s2', 'TERMINATED'],
+    ]);
+  });
+
+  it('does not report metadata-only updates or a transition that lost its fence', async () => {
+    const { coordinator, db, onRuntimeReleased } = makeCoordinator();
+
+    await coordinator.transition({
+      sessionId: 's1',
+      fromStatus: 'CHECKPOINTED',
+      toStatus: 'CHECKPOINTED',
+      extra: { lastRestoreError: 'boom' },
+    });
+    db.completeSandboxSessionLifecycleOperation.mockResolvedValueOnce(false);
+    await expect(coordinator.transition({
+      sessionId: 's2',
+      fromStatus: 'ACTIVE',
+      toStatus: 'TERMINATED',
+      lifecycleOperation,
+    })).rejects.toThrow(/Lost lifecycle ownership/);
+
+    expect(onRuntimeReleased).not.toHaveBeenCalled();
+  });
+});

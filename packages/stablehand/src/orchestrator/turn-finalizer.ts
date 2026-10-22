@@ -1,4 +1,5 @@
 import { isTurnCancelled, type ApiTokenUsage } from '@stablehand/shared';
+import type { TurnStopReason } from '@stablehand/contracts';
 
 import type {
   DatabaseRepository,
@@ -78,6 +79,8 @@ export interface FinalizeTurnParams {
   conversationId: string;
   status: TurnFinalStatus;
   error?: string;
+  /** Typed reason for an error status (e.g. budget_reached); persisted and published with it. */
+  stopReason?: TurnStopReason;
   /** Sandbox session id to persist on the turn row (kept fresh by callers that track rebinds). */
   sandboxSessionId?: string;
   durationMs?: number;
@@ -130,6 +133,7 @@ export class TurnFinalizer {
       ...(params.sandboxSessionId ? { sandboxSessionId: params.sandboxSessionId } : {}),
       completedAt,
       error: params.error ?? null,
+      ...(params.status === 'error' && params.stopReason ? { stopReason: params.stopReason } : {}),
       status: params.status,
       ...(params.usage
         ? {
@@ -176,6 +180,7 @@ export class TurnFinalizer {
           conversationId: params.conversationId,
           status: params.status,
           error: params.error,
+          ...(params.status === 'error' && params.stopReason ? { stopReason: params.stopReason } : {}),
           durationMs: params.durationMs ?? 0,
           usage: canonicalUsage,
           timestamp: completedAt,

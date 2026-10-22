@@ -30,6 +30,7 @@ import { nativeToolPolicyToProto } from './native-tool-policy-proto.js';
 import { resolveAgentToolNames } from '../agent-definition.js';
 import type { BuiltinToolPolicy } from '@stablehand/contracts';
 import type {
+  BuildSandboxSecrets,
   Logger,
   SessionRecord,
   ToolMetadata,
@@ -44,7 +45,8 @@ const TAG = '[SandboxSessionManager]';
 export interface SessionRuntimeFactoryDeps {
   containerManager: Pick<SandboxContainerManager, 'createContainer' | 'startContainer' | 'stopContainer' | 'removeContainer'>;
   db: Pick<DatabaseRepository, 'createSandboxSession'>;
-  buildSandboxSecrets: (agentId: string) => Promise<Readonly<Record<string, string>>>;
+  buildSandboxSecrets: BuildSandboxSecrets;
+  releaseSandboxCredentials?: (sessionId: string) => Promise<void>;
   resolveToolsForAgent: (
     toolNames: string[],
     builtinToolPolicy?: BuiltinToolPolicy,
@@ -164,7 +166,7 @@ export class SessionRuntimeFactory {
 
       const runtimeInstanceToken = createRuntimeInstanceToken();
       const stableSandboxSecrets = {
-        ...(await this.deps.buildSandboxSecrets(effectiveAgentId)),
+        ...(await this.deps.buildSandboxSecrets(effectiveAgentId, { sessionId })),
         ...getGrpcCallbackSandboxSecrets(sessionId, effectiveAgentId),
         [RUNTIME_INSTANCE_TOKEN_ENV]: runtimeInstanceToken,
       };
@@ -275,6 +277,7 @@ export class SessionRuntimeFactory {
     conversationDir: string | undefined,
     cleanupWorkspace: boolean,
   ): Promise<void> {
+    await this.deps.releaseSandboxCredentials?.(sessionId);
     if (containerId) {
       await stopAndRemoveContainer(
         this.deps.containerManager,

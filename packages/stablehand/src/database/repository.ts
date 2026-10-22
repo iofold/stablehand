@@ -14,6 +14,7 @@ import {
 import type {
   AnalyticsActivityBucket,
   AnalyticsMetrics,
+  TurnStopReason,
   TurnUsage,
 } from '@stablehand/contracts';
 import type {
@@ -3212,6 +3213,7 @@ export class DatabaseRepository {
       sandboxSessionId?: string;
       completedAt: number;
       error: string | null;
+      stopReason?: TurnStopReason | null;
       status: Exclude<TurnStatus, 'queued' | 'running'>;
       inputTokens?: number;
       outputTokens?: number;
@@ -3298,6 +3300,7 @@ export class DatabaseRepository {
       sandboxSessionId?: string;
       completedAt: number;
       error: string | null;
+      stopReason?: TurnStopReason | null;
       status: Exclude<TurnStatus, 'queued' | 'running'>;
       inputTokens?: number;
       outputTokens?: number;

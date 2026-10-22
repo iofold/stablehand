@@ -146,6 +146,16 @@ export class AsyncChannel<T> {
   }
 }
 
+/** Which sandbox session the stable secrets are being assembled for. */
+export interface SandboxSecretsContext {
+  sessionId: string;
+}
+
+export type BuildSandboxSecrets = (
+  agentId: string,
+  context?: SandboxSecretsContext,
+) => Promise<Readonly<Record<string, string>>>;
+
 export interface SandboxSessionManagerDeps {
   containerManager: SandboxContainerManager;
   db: DatabaseRepository;
@@ -155,7 +165,12 @@ export interface SandboxSessionManagerDeps {
   eventBus: TypedEventBus;
   maxConcurrentSessionsPerAgent?: number;
   interruptManager?: InterruptManager;
-  buildSandboxSecrets: (agentId: string) => Promise<Readonly<Record<string, string>>>;
+  buildSandboxSecrets: BuildSandboxSecrets;
+  /**
+   * Release per-session credentials (the session's gateway key) once its
+   * runtime is gone or never came up. Best effort; must not throw.
+   */
+  releaseSandboxCredentials?: (sessionId: string) => Promise<void>;
   resolveRuntimeDefinitionHash?: (
     agentId: string,
     agentDef: AgentDefinition,

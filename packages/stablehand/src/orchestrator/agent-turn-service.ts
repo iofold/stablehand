@@ -1,5 +1,10 @@
 import type { AgentSessionEvent } from '../events/types.js';
 import type { ApiTokenUsage, MessageCommittedEvent } from '@stablehand/shared';
+import {
+  BUDGET_REACHED_CODE,
+  turnStopReasonMessage,
+  type TurnStopReason,
+} from '@stablehand/contracts';
 import type { AgentDefinition, Message } from '@stablehand/sandbox-daemon';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { MessageSelect } from '../database/types.js';
@@ -35,6 +40,39 @@ import {
   type PerformanceOutcome,
   type PerformanceRecorder,
 } from '../observability/performance.js';
+import {
+  budgetStopReason,
+  type GatewayBudgetRefusalReport,
+  type SessionGatewayKeyManager,
+} from '../cost-control/session-gateway-keys.js';
+
+/** Error code the sandbox puts on a RUN_ERROR when the gateway refused a call for budget. */
+const MODEL_GATEWAY_BUDGET_REFUSAL_CODE = 'model_gateway_budget_exceeded';
+// Refusal text from sandboxes that predate the typed error code.
+const BUDGET_REFUSAL_TEXT = /Stablehand spend cap reached|Budget has been exceeded!|reached its spend cap/;
+
+function finiteOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/** The gateway budget refusal a RUN_ERROR reports, if it reports one. */
+export function readGatewayBudgetRefusal(event: Record<string, unknown>): GatewayBudgetRefusalReport | null {
+  const message = typeof event.error === 'string'
+    ? event.error
+    : typeof event.message === 'string'
+      ? event.message
+      : '';
+  if (event.code !== MODEL_GATEWAY_BUDGET_REFUSAL_CODE && !BUDGET_REFUSAL_TEXT.test(message)) {
+    return null;
+  }
+  const details = typeof event.details === 'object' && event.details !== null
+    ? event.details as Record<string, unknown>
+    : {};
+  return {
+    spentUsd: finiteOrNull(details.spentUsd),
+    capUsd: finiteOrNull(details.capUsd),
+  };
+}
 
 const INDIVIDUALLY_HANDLED = new Set([
   'MESSAGE_COMMITTED',
@@ -116,6 +154,11 @@ export interface AgentTurnServiceDeps {
   /** Session-turn executor for running turns in sandbox containers. */
   sessionTurnService: SessionTurnExecutor;
   performance?: PerformanceRecorder;
+  /**
+   * Per-run spend caps on per-session gateway keys. Absent when the model
+   * gateway (or its admin key) is off: budgets then apply at admission only.
+   */
+  turnSpendCaps?: Pick<SessionGatewayKeyManager, 'prepareTurn' | 'capForTurn' | 'settleTurn'>;
 }
 
 export interface ExecuteTurnParams {
@@ -152,8 +195,10 @@ export class AgentTurnService {
   private sessionTurnService: SessionTurnExecutor;
   private turnFinalizer: TurnFinalizer;
   private performance: PerformanceRecorder;
+  private turnSpendCaps: AgentTurnServiceDeps['turnSpendCaps'];
 
   constructor(deps: AgentTurnServiceDeps) {
+    this.turnSpendCaps = deps.turnSpendCaps;
     this.db = deps.db;
     this.sessionManager = deps.sessionManager;
     this.eventBus = deps.eventBus;
@@ -202,6 +247,8 @@ export class AgentTurnService {
     let wasCancelled = false;
     let encounteredError = false;
     let lastErrorMessage = '';
+    let gatewayBudgetRefusal: GatewayBudgetRefusalReport | null = null;
+    let stopReason: TurnStopReason | undefined;
     let turnUsage: ApiTokenUsage | undefined;
     let releaseConcurrencyReservation = params.concurrencyReservation?.release;
 
@@ -460,6 +507,7 @@ export class AgentTurnService {
         conversationId,
         status,
         error,
+        ...(status === 'error' && stopReason ? { stopReason } : {}),
         ...(currentSandboxSessionId ? { sandboxSessionId: currentSandboxSessionId } : {}),
         // ctx-iqzy T3: execution duration. The in-memory execute-start
         // coincides with the persisted startedAt restamped at activation, so
@@ -708,7 +756,25 @@ export class AgentTurnService {
           await settleStaleDeliveryRuntime();
           return;
         }
+        if (finalStatus === 'error' && stopReason?.code === BUDGET_REACHED_CODE) {
+          emitTurnEvent('budget.reached', {
+            turnId,
+            agentId,
+            conversationId,
+            ...(sandboxSessionId ? { sandboxSessionId } : {}),
+            source: stopReason.source,
+            capUsd: stopReason.capUsd,
+            spentUsd: stopReason.spentUsd,
+            ...(stopReason.policyId ? { policyId: stopReason.policyId } : {}),
+            ...(stopReason.policyName ? { policyName: stopReason.policyName } : {}),
+            ...(stopReason.bucket ? { bucket: stopReason.bucket } : {}),
+            timestamp: Date.now(),
+          });
+        }
         const finalization = await finalizeTurn(finalStatus, finalError);
+        // A terminal run no longer needs its cap; a paused (HITL) run keeps
+        // it so its continuation resumes under the same budget.
+        this.turnSpendCaps?.settleTurn(turnId);
         if (isInterruptContinuation && !finalization.finalized) {
           continuationExecutionError = new Error(
             `Interrupt continuation ${params.continuationAttemptId} lost delivery ownership during finalization`,
@@ -787,6 +853,15 @@ export class AgentTurnService {
       }
       sandboxSessionId = sandboxSession.sessionId;
       releaseReservedConcurrency();
+
+      // Arm this run's spend cap on the session's gateway key, so the
+      // gateway itself stops the run mid-flight when the cap is reached.
+      await this.turnSpendCaps?.prepareTurn({
+        sessionId: sandboxSessionId,
+        turnId,
+        harnessConfig: agentDef.harnessConfig,
+        continuation: isInterruptContinuation,
+      });
 
       deliverySignal?.throwIfAborted();
       if (await isDurablyCancelled()) {
@@ -873,6 +948,7 @@ export class AgentTurnService {
           if ('error' in event && typeof event.error === 'string' && event.error.length > 0) {
             lastErrorMessage = event.error;
           }
+          gatewayBudgetRefusal = readGatewayBudgetRefusal(event) ?? gatewayBudgetRefusal;
         }
 
         if (event.type === 'RUN_FINISHED') {
@@ -1135,6 +1211,11 @@ export class AgentTurnService {
       if (signal?.aborted) {
         wasCancelled = true;
         turnError = new Error('Turn cancelled');
+      } else if (encounteredError && gatewayBudgetRefusal) {
+        // The gateway refused a call because the run's budget ran out: a
+        // typed, distinct outcome with the spent-vs-cap numbers.
+        stopReason = budgetStopReason(this.turnSpendCaps?.capForTurn(turnId), gatewayBudgetRefusal);
+        turnError = new Error(turnStopReasonMessage(stopReason));
       } else if (encounteredError) {
         turnError = new Error(lastErrorMessage || 'Turn completed with errors (no detail captured)');
       }

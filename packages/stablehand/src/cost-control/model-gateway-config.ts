@@ -20,6 +20,14 @@ export type ModelGatewayConfig =
       revision: string;
       explicitFreeModels: readonly string[];
       sandboxEnvironment: Readonly<Record<string, string>>;
+      /**
+       * LiteLLM key-administration credential. When present, every sandbox
+       * session gets its own virtual key (minted at session open/restore,
+       * budget-capped per run, revoked on close) instead of the shared
+       * runtime key, which is what makes mid-run spend caps enforceable.
+       * Orchestrator-only; never enters a sandbox.
+       */
+      adminKey?: string;
     };
 
 type GatewayEnvironment = Readonly<Record<string, string | undefined>>;
@@ -75,6 +83,7 @@ export function resolveModelGatewayConfig(
   const runtimeKey = requireValue(env, 'STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY');
   const meteringKey = requireValue(env, 'STABLEHAND_MODEL_GATEWAY_METERING_KEY');
   const revision = requireValue(env, 'STABLEHAND_MODEL_GATEWAY_REVISION');
+  const adminKey = env.STABLEHAND_MODEL_GATEWAY_ADMIN_KEY?.trim() || undefined;
   const explicitFreeModels = Object.freeze([
     ...new Set(
       (env.STABLEHAND_MODEL_GATEWAY_EXPLICIT_FREE_MODELS ?? '')
@@ -99,6 +108,7 @@ export function resolveModelGatewayConfig(
     revision,
     explicitFreeModels,
     sandboxEnvironment,
+    ...(adminKey ? { adminKey } : {}),
   };
 }
 

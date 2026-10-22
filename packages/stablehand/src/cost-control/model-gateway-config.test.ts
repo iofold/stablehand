@@ -109,3 +109,25 @@ describe('mergeSandboxSecrets', () => {
     })).toEqual({ FOO: 'bar' });
   });
 });
+
+describe('per-session gateway keys configuration', () => {
+  const ENABLED = {
+    STABLEHAND_MODEL_GATEWAY_ENABLED: 'true',
+    STABLEHAND_MODEL_GATEWAY_URL: 'http://litellm:4000',
+    STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+    STABLEHAND_MODEL_GATEWAY_METERING_KEY: 'metering-key',
+    STABLEHAND_MODEL_GATEWAY_REVISION: 'dev1-1',
+  };
+
+  it('enables session keys only when an admin key is configured, and keeps it out of sandboxes', () => {
+    const config = resolveModelGatewayConfig({ ...ENABLED, STABLEHAND_MODEL_GATEWAY_ADMIN_KEY: ' admin-key ' });
+    if (!config.enabled) throw new Error('expected an enabled gateway');
+    expect(config.adminKey).toBe('admin-key');
+    expect(Object.values(config.sandboxEnvironment)).not.toContain('admin-key');
+  });
+
+  it('treats an empty admin key as not configured', () => {
+    const config = resolveModelGatewayConfig({ ...ENABLED, STABLEHAND_MODEL_GATEWAY_ADMIN_KEY: '' });
+    expect(config).not.toHaveProperty('adminKey');
+  });
+});
