@@ -1,0 +1,22 @@
+{
+  "campaign": "content-factory",
+  "timezone": "Asia/Kolkata",
+  "schedule": {
+    "weekly": "0 7 * * 1",
+    "measure": "0 7 * * 4"
+  },
+  "budget": {
+    "weeklyUsd": 3,
+    "weeklyRuns": 40
+  },
+  "niche": {
+    "description": "running AI agents in production at small software companies",
+    "keywords": ["AI agents in production", "LLM evals"],
+    "xAccounts": [],
+    "linkedinAuthors": []
+  },
+  "me": {
+    "xHandle": "",
+    "linkedinUrl": ""
+  }
+}

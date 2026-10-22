@@ -1,0 +1,20 @@
+{
+  "name": "@stablehand/example-content-factory",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "description": "Weekly content factory: scout, notes miner, writer, editor, publisher and measure agents chained by events under one campaign budget",
+  "scripts": {
+    "seed": "node --experimental-strip-types seed.ts",
+    "notes-mcp": "node --experimental-strip-types notes-mcp/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stablehand/manifest": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.3"
+  }
+}

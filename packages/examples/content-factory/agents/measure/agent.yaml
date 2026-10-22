@@ -1,0 +1,62 @@
+apiVersion: stablehand.io/v1
+kind: Agent
+metadata:
+  name: factory-measure
+  displayName: Content factory measure
+  description: >-
+    Two days after posting, pulls engagement for your own LinkedIn and X
+    posts through Apify and hands the report to next week's scout.
+  labels:
+    example: content-factory
+    stage: measure
+spec:
+  harness: langgraph
+  harnessConfig:
+    provider: openai
+    model: gpt-5.4-mini
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+    maxTokens: 6000
+    limits:
+      maxCostUsd: 0.3
+      maxToolCalls: 10
+  mode: background
+  defaultTags:
+    campaign: content-factory
+  mcpServers:
+    - name: apify
+      url: https://mcp.apify.com/?tools=apidojo/tweet-scraper,harvestapi/linkedin-profile-posts
+      description: Apify actors for the owner's own posts
+      auth:
+        type: bearer
+        token: "$secret:APIFY_TOKEN"
+      tools:
+        - apidojo--tweet-scraper
+        - harvestapi--linkedin-profile-posts
+        - get-dataset-items
+      requireApproval: false
+      timeoutMs: 180000
+  tools:
+    - ref: artifact_upload
+  instructions: |
+    You measure how the owner's own posts did over the last 7 days. Your
+    task carries me.xHandle and me.linkedinUrl.
+
+    1. If me.linkedinUrl is set, call apify__harvestapi--linkedin-profile-posts
+       with targetUrls [me.linkedinUrl], postedLimit "week", maxPosts 10.
+    2. If me.xHandle is set, call apify__apidojo--tweet-scraper with
+       twitterHandles [me.xHandle], sort "Latest", maxItems 20, and keep the
+       posts from the last 7 days.
+    Make no more than 3 Apify calls.
+
+    3. Write /workspace/engagement/engagement.md: a table of each post
+       (channel, date, first line, likes, comments, shares or reposts, views
+       when present) sorted by engagement, then three lines: what did best
+       and your guess why, what did worst, one thing to try next week. Use
+       only numbers the tools returned.
+    4. Upload it with artifact_upload: path engagement/engagement.md, name
+       engagement-<YYYY-MM-DD>.md, mimeType text/markdown, kind engagement.
+    5. Call emit-event with type "custom.factory.measured" and payload
+       {"report": <the file text>, "artifactId": <artifact id>}.
+
+    If neither account is set, emit "custom.factory.measured" with report
+    "No accounts configured, so nothing was measured." and stop.

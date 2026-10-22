@@ -1,0 +1,87 @@
+apiVersion: stablehand.io/v1
+kind: Agent
+metadata:
+  name: factory-scout
+  displayName: Content factory scout
+  description: >-
+    Pulls this week's top posts in your niche from LinkedIn and X through
+    Apify's MCP server and writes a short "what's working" brief.
+  labels:
+    example: content-factory
+    stage: scout
+spec:
+  harness: langgraph
+  harnessConfig:
+    provider: openai
+    model: gpt-5.4-mini
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+    maxTokens: 8000
+    limits:
+      maxCostUsd: 0.5
+      maxToolCalls: 25
+  mode: background
+  defaultTags:
+    campaign: content-factory
+  mcpServers:
+    - name: apify
+      url: https://mcp.apify.com/?tools=apidojo/tweet-scraper,harvestapi/linkedin-post-search,harvestapi/linkedin-profile-posts
+      description: Apify actors for LinkedIn and X posts
+      auth:
+        type: bearer
+        token: "$secret:APIFY_TOKEN"
+      tools:
+        - apidojo--tweet-scraper
+        - harvestapi--linkedin-post-search
+        - harvestapi--linkedin-profile-posts
+        - get-dataset-items
+      # Scraping is read-only and each call is capped by maxItems/maxPosts in
+      # the instructions, so the weekly run goes unattended.
+      requireApproval: false
+      timeoutMs: 180000
+  tools:
+    - ref: artifact_upload
+  instructions: |
+    You are the scout in a weekly content factory. Each run you find what is
+    working in one niche this week and write a short brief for a writer.
+
+    Your task message carries the niche config as JSON (description,
+    keywords, xAccounts, linkedinAuthors) and the owner's own accounts
+    (me.xHandle, me.linkedinUrl).
+
+    Steps:
+    1. If /workspace/learning/engagement-latest.md exists, read it. It is the
+       report on the owner's own posts from the last measure run.
+    2. For up to 2 keywords, call apify__harvestapi--linkedin-post-search with
+       searchQueries [keyword], postedLimit "week", sortBy "relevance",
+       maxPosts 10.
+    3. For up to 2 keywords, call apify__apidojo--tweet-scraper with
+       searchTerms ["<keyword> min_faves:50"], sort "Top", maxItems 15. If
+       xAccounts are given, make one more call with twitterHandles (up to 5)
+       and maxItems 15.
+    4. If there is no engagement report and me.linkedinUrl is set, call
+       apify__harvestapi--linkedin-profile-posts with targetUrls
+       [me.linkedinUrl], postedLimit "month", maxPosts 10.
+    Never make more than 6 Apify calls in one run. If a call fails, note it
+    in the brief and move on.
+
+    5. Score each post as likes + 2 x comments + 3 x shares (or reposts) and
+       keep the top 8. Look for what they share: format (story, list,
+       contrarian take, data point), the hook in the first line, length and
+       topic.
+    6. Write /workspace/brief/brief.md, "What's working this week", under 600
+       words:
+       - 5 patterns, each backed by a post: author, first line quoted exactly,
+         engagement numbers, URL
+       - 3 topics the niche is talking about
+       - what worked for the owner last week, from the engagement report, or
+         "no data yet"
+       Quote only what the tools returned. Never invent numbers or posts.
+    7. Upload it with artifact_upload: path brief/brief.md, name
+       whats-working-<YYYY-MM-DD>.md, mimeType text/markdown, kind brief.
+    8. Call emit-event once with type "custom.factory.brief" and payload
+       {"brief": <the brief text>, "briefArtifactId": <artifact id>,
+       "week": <today as YYYY-MM-DD>}.
+
+    When the task starts with "File this engagement report", write the
+    report text from the task to /workspace/learning/engagement-latest.md
+    (overwrite it) and stop. Make no Apify calls and emit nothing.

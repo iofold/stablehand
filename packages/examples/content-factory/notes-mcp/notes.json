@@ -1,0 +1,51 @@
+{
+  "notice": "Synthetic sample for the Stablehand content factory demo. Every person, company and number below is invented.",
+  "workspace": "Quillmark (fictional analytics startup)",
+  "meetings": [
+    {
+      "id": "mtg-pricing-review",
+      "title": "Pricing review",
+      "daysAgo": 1,
+      "attendees": ["Asha Verma (Head of Sales)", "Tomas Lind (CTO)", "Ines Okafor (CEO)"],
+      "privateNotes": "Ines wants to stop discounting annual plans. Asha worried about Q4 pipeline.",
+      "summary": "We are cutting the annual discount from 20% to 10% starting next month. Data from the last two quarters: annual buyers on 20% discount churned at 9%, monthly buyers at 11%, so the discount bought us almost nothing. Asha will tell the three open deals before the change. Decision owner: Ines.",
+      "transcript": "Ines: The 20% discount costs us about 40k a year and the churn gap is two points. Tomas: Two points is noise at our size. Asha: Contoso will push back, they always ask for 25. Ines: Then we lose Contoso's discount, not Contoso. We go to 10% and we say why."
+    },
+    {
+      "id": "mtg-agent-postmortem",
+      "title": "Postmortem: report agent ran up a bill",
+      "daysAgo": 2,
+      "attendees": ["Tomas Lind (CTO)", "Ravi Menon (engineer)"],
+      "privateNotes": "Ravi embarrassed. Not a blame thing.",
+      "summary": "Our nightly report agent looped on a failing chart call for 6 hours and spent $212 in model calls. Root cause: no per-run spend cap and a retry loop with no limit. Fixes: per-run cap of $2, max 40 tool calls, and an approval step before it emails customers. Since the cap went in, the worst run cost $1.84.",
+      "transcript": "Tomas: The fix is boring. Cap every run, count tool calls, and make a person approve anything a customer sees. Ravi: I assumed the provider would stop it. Tomas: Nobody stops it but us."
+    },
+    {
+      "id": "mtg-customer-call-northwind",
+      "title": "Customer call: Northwind Bakery Supply",
+      "daysAgo": 3,
+      "attendees": ["Asha Verma (Head of Sales)", "Dana Whitfield (Ops lead, Northwind Bakery Supply)"],
+      "privateNotes": "Dana said they might expand to 3 more sites if forecasts hold. Do not share that publicly.",
+      "summary": "The customer's ops lead said the weekly demand forecast cut flour waste by 18% over 8 weeks. What they valued most was the plain-English explanation next to each forecast, not the accuracy number. They ignore the dashboard and read the Monday email.",
+      "transcript": "Dana: Honestly I never open the dashboard. The Monday email tells me what changed and why, and that's what I forward to the bakers. Asha: So the explanation matters more than the chart? Dana: The explanation is the product."
+    },
+    {
+      "id": "mtg-hiring-sync",
+      "title": "Hiring sync",
+      "daysAgo": 4,
+      "attendees": ["Ines Okafor (CEO)", "Tomas Lind (CTO)"],
+      "privateNotes": "Candidate A asked for 30% above band.",
+      "summary": "We dropped the take-home test. Over the last 14 candidates, 6 dropped out at the take-home stage, and the 3 people we hired did no better on it than the ones we passed on. Replacing it with a 45-minute paired debugging session on a real bug from our tracker.",
+      "transcript": "Tomas: The take-home measured free time, not skill. Ines: Then we stop asking for free time."
+    },
+    {
+      "id": "mtg-roadmap-q1",
+      "title": "Q1 roadmap",
+      "daysAgo": 9,
+      "attendees": ["Ines Okafor (CEO)", "Tomas Lind (CTO)", "Asha Verma (Head of Sales)"],
+      "privateNotes": "Board wants an AI story. Ines skeptical.",
+      "summary": "Q1 priority is the explanation layer, not a chatbot. Three customers asked for a chat interface; eleven asked for better explanations in the Monday email. We build for the eleven.",
+      "transcript": "Ines: A chatbot demos well. Explanations renew. We build what renews."
+    }
+  ]
+}

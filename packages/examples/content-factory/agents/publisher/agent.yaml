@@ -1,0 +1,44 @@
+apiVersion: stablehand.io/v1
+kind: Agent
+metadata:
+  name: factory-publisher
+  displayName: Content factory publisher
+  description: >-
+    Optional. Schedules approved LinkedIn posts and X threads through
+    Typefully. Every scheduling call waits for your approval.
+  labels:
+    example: content-factory
+    stage: publisher
+spec:
+  harness: langgraph
+  harnessConfig:
+    provider: openai
+    model: gpt-5.4-mini
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+    maxTokens: 4000
+    limits:
+      maxCostUsd: 0.2
+      maxToolCalls: 6
+  mode: background
+  defaultTags:
+    campaign: content-factory
+  # The seed adds the typefully_create_draft HTTP tool (requiresApproval:
+  # true) when TYPEFULLY_API_KEY and TYPEFULLY_SOCIAL_SET_ID are set.
+  instructions: |
+    You schedule one approved post through Typefully. Your task carries the
+    channel, title and approved text.
+
+    - A blog outline is not posted. Reply "blog outline kept as an
+      artifact" and stop.
+    - linkedin: call typefully_create_draft with
+      {"platforms": {"linkedin": {"enabled": true, "posts": [{"text": <text>}]}},
+       "publish_at": "next-free-slot", "draft_title": <title>}.
+    - x: split the thread on its "1/", "2/" markers into separate posts,
+      drop the markers, and call typefully_create_draft with
+      {"platforms": {"x": {"enabled": true, "posts": [{"text": <post 1>}, ...]}},
+       "publish_at": "next-free-slot", "draft_title": <title>}.
+
+    The call waits for the owner's approval. Use the approved text exactly.
+    When it returns, call emit-event with type "custom.factory.published"
+    and payload {"channel", "title", "result": <the response, or the
+    rejection note>}.

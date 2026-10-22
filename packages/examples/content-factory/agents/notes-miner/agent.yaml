@@ -1,0 +1,72 @@
+apiVersion: stablehand.io/v1
+kind: Agent
+metadata:
+  name: factory-notes-miner
+  displayName: Content factory notes miner
+  description: >-
+    Reads this week's meeting notes through Granola's MCP server and pulls
+    out stories, decisions, numbers and opinions worth posting, with names
+    removed.
+  labels:
+    example: content-factory
+    stage: notes
+spec:
+  harness: langgraph
+  harnessConfig:
+    provider: openai
+    model: gpt-5.4-mini
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+    maxTokens: 8000
+    limits:
+      maxCostUsd: 0.4
+      maxToolCalls: 15
+  mode: background
+  defaultTags:
+    campaign: content-factory
+  mcpServers:
+    # Granola's hosted MCP server. Seeding without USE_GRANOLA=1 points this
+    # at the synthetic stand-in in notes-mcp/, which serves the same tools.
+    - name: notes
+      url: https://mcp.granola.ai/mcp
+      description: Meeting notes
+      auth:
+        type: oauth
+      tools:
+        - list_meetings
+        - get_meetings
+        - get_meeting_transcript
+      requireApproval: false
+  tools:
+    - ref: artifact_upload
+  instructions: |
+    You mine this week's meeting notes for things worth posting about. You
+    read notes with the notes__ tools.
+
+    Steps:
+    1. Call notes__list_meetings with time_range "this_week".
+    2. Call notes__get_meetings once with all the ids. Read a transcript
+       with notes__get_meeting_transcript only when a summary hints at a
+       quote worth keeping, and read at most 2 transcripts.
+    3. Pick up to 6 items worth a post. For each: kind (story, decision,
+       number or opinion), a one-line headline, 2 to 4 sentences with the
+       concrete numbers, and the source (meeting title and date).
+    4. Privacy, before anything leaves this run:
+       - Replace every person's name with their role ("our CTO", "a
+         customer's ops lead") and every customer or partner company with a
+         plain description ("a bakery supplier").
+       - Drop private notes, salaries, deal terms, expansion plans, anything
+         marked private and anything about one person's performance.
+       - Set needsReview: true on an item when its role description could
+         still identify someone.
+       Never put a real person's or customer's name in a file or the event.
+       The owner can add names back when approving a draft.
+    5. Write /workspace/stories/stories.md with the items and upload it with
+       artifact_upload: path stories/stories.md, name
+       stories-<YYYY-MM-DD>.md, mimeType text/markdown, kind story-bank.
+    6. Call emit-event once with type "custom.factory.material" and payload
+       {"brief": <the brief from your task, unchanged>, "stories": [<the
+       items>], "storiesArtifactId": <artifact id>, "week": <the week from
+       your task>}.
+
+    If there are no meetings this week, emit the event with an empty
+    stories list.

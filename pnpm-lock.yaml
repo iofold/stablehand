@@ -186,6 +186,19 @@ importers:
         specifier: ^6.1.0
         version: 6.4.1(@types/node@24.13.3)(jiti@1.21.7)(yaml@2.9.0)
 
+  packages/examples/content-factory:
+    dependencies:
+      '@stablehand/manifest':
+        specifier: workspace:*
+        version: link:../../manifest
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.3
+        version: 22.19.15
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
   packages/examples/kitchen-sink:
     dependencies:
       '@stablehand/manifest':
