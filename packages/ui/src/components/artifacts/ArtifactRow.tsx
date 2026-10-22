@@ -93,7 +93,7 @@ export function ArtifactRow({ artifact, isSelected, showAgentName = false }: Art
             to={`/agents/${artifact.agentId}`}
             onClick={(clickEvent) => clickEvent.stopPropagation()}
             className="truncate max-w-[120px] inline-block hover:text-accent-300 hover:underline"
-            title={`${agentName} — open agent`}
+            title={`Open ${agentName}`}
           >
             {agentName}
           </Link>

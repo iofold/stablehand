@@ -147,7 +147,7 @@ export function DashboardPage() {
   return (
     <div className="flex min-h-screen flex-col bg-surface-950">
       <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-5">
-        <PageShell title="Agent Dashboard" description="What your agents are doing right now." />
+        <PageShell title="Dashboard" />
 
         <div className="mt-4 border-b border-surface-700">
           <div className="flex overflow-x-auto overflow-y-hidden">

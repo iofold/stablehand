@@ -53,7 +53,7 @@ export function RecentSessionsTable({
   agentNameMap,
   onCancel,
   showFilters = true,
-  emptyMessage = 'No sessions yet. Start a conversation from an agent to see it here.',
+  emptyMessage = 'No sessions yet.',
 }: RecentSessionsTableProps) {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<SessionFilter>('all');
@@ -132,7 +132,7 @@ export function RecentSessionsTable({
                     <td className="px-4 py-2.5 text-right text-sm tabular-nums text-surface-400">
                       {conv.turnCount}
                     </td>
-                    <td className="px-4 py-2.5 text-right text-sm tabular-nums text-surface-400">
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right text-sm tabular-nums text-surface-400">
                       {conv.totalTokens !== null ? `${formatCompactNumber(conv.totalTokens)} tok` : '—'}
                       {cost && <span className="ml-2" title={cost.title}>{cost.label}</span>}
                     </td>
@@ -144,7 +144,7 @@ export function RecentSessionsTable({
                         ? formatDurationBetween(conv.startedAt, conv.completedAt ?? conv.updatedAt)
                         : formatRunningDuration(conv.startedAt)}
                     </td>
-                    <td className="px-4 py-2.5 text-right text-sm text-surface-500">
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right text-sm text-surface-500">
                       <RelativeTime timestamp={conv.updatedAt} />
                     </td>
                     <td className="px-4 py-2.5 text-right">

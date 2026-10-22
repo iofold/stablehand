@@ -62,7 +62,7 @@ function CopyableId({ label, value }: { label: string; value: string }) {
       <button
         type="button"
         onClick={handleCopy}
-        title={`${value} — click to copy`}
+        title={`Copy ${value}`}
         className="group flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 font-mono text-[11px] text-surface-300 transition-colors hover:bg-surface-800 hover:text-surface-100"
       >
         <span className="truncate">{value}</span>
@@ -250,7 +250,7 @@ export function TurnInspectorPanel({ agentId, turnId, onClose }: TurnInspectorPa
 
             <Section title="Budget">
               {budgetUnavailable ? (
-                <p className="text-xs text-surface-500">Budget status is unavailable right now.</p>
+                <p className="text-xs text-surface-500">Budget status didn't load.</p>
               ) : budgetStatus == null || budgetStatus.matches.length === 0 ? (
                 <p className="text-xs text-surface-500">
                   No budget policies apply to this agent.{' '}
@@ -290,7 +290,7 @@ export function TurnInspectorPanel({ agentId, turnId, onClose }: TurnInspectorPa
                     </div>
                   ))}
                   <p className="text-[10px] text-surface-500">
-                    Shows what this agent's budgets look like now, not when this turn ran.
+                    Current budget use, not the use at the time of this turn.
                   </p>
                 </div>
               )}
@@ -351,7 +351,7 @@ export function TurnInspectorPanel({ agentId, turnId, onClose }: TurnInspectorPa
                 className="flex items-center gap-1.5 text-xs text-surface-400 transition-colors hover:text-surface-300"
               >
                 {rawExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                Canonical API Response
+                API response
               </button>
               {rawExpanded && (
                 <pre className="mt-2 overflow-x-auto rounded-md border border-surface-800 bg-surface-950 p-3 text-xs text-surface-300">

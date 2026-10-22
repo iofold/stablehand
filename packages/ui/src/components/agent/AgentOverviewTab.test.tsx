@@ -91,7 +91,7 @@ describe('AgentOverviewTab recent conversations', () => {
       </MemoryRouter>,
     ));
 
-    expect(container.textContent).toContain('Recent Conversations');
+    expect(container.textContent).toContain('Recent conversations');
     expect(container.textContent).not.toContain('Recent Turns');
     expect(container.querySelectorAll('[data-testid="recent-conversation-row"]')).toHaveLength(8);
     expect(container.textContent).toContain('Close task 7');
@@ -104,7 +104,7 @@ describe('AgentOverviewTab recent conversations', () => {
     expect(onOpenConversation).toHaveBeenCalledWith('conversation-4');
 
     const viewAll = [...container.querySelectorAll('button')]
-      .find((button) => button.textContent?.includes('View All Conversations')) as HTMLButtonElement;
+      .find((button) => button.textContent?.includes('View all conversations')) as HTMLButtonElement;
     act(() => viewAll.click());
     expect(onViewAllConversations).toHaveBeenCalledOnce();
   });
@@ -161,7 +161,7 @@ describe('AgentOverviewTab recent conversations', () => {
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    expect(container.textContent).toContain('Canonical API Response');
+    expect(container.textContent).toContain('API response');
     expect(container.textContent).toContain('"httpTools": []');
     expect(container.textContent).toContain('"resourceLimits": null');
   });

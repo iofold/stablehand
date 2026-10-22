@@ -84,19 +84,19 @@ describe('SettingsPage setting limits', () => {
   }
 
   it.each([
-    ['Max Workspace Snapshot', '1', '1024', ''],
-    ['Max Workspace Upload', '1', '1024', ''],
-    ['Idle Timeout', '10', '3600', ''],
-    ['Turn Timeout', '30', '7200', ''],
-    ['Reconciliation Interval', '10', '3600', ''],
-    ['Max Global Containers', '1', '100', ''],
-    ['Queue Timeout', '5', '1800', ''],
-    ['Max Sessions Per Agent', '1', '20', ''],
-    ['Max Trigger Depth', '1', '20', ''],
+    ['Max workspace snapshot', '1', '1024', ''],
+    ['Max workspace upload', '1', '1024', ''],
+    ['Idle timeout', '10', '3600', ''],
+    ['Turn timeout', '30', '7200', ''],
+    ['State check interval', '10', '3600', ''],
+    ['Max containers', '1', '100', ''],
+    ['Queue timeout', '5', '1800', ''],
+    ['Max sessions per agent', '1', '20', ''],
+    ['Max trigger depth', '1', '20', ''],
     ['Default CPU', '0.1', '16', '0.1'],
-    ['Default Memory', '128', '32768', ''],
-    ['Default PID Limit', '32', '2048', ''],
-    ['Default Session Timeout', '60', '43200', ''],
+    ['Default memory', '128', '32768', ''],
+    ['Default process limit', '32', '2048', ''],
+    ['Default session timeout', '60', '43200', ''],
   ])('uses the server-supported bounds for %s', async (label, min, max, step) => {
     act(() => {
       root.render(<MemoryRouter><SettingsPage /></MemoryRouter>);
@@ -112,7 +112,7 @@ describe('SettingsPage setting limits', () => {
     });
     await flushEffects();
 
-    const turnTimeout = inputFor('Turn Timeout');
+    const turnTimeout = inputFor('Turn timeout');
     const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
     act(() => {
       valueSetter?.call(turnTimeout, '10');

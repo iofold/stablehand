@@ -78,7 +78,7 @@ export function ErrorDisplay({ summary, statusCode, details, onRetry, onDismiss 
             ) : (
               <ChevronRight className="h-3 w-3" />
             )}
-            Technical Details
+            Technical details
           </button>
           {expanded && (
             <pre

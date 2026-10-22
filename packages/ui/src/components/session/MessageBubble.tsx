@@ -90,7 +90,7 @@ export function MessageBubble({ message, isStreaming, agentId, conversationId }:
         const parsed = JSON.parse(rawError);
         if (typeof parsed === 'object' && parsed !== null) {
           statusCode = typeof parsed.statusCode === 'number' ? parsed.statusCode : (typeof parsed.status === 'number' ? parsed.status : undefined);
-          summary = parsed.message || parsed.error || parsed.detail || 'An error occurred';
+          summary = parsed.message || parsed.error || parsed.detail || 'The turn failed';
           if (parsed.stack || parsed.detail || rawError.length > 120) {
             details = rawError;
           }
@@ -105,7 +105,7 @@ export function MessageBubble({ message, isStreaming, agentId, conversationId }:
         // If the raw error is very long (likely a blob), put it in details
         if (rawError.length > 120) {
           details = rawError;
-          summary = 'An error occurred';
+          summary = 'The turn failed';
         }
       }
       return (

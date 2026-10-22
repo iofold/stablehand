@@ -58,7 +58,7 @@ describe('AgentCard', () => {
     renderCard();
 
     const newConversationButton = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('New Conversation'),
+      button.textContent?.includes('New conversation'),
     );
 
     await act(async () => {
@@ -170,6 +170,6 @@ describe('AgentCard', () => {
     expect(container.querySelector('[data-testid="agent-budget-chip"]')?.textContent)
       .toContain('Budget blocked');
     expect(container.querySelector('[data-testid="agent-metering-chip"]')?.textContent)
-      .toContain('Metering degraded');
+      .toContain('Cost tracking delayed');
   });
 });

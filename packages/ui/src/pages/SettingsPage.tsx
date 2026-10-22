@@ -221,7 +221,7 @@ export function SettingsPage() {
       <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-5 space-y-6">
         <PageShell
           title="Settings"
-          description="System configuration and defaults."
+          description="Runtime limits and defaults for new agents."
           icon={<Settings className="h-6 w-6 text-surface-400" />}
         />
         <SettingsNav />
@@ -235,7 +235,7 @@ export function SettingsPage() {
             <Settings className="h-8 w-8 text-surface-400 mb-3" />
             <p className="text-sm text-surface-400">{error}</p>
             <p className="text-xs text-surface-400 mt-1">
-              The configuration API may not be available yet.
+              Settings can't be changed until the API responds.
             </p>
           </div>
         ) : (
@@ -245,7 +245,7 @@ export function SettingsPage() {
               <div className="flex items-center gap-3 border-b border-surface-700 px-5 py-4">
                 <Server className="h-5 w-5 text-accent-400" />
                 <div>
-                  <h3 className="text-sm font-semibold text-surface-100">System Info</h3>
+                  <h3 className="text-sm font-semibold text-surface-100">System</h3>
                   <p className="text-xs text-surface-400">Runtime and environment details</p>
                 </div>
               </div>
@@ -255,7 +255,7 @@ export function SettingsPage() {
                   label="Uptime"
                   value={config?.system?.uptimeMs != null ? formatUptime(config.system.uptimeMs) : undefined}
                 />
-                <ConfigRow label="Data Directory" value={config?.system?.dbPath} mono />
+                <ConfigRow label="Data directory" value={config?.system?.dbPath} mono />
               </div>
             </div>
 
@@ -264,18 +264,18 @@ export function SettingsPage() {
               <div className="flex items-center gap-3 border-b border-surface-700 px-5 py-4">
                 <Database className="h-5 w-5 text-accent-400" />
                 <div>
-                  <h3 className="text-sm font-semibold text-surface-100">Agent Defaults</h3>
+                  <h3 className="text-sm font-semibold text-surface-100">Agent defaults</h3>
                   <p className="text-xs text-surface-400">Default configuration for new agents</p>
                 </div>
               </div>
               <div className="divide-y divide-surface-700/50">
-                <ConfigRow label="Default Harness" value={config?.agentDefaults?.harness} />
+                <ConfigRow label="Default harness" value={config?.agentDefaults?.harness} />
                 <ConfigRow
                   label="Temperature"
                   value={config?.agentDefaults?.temperature != null ? String(config.agentDefaults.temperature) : undefined}
                 />
                 <ConfigRow
-                  label="Max Tokens"
+                  label="Max tokens"
                   value={config?.agentDefaults?.maxTokens != null ? String(config.agentDefaults.maxTokens) : undefined}
                 />
               </div>
@@ -283,23 +283,23 @@ export function SettingsPage() {
 
             <SettingsSection
               icon={HardDrive}
-              title="Workspace Limits"
+              title="Workspace limits"
               description="Size limits for workspace snapshots and uploads"
               wide
               settingsLoading={settingsLoading}
               settings={settings}
             >
-              <LimitRow label="Max Workspace Snapshot" description="Maximum size of the workspace tar snapshot captured on suspend" value={draftTarMb} onChange={setDraftTarMb} min={SYSTEM_SETTING_BOUNDS.maxWorkspaceTarBytes.min / MB} max={SYSTEM_SETTING_BOUNDS.maxWorkspaceTarBytes.max / MB} />
-              <LimitRow label="Max Workspace Upload" description="Maximum total size of a workspace tarball uploaded via the Files tab (ADR 010)" value={draftUploadMb} onChange={setDraftUploadMb} min={SYSTEM_SETTING_BOUNDS.maxTarUploadBytes.min / MB} max={SYSTEM_SETTING_BOUNDS.maxTarUploadBytes.max / MB} />
+              <LimitRow label="Max workspace snapshot" description="Largest workspace snapshot kept when a session is suspended" value={draftTarMb} onChange={setDraftTarMb} min={SYSTEM_SETTING_BOUNDS.maxWorkspaceTarBytes.min / MB} max={SYSTEM_SETTING_BOUNDS.maxWorkspaceTarBytes.max / MB} />
+              <LimitRow label="Max workspace upload" description="Largest archive accepted from the Files tab" value={draftUploadMb} onChange={setDraftUploadMb} min={SYSTEM_SETTING_BOUNDS.maxTarUploadBytes.min / MB} max={SYSTEM_SETTING_BOUNDS.maxTarUploadBytes.max / MB} />
               <ReadonlyLimitRow
-                label="Max Per-File (Workspace)"
-                description="Per-file cap inside an uploaded workspace archive. Enforced by ADR 010 server-side."
+                label="Max file size in an upload"
+                description="Larger files in an uploaded archive are rejected."
                 value="5"
                 unit="MB"
                 testId="setting-max-per-file"
               />
               <ReadonlyLimitRow
-                label="Workspace Archive Format"
+                label="Workspace archive format"
                 description="Only .tar.gz / .tgz archives are accepted; symlinks and known executable types are rejected."
                 value=".tar.gz"
                 testId="setting-workspace-format"
@@ -308,44 +308,44 @@ export function SettingsPage() {
 
             <SettingsSection
               icon={Timer}
-              title="Session Lifecycle"
-              description="Container checkpoint and lifecycle timings"
+              title="Session lifecycle"
+              description="When idle sessions are suspended and turns time out"
               restartRequired
               wide
               settingsLoading={settingsLoading}
               settings={settings}
             >
-              <LimitRow label="Idle Timeout" description="Seconds before an idle session is checkpointed (also governs HITL wait)" value={draftIdleSec} onChange={setDraftIdleSec} unit="s" min={SYSTEM_SETTING_BOUNDS.idleTimeoutMs.min / SECOND_MS} max={SYSTEM_SETTING_BOUNDS.idleTimeoutMs.max / SECOND_MS} />
-              <LimitRow label="Turn Timeout" description="Max seconds for a single agent turn" value={draftTurnSec} onChange={setDraftTurnSec} unit="s" min={SYSTEM_SETTING_BOUNDS.turnTimeoutMs.min / SECOND_MS} max={SYSTEM_SETTING_BOUNDS.turnTimeoutMs.max / SECOND_MS} />
-              <LimitRow label="Reconciliation Interval" description="Seconds between container state reconciliation sweeps" value={draftReconcileSec} onChange={setDraftReconcileSec} unit="s" min={SYSTEM_SETTING_BOUNDS.reconciliationIntervalMs.min / SECOND_MS} max={SYSTEM_SETTING_BOUNDS.reconciliationIntervalMs.max / SECOND_MS} />
+              <LimitRow label="Idle timeout" description="Seconds before an idle session is suspended; also how long an approval request waits" value={draftIdleSec} onChange={setDraftIdleSec} unit="s" min={SYSTEM_SETTING_BOUNDS.idleTimeoutMs.min / SECOND_MS} max={SYSTEM_SETTING_BOUNDS.idleTimeoutMs.max / SECOND_MS} />
+              <LimitRow label="Turn timeout" description="Max seconds for a single agent turn" value={draftTurnSec} onChange={setDraftTurnSec} unit="s" min={SYSTEM_SETTING_BOUNDS.turnTimeoutMs.min / SECOND_MS} max={SYSTEM_SETTING_BOUNDS.turnTimeoutMs.max / SECOND_MS} />
+              <LimitRow label="State check interval" description="Seconds between checks that container state matches recorded session state" value={draftReconcileSec} onChange={setDraftReconcileSec} unit="s" min={SYSTEM_SETTING_BOUNDS.reconciliationIntervalMs.min / SECOND_MS} max={SYSTEM_SETTING_BOUNDS.reconciliationIntervalMs.max / SECOND_MS} />
             </SettingsSection>
 
             <SettingsSection
               icon={Layers}
               title="Concurrency"
-              description="Container and session concurrency limits"
+              description="How many containers and sessions run at once"
               restartRequired
               settingsLoading={settingsLoading}
               settings={settings}
             >
-              <LimitRow label="Max Global Containers" description="Max concurrent sandbox containers" value={draftMaxContainers} onChange={setDraftMaxContainers} unit="" min={SYSTEM_SETTING_BOUNDS.maxGlobalContainers.min} max={SYSTEM_SETTING_BOUNDS.maxGlobalContainers.max} />
-              <LimitRow label="Queue Timeout" description="Seconds a session waits for a container slot" value={draftQueueSec} onChange={setDraftQueueSec} unit="s" min={SYSTEM_SETTING_BOUNDS.queueTimeoutMs.min / SECOND_MS} max={SYSTEM_SETTING_BOUNDS.queueTimeoutMs.max / SECOND_MS} />
-              <LimitRow label="Max Sessions Per Agent" description="Max concurrent sessions per agent" value={draftMaxRunsPerAgent} onChange={setDraftMaxRunsPerAgent} unit="" min={SYSTEM_SETTING_BOUNDS.maxConcurrentSessionsPerAgent.min} max={SYSTEM_SETTING_BOUNDS.maxConcurrentSessionsPerAgent.max} />
-              <LimitRow label="Max Trigger Depth" description="Max event chain cascade depth" value={draftTriggerDepth} onChange={setDraftTriggerDepth} unit="" min={SYSTEM_SETTING_BOUNDS.maxTriggerDepth.min} max={SYSTEM_SETTING_BOUNDS.maxTriggerDepth.max} />
+              <LimitRow label="Max containers" description="Max concurrent sandbox containers" value={draftMaxContainers} onChange={setDraftMaxContainers} unit="" min={SYSTEM_SETTING_BOUNDS.maxGlobalContainers.min} max={SYSTEM_SETTING_BOUNDS.maxGlobalContainers.max} />
+              <LimitRow label="Queue timeout" description="Seconds a session waits for a container slot" value={draftQueueSec} onChange={setDraftQueueSec} unit="s" min={SYSTEM_SETTING_BOUNDS.queueTimeoutMs.min / SECOND_MS} max={SYSTEM_SETTING_BOUNDS.queueTimeoutMs.max / SECOND_MS} />
+              <LimitRow label="Max sessions per agent" description="Max concurrent sessions per agent" value={draftMaxRunsPerAgent} onChange={setDraftMaxRunsPerAgent} unit="" min={SYSTEM_SETTING_BOUNDS.maxConcurrentSessionsPerAgent.min} max={SYSTEM_SETTING_BOUNDS.maxConcurrentSessionsPerAgent.max} />
+              <LimitRow label="Max trigger depth" description="How many triggers one event can chain through" value={draftTriggerDepth} onChange={setDraftTriggerDepth} unit="" min={SYSTEM_SETTING_BOUNDS.maxTriggerDepth.min} max={SYSTEM_SETTING_BOUNDS.maxTriggerDepth.max} />
             </SettingsSection>
 
             <SettingsSection
               icon={Box}
-              title="Container Resources"
+              title="Container resources"
               description="Default resource limits for sandbox containers"
               restartRequired
               settingsLoading={settingsLoading}
               settings={settings}
             >
               <LimitRow label="Default CPU" description="Default CPU cores per container" value={draftCpus} onChange={setDraftCpus} unit="cores" step={0.1} min={SYSTEM_SETTING_BOUNDS.defaultCpus.min} max={SYSTEM_SETTING_BOUNDS.defaultCpus.max} />
-              <LimitRow label="Default Memory" description="Default memory per container" value={draftMemoryMb} onChange={setDraftMemoryMb} unit="MB" min={SYSTEM_SETTING_BOUNDS.defaultMemoryMb.min} max={SYSTEM_SETTING_BOUNDS.defaultMemoryMb.max} />
-              <LimitRow label="Default PID Limit" description="Default process limit per container" value={draftPidsLimit} onChange={setDraftPidsLimit} unit="" min={SYSTEM_SETTING_BOUNDS.defaultPidsLimit.min} max={SYSTEM_SETTING_BOUNDS.defaultPidsLimit.max} />
-              <LimitRow label="Default Session Timeout" description="Default session timeout in seconds" value={draftTimeoutSec} onChange={setDraftTimeoutSec} unit="s" min={SYSTEM_SETTING_BOUNDS.defaultTimeoutSec.min} max={SYSTEM_SETTING_BOUNDS.defaultTimeoutSec.max} />
+              <LimitRow label="Default memory" description="Default memory per container" value={draftMemoryMb} onChange={setDraftMemoryMb} unit="MB" min={SYSTEM_SETTING_BOUNDS.defaultMemoryMb.min} max={SYSTEM_SETTING_BOUNDS.defaultMemoryMb.max} />
+              <LimitRow label="Default process limit" description="Default process limit per container" value={draftPidsLimit} onChange={setDraftPidsLimit} unit="" min={SYSTEM_SETTING_BOUNDS.defaultPidsLimit.min} max={SYSTEM_SETTING_BOUNDS.defaultPidsLimit.max} />
+              <LimitRow label="Default session timeout" description="Default session timeout in seconds" value={draftTimeoutSec} onChange={setDraftTimeoutSec} unit="s" min={SYSTEM_SETTING_BOUNDS.defaultTimeoutSec.min} max={SYSTEM_SETTING_BOUNDS.defaultTimeoutSec.max} />
             </SettingsSection>
 
             <BudgetsSection />

@@ -238,7 +238,7 @@ test.describe('Kitchen Sink — Multi-Agent Chain @extended', () => {
       await page.goto(`/agents/${agent.id}`);
       await page.waitForLoadState('networkidle');
       await page.getByRole('button', { name: 'Configuration' }).click();
-      await expect(page.getByText('Canonical API Response')).toBeVisible();
+      await expect(page.getByText('API response', { exact: true })).toBeVisible();
       await expect(
         page.locator('div').filter({ has: page.getByText('Harness') }).first(),
       ).toContainText(expected.harness);

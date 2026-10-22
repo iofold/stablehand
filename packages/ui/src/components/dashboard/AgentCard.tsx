@@ -164,7 +164,7 @@ export function AgentCard({
           </div>
           <div className="h-10">
             <p className="text-sm text-surface-400 line-clamp-2">
-              {agent.description || <span className="italic text-surface-500">No description provided.</span>}
+              {agent.description || <span className="italic text-surface-500">No description</span>}
             </p>
           </div>
           <p className="text-[11px] text-surface-500 mt-0.5">
@@ -236,13 +236,13 @@ export function AgentCard({
                 className="inline-flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/15 px-2 py-0.5 text-[11px] font-medium text-violet-300"
               >
                 <AlertCircle className="h-3 w-3" />
-                Metering degraded
+                Cost tracking delayed
               </span>
             )}
             {agent.hasPendingInterrupt && (
               <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/15 border border-orange-500/30 px-2 py-0.5 text-[11px] font-medium text-orange-400">
                 <AlertCircle className="h-3 w-3" />
-                Approval Needed
+                Approval needed
               </span>
             )}
             {activeSessionCount > 0 && (
@@ -265,7 +265,7 @@ export function AgentCard({
               className="flex-1 md:flex-none flex items-center justify-center gap-1.5 rounded-md bg-accent-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-accent-500 transition-colors shadow-sm focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
             >
               <MessageSquare className="h-3.5 w-3.5" />
-              New Conversation
+              New conversation
             </button>
             <button
               type="button"

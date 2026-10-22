@@ -77,8 +77,8 @@ export function AgentOverviewTab({
       {/* Stats grid */}
       <div className="flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-surface-700">
         <div className="flex-1 min-w-0"><StatCard label="Conversations" value={conversationCount} /></div>
-        <div className="flex-1 min-w-0"><StatCard label="Active Sandboxes" value={activeSandboxSessions} /></div>
-        <div className="flex-1 min-w-0"><StatCard label="Tools Count" value={toolsCount} /></div>
+        <div className="flex-1 min-w-0"><StatCard label="Active sandboxes" value={activeSandboxSessions} /></div>
+        <div className="flex-1 min-w-0"><StatCard label="Tools" value={toolsCount} /></div>
         <div className="flex-1 min-w-0">
           <StatCard
             label="Tokens (24h)"
@@ -92,7 +92,7 @@ export function AgentOverviewTab({
 
       <div className="rounded-lg border border-surface-700 bg-surface-800 p-6">
         <h3 className="text-label mb-4">
-          Recent Conversations
+          Recent conversations
         </h3>
         {conversationsLoading ? (
           <p className="py-5 text-sm text-surface-400">Loading conversations…</p>
@@ -131,7 +131,7 @@ export function AgentOverviewTab({
                 >
                   <StatusBadge status={conversation.status} subject="Conversation" />
                   <span className="min-w-0 truncate text-surface-300">
-                    {conversation.taskDescription || 'No description'}
+                    {conversation.taskDescription || 'Untitled conversation'}
                   </span>
                   <span className="col-span-2 flex items-center gap-3 text-xs text-surface-400 sm:col-span-1">
                     <span>{conversation.turnCount} {conversation.turnCount === 1 ? 'turn' : 'turns'}</span>
@@ -162,7 +162,7 @@ export function AgentOverviewTab({
                   onClick={onViewAllConversations}
                   className="text-xs font-medium text-accent-400 hover:text-accent-300 transition-colors"
                 >
-                  View All Conversations
+                  View all conversations
                 </button>
               </div>
             )}
@@ -221,7 +221,7 @@ export function AgentOverviewTab({
             {parsedHarnessConfig != null && (
               <div>
                 <p className="text-label mb-2">
-                  Harness Config
+                  Harness config
                 </p>
                 <pre className="whitespace-pre-wrap break-words font-mono text-sm text-surface-300 bg-surface-900 rounded-lg p-4 border border-surface-700 overflow-x-auto">
                   {typeof parsedHarnessConfig === 'string'
@@ -244,7 +244,7 @@ export function AgentOverviewTab({
 
             <div>
               <p className="text-label mb-2">
-                System Prompt
+                System prompt
               </p>
               {agent.systemPrompt ? (
                 <pre className="whitespace-pre-wrap font-mono text-sm text-surface-300 bg-surface-900 rounded-lg p-4 max-h-96 overflow-y-auto border border-surface-700">
@@ -257,7 +257,7 @@ export function AgentOverviewTab({
 
             <div>
               <p className="text-label mb-2">
-                Canonical API Response
+                API response
               </p>
               <pre className="whitespace-pre-wrap break-words font-mono text-sm text-surface-300 bg-surface-900 rounded-lg p-4 border border-surface-700 overflow-x-auto">
                 {canonicalResponseText}

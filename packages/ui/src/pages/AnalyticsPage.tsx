@@ -74,7 +74,7 @@ function describeGatewayState(gateway: ModelGatewayStatus | null): string {
   if (gateway.state === 'degraded') {
     return gateway.enabled ? 'Cost tracking delayed' : 'Cost tracking off with unpriced runs';
   }
-  if (!gateway.enabled || gateway.state === 'disabled') return 'Direct metering — no gateway';
+  if (!gateway.enabled || gateway.state === 'disabled') return 'Direct provider billing, no gateway';
   if (gateway.state === 'healthy') return 'Cost tracking up to date';
   if (gateway.state === 'initializing') return 'Cost tracking starting';
   return 'Cost tracking delayed';
@@ -285,7 +285,7 @@ export function AnalyticsPage() {
             Runtime analytics
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-surface-400">
-            Turn throughput, model usage, cost coverage, and budget pressure from canonical runtime records.
+            Turns, tokens, model cost and budget use across all agents.
           </p>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -383,7 +383,7 @@ export function AnalyticsPage() {
       </section>
 
       <div className="mt-7 grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(300px,0.8fr)]">
-        <Panel title="Activity pulse" eyebrow={`Turns + tokens · ${windowDescription(window)}`}>
+        <Panel title="Activity" eyebrow={`Turns and tokens · ${windowDescription(window)}`}>
           <div
             data-testid="activity-chart"
             role="img"
@@ -469,7 +469,7 @@ export function AnalyticsPage() {
           </div>
         </Panel>
 
-        <Panel title="Telemetry integrity" eyebrow="Coverage + reconciliation">
+        <Panel title="Cost data" eyebrow="Pricing coverage">
           <div className="space-y-6 p-5">
             <div>
               <div className="flex items-baseline justify-between gap-4">
@@ -689,7 +689,7 @@ export function AnalyticsPage() {
       </div>
 
       <footer className="mt-6 flex flex-col gap-1 border-t border-surface-700/60 pt-4 text-[11px] text-surface-500 sm:flex-row sm:items-center sm:justify-between">
-        <p>Costs are known spend only; partial, pending, and unpriced turns remain visible.</p>
+        <p>Totals count priced spend only. Partly priced, pending and unpriced turns are counted above.</p>
         <p className="tabular-nums">
           {updatedAt ? `Updated ${new Date(updatedAt).toLocaleTimeString()}` : 'Not yet refreshed'}
         </p>

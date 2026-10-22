@@ -169,13 +169,9 @@ export function Dashboard({ agents, loading, error, onFilteredCountChange, onRet
               <EmptyDashboard className="text-surface-400" />
             </div>
             <h2 className="text-xl font-semibold text-surface-100">No agents yet</h2>
-            <p className="mt-2.5 text-sm text-surface-400 leading-relaxed">
-              Create your first agent to get started. Agents run in isolated
-              sandboxes with tools, artifacts, and chat capabilities.
-            </p>
             <button type="button" className="btn-primary mt-6 w-full" onClick={() => setShowCreateModal(true)}>
               <Plus className="h-4 w-4" />
-              Create your first agent
+              Create agent
             </button>
             <AgentFormModal open={showCreateModal} onClose={() => setShowCreateModal(false)} />
           </div>
@@ -193,7 +189,7 @@ export function Dashboard({ agents, loading, error, onFilteredCountChange, onRet
           </div>
           <input
             type="text"
-            placeholder="Search agents..."
+            placeholder="Search agents…"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="block w-full rounded-md border border-surface-700 bg-surface-800/50 py-2 pl-10 pr-3 text-sm text-surface-200 placeholder-surface-400 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
@@ -261,10 +257,7 @@ export function Dashboard({ agents, loading, error, onFilteredCountChange, onRet
             </div>
             <div className="text-left">
               <p className="text-sm font-medium text-surface-400 group-hover:text-surface-300 transition-colors">
-                New Agent
-              </p>
-              <p className="mt-0.5 text-[11px] text-surface-400 group-hover:text-surface-300 transition-colors">
-                Add a workflow
+                New agent
               </p>
             </div>
           </button>

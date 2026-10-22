@@ -1,10 +1,6 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
 import {
   Sparkles,
-  Zap,
-  FileSearch,
-  Code2,
-  BarChart3,
   ArrowDown,
   ChevronDown,
   ChevronRight,
@@ -20,7 +16,7 @@ import { cn } from '@/lib/utils';
 import { formatDurationBetween } from '@/lib/format';
 import { describeTurnCost } from '@/lib/usage-cost';
 import type { Message, ToolCallState, MessagePart } from '@/stores/conversation';
-import { isA2UIRenderToolName } from '@/lib/tool-display';
+import { isA2UIRenderToolName, toolDisplayName } from '@/lib/tool-display';
 
 export interface SessionThreadProps {
   messages: Message[];
@@ -326,13 +322,6 @@ function TurnDivider({
   );
 }
 
-const SUGGESTED_PROMPTS = [
-  { icon: FileSearch, label: 'Analyze data', prompt: 'Analyze the data and surface key insights' },
-  { icon: Code2, label: 'Generate code', prompt: 'Help me write a function that' },
-  { icon: BarChart3, label: 'Create a report', prompt: 'Generate a summary report of' },
-  { icon: Zap, label: 'Automate a task', prompt: 'Automate the process of' },
-];
-
 export function SessionThread({
   messages,
   streamingContent,
@@ -386,64 +375,37 @@ export function SessionThread({
   /* ── Empty state ── */
   if (messages.length === 0 && !isStreaming) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 overflow-y-auto">
-        {/* Hero */}
-        <div className="flex flex-col items-center gap-5 max-w-lg text-center mb-10">
-          <div className="relative">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-surface-800 ring-1 ring-accent-500/20 ">
-              <Sparkles className="h-7 w-7 text-accent-400" />
-            </div>
-            <div className="absolute -inset-3 rounded-3xl bg-accent-500/5 blur-xl -z-10" />
+      <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto p-8">
+        <div className="flex max-w-lg flex-col items-center gap-4 text-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-800 ring-1 ring-accent-500/20">
+            <Sparkles className="h-6 w-6 text-accent-400" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-surface-100 tracking-tight">
-              {agentName ? `${agentName} is ready` : 'Agent ready'}
+            <h2 className="text-xl font-semibold tracking-tight text-surface-100">
+              {agentName ?? 'New conversation'}
             </h2>
-            <p className="mt-1.5 text-sm text-surface-400 leading-relaxed max-w-sm mx-auto">
-              Describe what you need. This agent can reason, call tools, and produce structured outputs.
-            </p>
+            <p className="mt-1.5 text-sm text-surface-400">No messages yet.</p>
           </div>
 
-          {/* Tool chips */}
           {agentTools.length > 0 && (
-            <div className="flex flex-wrap justify-center gap-1.5 mt-1">
+            <div className="mt-1 flex flex-wrap justify-center gap-1.5">
               {agentTools.slice(0, 8).map((tool) => (
                 <span
                   key={tool}
-                  className="inline-flex items-center gap-1 rounded-md bg-surface-800/80 border border-surface-700/40 px-2 py-0.5 text-[11px] font-mono text-surface-400"
+                  title={tool}
+                  className="inline-flex items-center gap-1 rounded-md border border-surface-700/40 bg-surface-800/80 px-2 py-0.5 text-[11px] text-surface-400"
                 >
-                  <Zap className="h-2.5 w-2.5 text-surface-400" />
-                  {tool}
+                  <Wrench className="h-2.5 w-2.5 text-surface-500" />
+                  {toolDisplayName(tool)}
                 </span>
               ))}
               {agentTools.length > 8 && (
-                <span className="inline-flex items-center rounded-md bg-surface-800/80 border border-surface-700/40 px-2 py-0.5 text-[11px] text-surface-400">
+                <span className="inline-flex items-center rounded-md border border-surface-700/40 bg-surface-800/80 px-2 py-0.5 text-[11px] text-surface-400">
                   +{agentTools.length - 8} more
                 </span>
               )}
             </div>
           )}
-        </div>
-
-        {/* Suggested prompts */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full max-w-lg">
-          {SUGGESTED_PROMPTS.map(({ icon: Icon, label, prompt }) => (
-            <button
-              key={label}
-              type="button"
-              className="group flex items-center gap-3 rounded-lg border border-surface-700/40 bg-surface-800/40 px-4 py-3 text-left transition-all hover:bg-surface-800/80 hover:border-surface-600/60"
-            >
-              <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-surface-700/50 group-hover:bg-accent-600/15 transition-colors">
-                <Icon className="h-4 w-4 text-surface-400 group-hover:text-accent-400 transition-colors" />
-              </div>
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-surface-200 group-hover:text-surface-100 transition-colors">
-                  {label}
-                </div>
-                <div className="text-xs text-surface-400 truncate">{prompt}</div>
-              </div>
-            </button>
-          ))}
         </div>
       </div>
     );

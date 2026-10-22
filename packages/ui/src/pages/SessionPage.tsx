@@ -72,19 +72,19 @@ function humanizeError(raw: string): { summary: string; details: string } {
     return { summary: 'Connection to agent was interrupted', details: raw };
   }
   if (raw.includes('CANCEL') || raw.includes('canceled')) {
-    return { summary: 'Agent session was cancelled', details: raw };
+    return { summary: 'The turn was cancelled', details: raw };
   }
   if (raw.includes('timeout') || raw.includes('Timeout')) {
-    return { summary: 'Agent session timed out', details: raw };
+    return { summary: 'The request timed out', details: raw };
   }
   if (raw.includes('not found') || raw.includes('404')) {
-    return { summary: 'Resource not found', details: raw };
+    return { summary: 'Not found', details: raw };
   }
   if (raw.includes('Sandbox handler')) {
-    return { summary: 'Tool execution error', details: raw };
+    return { summary: 'A tool failed', details: raw };
   }
   if (raw.length > 100) {
-    return { summary: 'An error occurred during the agent session', details: raw };
+    return { summary: 'The request failed', details: raw };
   }
   return { summary: raw, details: '' };
 }
@@ -466,14 +466,14 @@ export function SessionPage() {
         <AlertTriangle className="h-12 w-12 text-surface-500" />
         <h1 className="text-lg font-semibold text-surface-200">Agent not found</h1>
         <p className="text-sm text-surface-400">
-          The agent you're looking for doesn't exist or has been deleted.
+          No agent has this ID. It may have been deleted.
         </p>
         <button
           type="button"
           onClick={() => navigate('/')}
           className="btn-primary mt-2"
         >
-          Back to Dashboard
+          Back to dashboard
         </button>
       </div>
     );
@@ -672,7 +672,7 @@ export function SessionPage() {
           {isReadOnly ? (
             <div className="mx-auto w-full max-w-3xl px-4 pb-4">
               <div className="rounded-lg border border-surface-700 bg-surface-800/50 p-4 text-center">
-                <p className="text-sm text-surface-400">This session has ended. Start a new conversation to continue.</p>
+                <p className="text-sm text-surface-400">This conversation has ended and can't take new messages.</p>
               </div>
             </div>
           ) : (

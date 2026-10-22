@@ -28,7 +28,7 @@ export function ArtifactDetailPanel() {
   return (
     <div className="w-[400px] border-l border-surface-800 bg-surface-900 flex flex-col h-full">
       <div className="p-4 border-b border-surface-800 flex items-center justify-between">
-        <h3 className="font-medium text-surface-100">Artifact Details</h3>
+        <h3 className="font-medium text-surface-100">Artifact details</h3>
         <button
           type="button"
           onClick={clearSelection}
@@ -87,7 +87,7 @@ export function ArtifactDetailPanel() {
           )}
 
           <div>
-            <div className="text-xs font-medium text-surface-500 uppercase tracking-wider">Storage Key</div>
+            <div className="text-xs font-medium text-surface-500 uppercase tracking-wider">Storage key</div>
             <p className="text-sm text-surface-100 mt-1 font-mono break-all">{selectedArtifact.storageKey}</p>
           </div>
 

@@ -383,7 +383,7 @@ export function BudgetPolicyLedger({
         <CircleDollarSign className="mx-auto h-5 w-5 text-surface-500" />
         <p className="mt-2 text-sm text-surface-300">No budget policies</p>
         <Link to="/settings#budgets" className="mt-2 inline-block text-xs text-accent-400 hover:text-accent-300">
-          Configure guardrails
+          Add a budget policy
         </Link>
       </div>
     );
@@ -406,7 +406,7 @@ export function BudgetPolicyLedger({
         </div>
       </div>
       <p className="px-5 pb-3 text-[10px] leading-4 text-surface-500">
-        Policy usage follows each policy&apos;s own window. Select a row to inspect its definition and spend.
+        Usage is measured over each policy&apos;s own window.
       </p>
       <div className="divide-y divide-surface-700/60 border-t border-surface-700/60">
         {policies.map((policy) => {
@@ -502,7 +502,7 @@ export function BudgetPolicyLedger({
                     {load?.state === 'loading' || !load ? (
                       <div className="flex items-center gap-2 rounded-lg border border-surface-700/60 px-4 py-4 text-xs text-surface-400">
                         <Loader2 className="h-4 w-4 animate-spin text-accent-400" />
-                        Loading canonical policy usage…
+                        Loading policy usage…
                       </div>
                     ) : null}
 
