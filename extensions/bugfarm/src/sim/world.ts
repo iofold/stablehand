@@ -14,7 +14,12 @@ import { FIX_TEMPLATES, SIM_REPO, fakeSha, renderDiff, type FixTemplate } from '
  */
 
 export const SIM_CAMPAIGN_KEY = 'sim';
-const BATCH_SIZE = 16;
+/**
+ * Scaled to the planned launch campaign: a $250 cap, about 20 accepted
+ * tasks over six batches, and five benchmark cells.
+ */
+const CAP_USD = 250;
+const BATCH_SIZE = 10;
 const CALIBRATION_HARNESS = 'terminus-2';
 const PANEL = [
   { family: 'anthropic', model: 'claude-haiku-4-5', skill: 1.15 },
@@ -28,19 +33,15 @@ const BENCH_CELLS = [
   { harness: 'claude-code', model: 'claude-sonnet-5', p: 0.58, usd: 0.41 },
   { harness: 'stablehand/claude-agents', model: 'claude-sonnet-5', p: 0.55, usd: 0.38 },
   { harness: 'codex', model: 'gpt-5.6-terra', p: 0.52, usd: 0.33 },
-  { harness: 'terminus-2', model: 'claude-sonnet-5', p: 0.49, usd: 0.36 },
-  { harness: 'terminus-2', model: 'gpt-5.6-terra', p: 0.46, usd: 0.29 },
   { harness: 'terminus-2', model: 'gemini-3.1-pro', p: 0.41, usd: 0.24 },
   { harness: 'stablehand/pi', model: 'glm-5.2', p: 0.34, usd: 0.07 },
-  { harness: 'stablehand/langgraph', model: 'gpt-5.4-mini', p: 0.27, usd: 0.06 },
-  { harness: 'terminus-2', model: 'glm-5.2', p: 0.29, usd: 0.06 },
 ] as const;
 
 const SEED_RULES = [
-  { key: 'r1', text: 'Skip commits whose test changes only touch fixtures or snapshots', kind: 'scout_filter', batch: 1, status: 'kept', pts: 5.1, usd: -0.62 },
-  { key: 'r2', text: 'Name the failing function in the task instruction', kind: 'writer_rule', batch: 2, status: 'reverted', pts: -1.4, usd: 0.21 },
-  { key: 'r3', text: 'Run each fail→pass test 3 times with a pinned random seed before calling it flaky', kind: 'env_recipe', batch: 2, status: 'kept', pts: 4.2, usd: -0.35 },
-  { key: 'r4', text: 'Skip fixes that touch more than three source files', kind: 'scout_filter', batch: 3, status: 'kept', pts: 3.0, usd: -0.41 },
+  { key: 'r1', text: 'Skip commits whose test changes only touch fixtures or snapshots', kind: 'scout_filter', batch: 2, status: 'kept', pts: 10.0, usd: -18.5 },
+  { key: 'r2', text: 'Name the failing function in the task instruction', kind: 'writer_rule', batch: 2, status: 'reverted', pts: -2.0, usd: 1.1 },
+  { key: 'r3', text: 'Run each fail→pass test 3 times with a pinned random seed before calling it flaky', kind: 'env_recipe', batch: 3, status: 'kept', pts: 6.0, usd: -3.4 },
+  { key: 'r4', text: 'Skip fixes that touch more than three source files', kind: 'scout_filter', batch: 3, status: 'kept', pts: 4.0, usd: -2.1 },
 ] as const;
 
 const TRIAL_RULES = [
@@ -51,11 +52,11 @@ const TRIAL_RULES = [
   { text: 'Cache the wheel directory between env builds of the same lockfile', kind: 'env_recipe' },
 ] as const;
 
-/** Seeded history: accepted share 22% → 30% → 36%, dollars per accepted falling. */
+/** Seeded history: accepted share 10% → 20% → 30%, dollars per accepted falling. */
 const SEED_BATCHES = [
-  { n: 1, accepted: 4, rejected: 12, cost: 31.4 },
-  { n: 2, accepted: 5, rejected: 11, cost: 27.9 },
-  { n: 3, accepted: 6, rejected: 10, cost: 25.2 },
+  { n: 1, accepted: 1, rejected: 9, cost: 34.2 },
+  { n: 2, accepted: 2, rejected: 8, cost: 31.4 },
+  { n: 3, accepted: 3, rejected: 7, cost: 30.3 },
 ] as const;
 
 interface BenchCell {
@@ -132,15 +133,16 @@ export class SimWorld {
   private batchAccepted = 0;
   private batchRejected = 0;
   private batchStartedAt = 0;
-  private phase: 'running' | 'approval' | 'publishing' = 'running';
+  private phase: 'running' | 'approval' | 'publishing' | 'done' = 'running';
   private phaseAt = 0;
   private publishQueue: string[] = [];
   private trialRuleKey: string | null = null;
   private trialIndex = 0;
-  private previousShare = 6 / 16;
-  private previousUsdPerAccepted = 25.2 / 6;
+  private previousShare = 3 / 10;
+  private previousUsdPerAccepted = 30.3 / 3;
   private nextBenchAt = 0;
   private serial = 0;
+  private publishedCount = 0;
   private readonly cells: BenchCell[] = BENCH_CELLS.map((cell) => ({ ...cell, solved: 0, attempts: 0, cost: 0 }));
 
   constructor(options: SimWorldOptions = {}) {
@@ -164,7 +166,8 @@ export class SimWorld {
   seed(now: number): UpsertInput[][] {
     const rows: UpsertInput[] = [];
     const unattendedSince = now - (7 * 3600 + 12 * 60) * 1000;
-    this.spend = SEED_BATCHES.reduce((sum, batch) => sum + batch.cost, 0) + 61.8;
+    this.publishedCount = SEED_BATCHES.reduce((sum, batch) => sum + batch.accepted, 0);
+    this.spend = SEED_BATCHES.reduce((sum, batch) => sum + batch.cost, 0) + 11.6;
 
     for (const batch of SEED_BATCHES) {
       const startedAt = unattendedSince + (batch.n - 1) * 2.2 * 3600 * 1000;
@@ -194,7 +197,7 @@ export class SimWorld {
           text: rule.text,
           kind: rule.kind,
           batch_introduced: rule.batch,
-          measured_batch: rule.batch + 1,
+          measured_batch: rule.batch,
           status: rule.status,
           effect: {
             accepted_share_pts: rule.pts,
@@ -242,7 +245,7 @@ export class SimWorld {
     }
 
     for (const cell of this.cells) {
-      cell.attempts = 40 + Math.floor(this.random() * 30);
+      cell.attempts = 24 + Math.floor(this.random() * 6);
       cell.solved = Math.round(cell.attempts * (cell.p + this.between(-0.04, 0.04)));
       cell.cost = cell.solved * cell.usd;
       rows.push(this.cellRow(cell));
@@ -256,7 +259,7 @@ export class SimWorld {
     rows.push(this.campaignRow({
       name: 'pyline overnight',
       repo: SIM_REPO,
-      cap_usd: 500,
+      cap_usd: CAP_USD,
       started_at: unattendedSince - 9 * 60 * 1000,
       unattended_since: unattendedSince,
       recovered_from_crash: 1,
@@ -355,7 +358,7 @@ export class SimWorld {
     const errored = this.random() < 0.04;
     const passed = !errored && this.random() < item.solveP[member.family];
     if (passed) item.passes[member.family] = (item.passes[member.family] ?? 0) + 1;
-    const cost = round4(this.between(0.015, 0.11) * (member.family === 'open' ? 0.3 : 1));
+    const cost = round4(this.between(0.1, 0.42) * (member.family === 'open' ? 0.3 : 1));
     return {
       cost,
       row: {
@@ -425,7 +428,7 @@ export class SimWorld {
         model: cell.model,
         solved: cell.solved,
         attempts: cell.attempts,
-        tasks: 15,
+        tasks: this.publishedCount,
         pass_at_1: cell.attempts > 0 ? round4(cell.solved / cell.attempts) : 0,
         ci_low: low,
         ci_high: high,
@@ -489,6 +492,7 @@ export class SimWorld {
 
   /** Advance the world to `now` and return the rows that changed. */
   tick(now: number): UpsertInput[] {
+    if (this.phase === 'done') return [];
     const rows: UpsertInput[] = [];
     let batchChanged = false;
 
@@ -568,6 +572,7 @@ export class SimWorld {
         const item = this.items.get(key);
         if (item) {
           item.stage = 'published';
+          this.publishedCount += 1;
           rows.push(this.itemRow(item));
         }
         this.phaseAt = now + this.ms(0.7);
@@ -622,7 +627,18 @@ export class SimWorld {
     }];
   }
 
+  /** True once the campaign has stopped because another batch would not fit under the cap. */
+  get finished(): boolean {
+    return this.phase === 'done';
+  }
+
   private startNextBatch(now: number): UpsertInput[] {
+    // A stage only starts if the remaining budget covers it; so does a batch.
+    const nextBatchEstimate = Math.max(this.batchCost, 30);
+    if (this.spend + nextBatchEstimate > CAP_USD) {
+      this.phase = 'done';
+      return [this.campaignRow({ status: 'done', approval: null, finished_at: now })];
+    }
     this.batch += 1;
     this.spawned = 0;
     this.batchAccepted = 0;

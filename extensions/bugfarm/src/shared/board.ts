@@ -89,6 +89,8 @@ export interface CampaignPayload {
   recovered_from_crash?: number;
   batch?: number;
   status?: 'running' | 'paused' | 'recovering' | 'done';
+  /** Set when the campaign stops, for example at its cap. */
+  finished_at?: number | null;
   approval?: {
     state: 'waiting' | 'approved' | 'rejected' | 'timeout' | 'suspend';
     interrupt_id?: string;

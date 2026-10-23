@@ -24,6 +24,7 @@ const Campaign = z.looseObject({
   recovered_from_crash: Count.optional(),
   batch: Count.optional(),
   status: z.enum(['running', 'paused', 'recovering', 'done']).optional(),
+  finished_at: Millis.nullable().optional(),
   simulated: z.boolean().optional(),
 });
 

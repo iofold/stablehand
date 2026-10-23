@@ -15,6 +15,8 @@ export interface SimulatorOptions {
   speed?: number;
   seed?: number;
   tickMs?: number;
+  /** How long a finished campaign stays up before a fresh one starts. */
+  restartAfterMs?: number;
   fetchImpl?: typeof fetch;
   logger?: Pick<Console, 'log' | 'warn'>;
 }
@@ -50,17 +52,39 @@ export async function startSimulator(options: SimulatorOptions): Promise<Running
     await post('/internal/v1/reset', { confirm: 'erase-board', scope: 'simulated' });
   }
 
-  const world = new SimWorld({ seed: options.seed, speed: options.speed });
+  let seed = options.seed ?? 20261023;
+  let world = new SimWorld({ seed, speed: options.speed });
   for (const chunk of world.seed(Date.now())) await send(chunk);
   running = true;
   logger.log(`[bugfarm-sim] simulated campaign seeded; streaming at ${options.speed ?? 1}x`);
+
+  // A campaign that reached its cap stays on screen for a while, then a fresh one starts.
+  const restartAfterMs = options.restartAfterMs ?? 30_000;
+  let finishedAt: number | null = null;
+  const restart = async () => {
+    await post('/internal/v1/reset', { confirm: 'erase-board', scope: 'simulated' });
+    seed += 1;
+    world = new SimWorld({ seed, speed: options.speed });
+    for (const chunk of world.seed(Date.now())) await send(chunk);
+    logger.log('[bugfarm-sim] previous campaign reached its cap; started a fresh one');
+  };
 
   let busy = false;
   const timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    const rows = world.tick(Date.now());
-    const write = rows.length > 0 ? send(rows) : Promise.resolve();
+    let write: Promise<void>;
+    if (world.finished) {
+      finishedAt ??= Date.now();
+      write = Date.now() - finishedAt >= restartAfterMs
+        ? restart().then(() => {
+            finishedAt = null;
+          })
+        : Promise.resolve();
+    } else {
+      const rows = world.tick(Date.now());
+      write = rows.length > 0 ? send(rows) : Promise.resolve();
+    }
     write
       .catch((err: unknown) => logger.warn('[bugfarm-sim] write failed:', (err as Error).message))
       .finally(() => {

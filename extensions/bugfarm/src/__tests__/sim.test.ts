@@ -24,6 +24,8 @@ describe('simulator', () => {
     for (const chunk of world.seed(now)) apply(chunk);
     const seededBatches = [...state.keys()].filter((key) => key.startsWith('batch:'));
     expect(seededBatches).toHaveLength(4);
+    // The running batch starts with a rule on trial.
+    expect(state.get('rule:t4')).toMatchObject({ status: 'trial', batch_introduced: 4 });
 
     for (let i = 0; i < 4000; i += 1) {
       now += 100;
@@ -38,11 +40,18 @@ describe('simulator', () => {
       expect(typeof item.reject_reason).toBe('string');
     }
     const campaign = state.get('campaign:sim');
-    expect(campaign).toMatchObject({ cap_usd: 500, recovered_from_crash: 1 });
+    expect(campaign).toMatchObject({ cap_usd: 250, recovered_from_crash: 1, status: 'done' });
     expect(Number(campaign?.batch)).toBeGreaterThan(4);
+    // The cap holds: the campaign stops before a batch that would not fit.
+    expect(world.finished).toBe(true);
+    expect(Number(campaign?.spend_usd)).toBeLessThanOrEqual(250);
+    // Scaled to the launch plan: about 20 accepted tasks and five benchmark cells.
+    const published = items.filter((item) => item.stage === 'published').length;
+    expect(published).toBeGreaterThanOrEqual(14);
+    expect(published).toBeLessThanOrEqual(30);
+    expect([...state.keys()].filter((key) => key.startsWith('cell:'))).toHaveLength(5);
     const rules = [...state.entries()].filter(([key]) => key.startsWith('rule:')).map(([, payload]) => payload.status);
     expect(rules).toContain('kept');
-    expect(rules).toContain('trial');
     expect([...state.keys()].some((key) => key.startsWith('attempt:'))).toBe(true);
     expect([...state.keys()].some((key) => key.startsWith('cell:'))).toBe(true);
   });

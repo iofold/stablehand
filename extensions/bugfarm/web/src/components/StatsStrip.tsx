@@ -64,6 +64,8 @@ export function StatsStrip({ view }: { view: BoardView }) {
   const spent = campaign?.spend_usd ?? 0;
   const cap = campaign?.cap_usd ?? 0;
   const unattendedSince = campaign?.unattended_since ?? null;
+  const finished = campaign?.status === 'done';
+  const clockEnd = finished && campaign?.finished_at ? campaign.finished_at : now;
   const recovered = campaign?.recovered_from_crash ?? 0;
 
   return (
@@ -116,9 +118,9 @@ export function StatsStrip({ view }: { view: BoardView }) {
 
       <div className="order-2 min-w-0 text-right xl:order-5">
         <div className="wdth-x-wide whitespace-nowrap text-[1.5rem] font-bold leading-none tracking-tight tnum sm:text-[2.2rem] xl:text-[2.6rem]">
-          {unattendedSince ? elapsed(now - unattendedSince) : '—'}
+          {unattendedSince ? elapsed(clockEnd - unattendedSince) : '—'}
         </div>
-        <div className="mt-1 text-[0.85rem] text-ink-2 sm:mt-1.5 sm:text-[0.92rem]">{unattendedSince ? 'running unattended' : 'not unattended yet'}</div>
+        <div className="mt-1 text-[0.85rem] text-ink-2 sm:mt-1.5 sm:text-[0.92rem]">{!unattendedSince ? 'not unattended yet' : finished ? 'ran unattended, then stopped under the cap' : 'running unattended'}</div>
         {recovered > 0 && (
           <motion.div
             initial={{ opacity: 0, scale: 0.6 }}
