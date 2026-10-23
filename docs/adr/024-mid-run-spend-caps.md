@@ -69,6 +69,10 @@ cleanly, with a receipt.
 - Sandbox images must include the relay for the stop to be immediate; an
   older image still produces the typed outcome after its SDK gives up
   retrying.
+- Amended by [ADR 026](026-campaign-gateway-keys.md): policy headroom now
+  includes campaign-key spend with matching tags, and a budget with nothing
+  spent in its window counts as zero spent rather than unknown, so the first
+  run under a new budget is capped too.
 
 Relevant code: `packages/stablehand/src/cost-control/session-gateway-keys.ts`,
 `packages/stablehand/src/cost-control/litellm-key-client.ts`,

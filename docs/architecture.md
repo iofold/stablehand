@@ -281,6 +281,7 @@ PostgreSQL is the current system of record for:
 - `api_keys` — Scoped API key hashes, capabilities, expiry, and revocation state
 - `turn_delivery_leases` — Dispatcher claim leases (monotonic fence) for queued turns
 - Model-gateway spend ledger tables — per-call spend attribution, reconciliation watermarks, and quarantine (see [docs/specs/cost-control-and-model-gateway.md](specs/cost-control-and-model-gateway.md))
+- `model_gateway_campaign_keys` / `model_gateway_campaign_spend` — gateway keys minted for a campaign (hash only) and the calls made with them, attributed to the campaign's tags with no turn ([ADR 026](adr/026-campaign-gateway-keys.md))
 - `systemSettings` — Runtime configuration overrides
 
 Schema migrations are one idempotent pass (`runMigrations`) under an advisory

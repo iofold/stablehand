@@ -70,8 +70,9 @@ once and cannot be retrieved later. Stablehand stores only its SHA-256 hash.
 
 ## Capability map
 
-The shipped inventory contains 82 explicit HTTP routes: 2 public health
-routes, 41 capability-scoped routes, and 39 master-only routes.
+The shipped inventory contains 93 explicit HTTP routes: 3 public routes (two
+health checks and the MCP OAuth redirect), 44 capability-scoped routes, and 46
+master-only routes.
 
 | Capability | Scoped routes | Important consequence |
 |---|---|---|
@@ -91,8 +92,9 @@ routes, 41 capability-scoped routes, and 39 master-only routes.
 The following surfaces remain master-only even if a key holds all twelve
 capability verbs:
 
-- API config, settings, analytics, budgets, model-gateway status, queue status,
-  sandbox metrics, tool catalog/testing, and key administration.
+- API config, settings, analytics, budgets, model-gateway status, model-gateway
+  campaign keys, queue status, sandbox metrics, tool catalog/testing, and key
+  administration.
 - Workspace files and replacement, agent secrets, and manual sandbox
   suspend/restore/kill operations.
 - Trigger definition CRUD and artifact deletion.

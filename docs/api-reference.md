@@ -151,6 +151,11 @@ Turn and conversation lifecycle statuses were always served SCREAMING_CASE by RE
 | POST | `/api/catalogs/tools/test` | Test-run a tool |
 | **Sandbox Metrics** |  |  |
 | GET | `/api/sandbox/metrics` | Container metrics |
+| **Model Gateway Campaign Keys** |  |  |
+| POST | `/api/model-gateway/campaign-keys` | Create a campaign gateway key and return it once (master-only) |
+| GET | `/api/model-gateway/campaign-keys` | List campaign keys with their spend (master-only) |
+| GET | `/api/model-gateway/campaign-keys/:id` | Get one campaign key with its spend (master-only) |
+| DELETE | `/api/model-gateway/campaign-keys/:id` | Revoke a campaign key (master-only) |
 
 ## 3. Conventions
 
@@ -2066,6 +2071,112 @@ every grant.
   running turns or remove resources the key previously created; see
   [Scoped API keys](scoped-api-keys.md#expiration-use-rotation-and-revocation).
 
+### t. Model Gateway Campaign Keys (`/api/model-gateway/campaign-keys`)
+
+A campaign key lets a tool that is not a Stablehand run, such as an evaluation
+runner on the host, call models through the deployment's model gateway while
+its spend counts against your budgets. You give the key the same tags your
+runs carry (for example `{ "campaign": "bugfarm-2026-11" }`). A budget whose
+selector matches those tags then counts the key's spend together with the
+tagged runs: it raises the same threshold alerts, and once it is used up it
+refuses new runs with those tags.
+
+All four routes require the master `STABLEHAND_API_TOKEN`; no scoped
+capability grants them. Creating and revoking need the gateway's admin key
+(`STABLEHAND_MODEL_GATEWAY_ADMIN_KEY`); without it they answer `503` with
+`code: "campaign_keys_unavailable"`, and listing still works.
+
+#### `POST /api/model-gateway/campaign-keys`
+
+- **Description:** Creates a gateway key bound to campaign tags. The key is
+  returned by this response only.
+- **Request body:**
+
+```json
+{
+  "name": "terminus calibration",
+  "tags": { "campaign": "bugfarm-2026-11" },
+  "models": ["gpt-5.4-mini", "claude-sonnet-5"],
+  "maxBudgetUsd": 300,
+  "expiresAt": 1795000000000,
+  "notifyAgentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e"
+}
+```
+
+- **Response:** `201 Created` with `Cache-Control: no-store`.
+
+```json
+{
+  "id": "gck_3a69e9c9-b206-4313-9bc1-6d5387dbb351",
+  "name": "terminus calibration",
+  "tags": { "campaign": "bugfarm-2026-11" },
+  "models": ["gpt-5.4-mini", "claude-sonnet-5"],
+  "keyAlias": "stablehand-campaign-gck_3a69e9c9-b206-4313-9bc1-6d5387dbb351",
+  "requestedMaxBudgetUsd": 300,
+  "maxBudgetUsd": 250,
+  "capSource": "budget_policy",
+  "capPolicyId": "5ff078d8-f5a9-4b32-9320-4346a9afe02d",
+  "capPolicyName": "Bugfarm November",
+  "notifyAgentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "status": "active",
+  "createdAt": 1792786116680,
+  "createdBy": "master",
+  "expiresAt": 1795000000000,
+  "revokedAt": null,
+  "spend": { "costUsd": 0, "totalTokens": 0, "calls": 0, "unpricedCalls": 0, "lastSpendAt": null },
+  "key": "sk-<gateway key>"
+}
+```
+
+- **Fields:**
+  - `tags` (required, at least one): the attribution tags. Budgets select on
+    them exactly as on run tags.
+  - `models` (required): gateway model names the key may call. Each must be a
+    model the deployment's runtime key allows.
+  - `maxBudgetUsd` (optional): the most the key may spend.
+  - `expiresAt` (optional, epoch ms): when the key stops working. Defaults to
+    30 days after creation.
+  - `notifyAgentId` (optional): the agent whose `budget.threshold` webhooks
+    also receive this campaign's budget alerts.
+- **Spend cap:** the gateway refuses the key's calls past `maxBudgetUsd`, which
+  is the lower of the requested amount and what remains of the tightest
+  matching budget that blocks on cost (`capSource` says which). The remaining
+  amount is read once, when the key is created: later spend by runs under the
+  same tags still counts toward the budget and still blocks new runs, but does
+  not lower this key's cap. Without either, the key has no gateway cap.
+- **Errors:** `400` with `code: "invalid_campaign_key_request"` (and `issues`)
+  for an invalid body, an unknown `notifyAgentId`, or an expiry less than a
+  minute away; `400` with `code: "model_not_allowed"` and `models` naming the
+  refused ones; `409` with `code: "budget_exhausted"` when a matching budget is
+  already used up; `502` with `code: "model_gateway_unavailable"` when the
+  gateway refuses; `503` without the admin key.
+- **Security:** Stablehand stores only the key's hash. A lost key cannot be
+  read again; revoke it and create another.
+
+#### `GET /api/model-gateway/campaign-keys`
+
+- **Description:** Lists every campaign key, newest first, including revoked
+  and expired ones, each with the spend Stablehand has recorded for it.
+- **Response:** `{ "campaignKeys": [ ...same shape as above, without "key"... ] }`.
+- **Notes:** `status` is `active`, `expired`, or `revoked`. `spend.costUsd`
+  counts priced calls only; `spend.unpricedCalls` counts calls the gateway
+  could not price. Spend appears once the gateway's spend log has been read,
+  usually within seconds.
+
+#### `GET /api/model-gateway/campaign-keys/:id`
+
+- **Description:** One campaign key with its spend. `404` when unknown.
+
+#### `DELETE /api/model-gateway/campaign-keys/:id`
+
+- **Description:** Deletes the key from the gateway, so its next call is
+  refused, and returns the key's record with `status: "revoked"`. Repeating
+  the call is harmless.
+- **Errors:** `404` when unknown; `502` when the gateway cannot delete the key
+  (the key stays active; retry).
+- **Notes:** Calls the key made before revocation still count toward the
+  budget when they reach Stablehand afterwards.
+
 ## 5. SSE Streaming Protocol
 
 - **Connection:** `GET /api/agents/:id/stream`
@@ -2459,6 +2570,31 @@ concrete `agentId`; deletions of unowned artifacts have no subscriber.
   "timestamp": 1712140001400
 }
 ```
+
+`budget.threshold` example payload:
+
+```json
+{
+  "policyId": "5ff078d8-f5a9-4b32-9320-4346a9afe02d",
+  "policyName": "Bugfarm November",
+  "action": "warn",
+  "threshold": 0.85,
+  "metric": "costUsd",
+  "spent": 427.5,
+  "limit": 500,
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "campaignKeyId": "gck_3a69e9c9-b206-4313-9bc1-6d5387dbb351",
+  "timestamp": 1712140001500
+}
+```
+
+One event is sent per threshold crossed: a budget with warnings at 50% and
+85% sends two over its life, plus one when it reaches its block threshold.
+`bucket` is present for a budget with `groupBy`. When a run's spend crossed
+the threshold, `agentId` is that run's agent. When a campaign gateway key's
+spend crossed it, `campaignKeyId` names the key and the webhook goes to the
+key's `notifyAgentId`; a key without one still records the event on
+`/api/events`, but no webhook is sent.
 
 Experimental `custom.*` example payload:
 

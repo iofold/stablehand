@@ -328,8 +328,10 @@ rolling or month-to-date boundary.
 
 - `totalTokens` and `turns` must be positive integers.
 - `costUsd` must be a finite positive number.
-- At most one `warn` and one `block` action are accepted initially.
-- Actions are normalized by threshold; when both exist, `warn < block`.
+- Up to four `warn` actions with distinct thresholds and at most one `block`
+  action are accepted (several warnings since 2026-10-23, ADR 026; for
+  example alerts at 50% and 85%).
+- Actions are normalized by threshold; every `warn` is below the `block`.
 - A crossed block always wins independently of display/action order.
 - Every matched policy bucket receives the turn's eventual usage.
 - Admission is rejected if any matched bucket has crossed its block threshold.
@@ -676,6 +678,42 @@ Without the admin key (or when minting or capping fails, which is logged),
 sandboxes keep the shared runtime key and budgets apply at admission only.
 Gateway mode off is unchanged.
 
+### Campaign keys (shipped 2026-10-23, ADR 026)
+
+Some of a campaign's model calls come from tools that are not Stablehand
+runs, for example an evaluation runner on the host. A campaign key lets such
+a tool use the gateway while one budget covers it and the campaign's runs:
+
+- An operator creates the key with `POST /api/model-gateway/campaign-keys`
+  (master token; needs the admin key), giving the campaign's tags, the models
+  it may use (a subset of the runtime key's), and optionally a spend limit, an
+  expiry (default 30 days) and an agent to notify. The key is returned once.
+- The gateway refuses the key's calls past the lower of the requested limit
+  and what remains of the tightest matching budget that blocks on cost, read
+  when the key is created. Creating a key for a used-up budget is refused.
+- Each call made with the key becomes a spend row with no run, carrying the
+  key's tags. Budgets add these rows to their spend, so the campaign's alerts
+  fire on the combined total and a used-up budget refuses new tagged runs.
+- Crossing a warn or block threshold emits `budget.threshold` with the key's
+  id, delivered as a webhook to the key's notify agent when it has one.
+- Revoking deletes the key from the gateway. Calls it made earlier still
+  count when they arrive.
+
+The key's cap does not shrink when tagged runs spend after it was created;
+those runs still count toward the budget and still block new runs at
+admission. A key's gateway spend never resets, so a monthly campaign uses a
+new key each month.
+
+### Spend from keys Stablehand did not issue (2026-10-23, ADR 026)
+
+A gateway shared with another workload carries that workload's calls too.
+The reconciler asks LiteLLM only for the calls of the keys Stablehand issued
+(the runtime key, per-session keys and campaign keys), so the other
+workload's calls are neither stored nor quarantined and cannot crowd
+Stablehand's out of a fetch window. Any that still arrive are counted and
+summarised in the log. Calls on Stablehand's own keys that cannot be tied to
+a run are quarantined as before.
+
 ## Extensible harness-side mid-turn enforcement
 
 The sandbox daemon will define a narrow internal enforcement seam now so later
@@ -769,8 +807,9 @@ complexity into every model call.
 - Spend API unavailable: model calls continue; coverage becomes stale/pending,
   admission uses known local spend, and alerts fire.
 - Reconciler watermark stuck: model calls continue; lag alert and degraded UI.
-- Correlation missing: call enters the orphan quarantine count and is never
-  silently assigned to a turn.
+- Correlation missing on one of Stablehand's keys: call enters the orphan
+  quarantine count and is never silently assigned to a turn. A call on a
+  campaign key needs no correlation; a call on any other key is skipped.
 - Uninstrumented native/direct call: coverage is unavailable or partial; it is
   never inferred from timing or rendered as free.
 - Unknown price: call is `unpriced`, never `$0.00`.

@@ -401,6 +401,12 @@ describe('campaign gateway keys (ctx-hmm3, ctx-gfp8)', () => {
       agentId: notifyAgentId,
       campaignKeyId: campaignKey.id,
     });
+    // The canonical event is on /api/events for anyone reading the log.
+    const events = (await app.inject({
+      method: 'GET',
+      url: '/api/events?type=budget.threshold&limit=200',
+    })).json().events as Array<{ type: string; payload: string }>;
+    expect(events.some((event) => event.payload.includes(campaignKey.id))).toBe(true);
     await expect.poll(async () => (await testApp!.container.db.getCallbacksForAgent(notifyAgentId))
       .filter((row) => row.eventType === 'budget.threshold')
       .map((row) => row.payload), { timeout: 10_000 }).toEqual([
