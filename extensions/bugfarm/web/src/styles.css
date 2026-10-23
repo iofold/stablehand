@@ -91,13 +91,23 @@ body {
   overflow-x: hidden;
 }
 
+/* Code shows the characters that are in the file: no `->` or `>=` ligatures. */
+.font-mono,
+code,
+pre {
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
+}
+
 ::selection {
   background: rgb(var(--pollen) / 0.35);
 }
 
-:focus-visible {
-  outline: 2px solid rgb(var(--pollen));
-  outline-offset: 2px;
+@layer base {
+  :focus-visible {
+    outline: 2px solid rgb(var(--pollen));
+    outline-offset: 2px;
+  }
 }
 
 @layer utilities {

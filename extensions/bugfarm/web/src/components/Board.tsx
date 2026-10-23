@@ -216,7 +216,7 @@ export function Board({ view, onOpen }: { view: BoardView; onOpen: (key: string)
             layoutScroll={mobile}
             className={
               mobile
-                ? 'flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-px-4 px-4 pb-6 scrollbar-none'
+                ? 'flex snap-x snap-mandatory items-start gap-3 overflow-x-auto scroll-px-4 px-4 pb-6 scrollbar-none'
                 : 'grid flex-1 grid-cols-8 gap-2.5 px-4 pb-6 sm:px-6 2xl:gap-3'
             }
           >

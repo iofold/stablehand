@@ -87,7 +87,7 @@ export function AttemptsGrid({ attempts }: { attempts: Attempt[] }) {
                 <tbody>
                   {rows.map((row) => (
                     <tr key={row.id}>
-                      <th scope="row" className="w-[8.5rem] max-w-[8.5rem] pr-2 text-left align-middle font-normal">
+                      <th scope="row" className="w-[8rem] max-w-[8rem] pr-2 text-left align-middle font-normal">
                         <span className="block truncate text-[0.88rem] font-semibold text-ink">{row.model}</span>
                         <span className="block truncate text-[0.75rem] text-ink-3">{familyLabel(row.family)} on {row.harness}</span>
                       </th>

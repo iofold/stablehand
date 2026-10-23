@@ -96,14 +96,14 @@ interface ReceiptDrawerProps {
 export function ReceiptDrawer({ item, attempts, onClose }: ReceiptDrawerProps) {
   const reduced = useReducedMotion();
   const wide = useMediaQuery('(min-width: 768px)');
-  const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
   const opener = useRef<Element | null>(null);
 
   const openKey = item?.key ?? null;
   useEffect(() => {
     if (!openKey) return undefined;
     opener.current = document.activeElement;
-    closeRef.current?.focus({ preventScroll: true });
+    dialogRef.current?.focus({ preventScroll: true });
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
     };
@@ -132,10 +132,12 @@ export function ReceiptDrawer({ item, attempts, onClose }: ReceiptDrawerProps) {
             aria-hidden
           />
           <motion.aside
+            ref={dialogRef}
+            tabIndex={-1}
             role="dialog"
             aria-modal="true"
             aria-label={`Receipt for ${item.title ?? item.key}`}
-            className="absolute inset-y-0 right-0 flex w-full flex-col overflow-hidden border-line bg-ground shadow-2xl md:w-[min(1320px,94vw)] md:border-l"
+            className="absolute inset-y-0 right-0 flex w-full flex-col overflow-hidden border-line bg-ground shadow-2xl outline-none md:w-[min(1320px,94vw)] md:border-l"
             initial={reduced ? { opacity: 0 } : wide ? { x: '100%' } : { y: '100%' }}
             animate={reduced ? { opacity: 1 } : wide ? { x: 0 } : { y: 0 }}
             exit={reduced ? { opacity: 0 } : wide ? { x: '100%' } : { y: '100%' }}
@@ -162,17 +164,17 @@ export function ReceiptDrawer({ item, attempts, onClose }: ReceiptDrawerProps) {
                       <ExternalLink size={18} />
                     </a>
                   )}
-                  <button ref={closeRef} type="button" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full text-ink-2 hover:bg-well hover:text-ink" aria-label="Close the receipt">
+                  <button type="button" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full text-ink-2 hover:bg-well hover:text-ink" aria-label="Close the receipt">
                     <X size={22} />
                   </button>
                 </div>
               </div>
-              <div className="mt-4 overflow-x-auto scrollbar-none">
+              <div className="mt-1 overflow-x-auto pt-5 scrollbar-none">
                 <StageTimeline item={item} />
               </div>
             </header>
 
-            <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto scrollbar-thin xl:grid-cols-[minmax(0,1fr)_460px] xl:overflow-hidden">
+            <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto scrollbar-thin xl:grid-cols-[minmax(0,1fr)_500px] xl:overflow-hidden">
               <div className="min-w-0 space-y-6 px-5 py-5 sm:px-7 xl:overflow-y-auto xl:scrollbar-thin">
                 <Section
                   title="The fix"

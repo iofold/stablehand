@@ -28,6 +28,21 @@ function Stat({ value, label, detail, className = '' }: { value: ReactNode; labe
   );
 }
 
+function RecoveredBadge({ count, className }: { count: number; className: string }) {
+  return (
+    <motion.span
+      initial={{ opacity: 0, scale: 0.6 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ type: 'spring', stiffness: 420, damping: 22, delay: 0.4 }}
+      className={`${className} items-center gap-1.5 whitespace-nowrap rounded-full border border-pollen/60 bg-pollen/10 px-3 py-1 text-[0.85rem] font-semibold text-ink`}
+      title="The worker was stopped mid-run and picked up where it left off"
+    >
+      <RotateCcw size={14} strokeWidth={2.6} className="text-pollen" aria-hidden />
+      Recovered from crash ×{count}
+    </motion.span>
+  );
+}
+
 function decidedOf(batch: Batch | null): number {
   return batch ? (batch.accepted ?? 0) + (batch.rejected ?? 0) : 0;
 }
@@ -121,19 +136,14 @@ export function StatsStrip({ view }: { view: BoardView }) {
           {unattendedSince ? elapsed(clockEnd - unattendedSince) : '—'}
         </div>
         <div className="mt-1 text-[0.85rem] text-ink-2 sm:mt-1.5 sm:text-[0.92rem]">{!unattendedSince ? 'not unattended yet' : finished ? 'ran unattended, then stopped under the cap' : 'running unattended'}</div>
-        {recovered > 0 && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.6 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ type: 'spring', stiffness: 420, damping: 22, delay: 0.4 }}
-            className="mt-1.5 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-pollen/60 bg-pollen/10 px-2.5 py-0.5 text-[0.78rem] font-semibold text-ink sm:mt-2 sm:px-3 sm:py-1 sm:text-[0.85rem]"
-            title="The worker was stopped mid-run and picked up where it left off"
-          >
-            <RotateCcw size={14} strokeWidth={2.6} className="text-pollen" aria-hidden />
-            Recovered from crash ×{recovered}
-          </motion.div>
-        )}
+        {recovered > 0 && <RecoveredBadge count={recovered} className="mt-2 hidden xl:inline-flex" />}
       </div>
+      {recovered > 0 && (
+        // Narrow layouts give the badge its own row instead of squeezing it under the clock.
+        <div className="order-6 col-span-2 md:col-span-3 xl:hidden">
+          <RecoveredBadge count={recovered} className="inline-flex" />
+        </div>
+      )}
     </section>
   );
 }
