@@ -1,0 +1,13 @@
+# Bugfarm with the worker running on the host (`node dist/server/main.js`) instead of in a
+# container. The worker drives Docker and Harbor directly, so on a dedicated box this is the
+# simplest way to run campaigns. Add this file to COMPOSE_FILE in .env, set
+# STABLEHAND_EGRESS_ALLOWLIST to include `bugfarm`, then `docker compose up -d orchestrator`.
+#
+# It only teaches the orchestrator where the worker is: `http://bugfarm:<BUGFARM_PORT>` reaches
+# the host, so the floor agents' HTTP tools and the webhooks can be delivered to it.
+services:
+  orchestrator:
+    extra_hosts:
+      - "bugfarm:host-gateway"
+    environment:
+      STABLEHAND_EGRESS_ALLOWLIST: ${STABLEHAND_EGRESS_ALLOWLIST:-bugfarm}
