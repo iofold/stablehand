@@ -1110,6 +1110,13 @@ async function main(): Promise<void> {
       // Re-send every stored attempt and item to the board (a new or reset board catches up).
       const panel = loadFrozenPanel(panelId);
       const rows: BoardRow[] = [];
+      if (fileExists(e.keyFile)) {
+        const key = readCampaignKey(e.keyFile);
+        const all = summaries(panel.id);
+        const spend = all.reduce((s, r) => s + r.cost, 0);
+        const repo = all[0] ? readJson<{ task_info: TaskInfo }>(join(taskStoreDir(panel.id, all[0].task), 'summary.json')).task_info.repo : '';
+        rows.push(campaignRow({ key: key.tags.campaign ?? key.id, name: str('campaign-name') ?? `Calibration ${panel.id}`, repo, cap_usd: key.max_budget_usd ?? 0 }, spend));
+      }
       for (const s of summaries(panel.id)) {
         const info = (readJson<{ task_info: TaskInfo }>(join(taskStoreDir(panel.id, s.task), 'summary.json'))).task_info;
         const store = new AttemptStore(panel.id, s.task);
