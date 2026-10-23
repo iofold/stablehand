@@ -160,6 +160,8 @@ export const BudgetThresholdWebhookPayloadSchema = z.strictObject({
   spent: z.number().nonnegative(),
   limit: z.number().nonnegative(),
   agentId: AgentIdSchema,
+  /** Present when spend from a campaign gateway key crossed the threshold. */
+  campaignKeyId: z.string().trim().min(1).optional(),
   timestamp: TimestampSchema,
 });
 

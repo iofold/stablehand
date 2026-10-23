@@ -101,6 +101,11 @@ const EXPECTED_ROUTE_ACCESS: Readonly<Record<string, ExpectedRouteAccess>> = {
   'DELETE /api/keys/:id': 'master',
   'GET /api/model-gateway/status': 'master',
   'GET /api/model-gateway/quarantine': 'master',
+  // Campaign keys are spending authority over model providers (ctx-hmm3).
+  'POST /api/model-gateway/campaign-keys': 'master',
+  'GET /api/model-gateway/campaign-keys': 'master',
+  'GET /api/model-gateway/campaign-keys/:id': 'master',
+  'DELETE /api/model-gateway/campaign-keys/:id': 'master',
   'GET /api/queue/status': 'master',
   'GET /api/sandbox/metrics': 'master',
   'GET /api/settings': 'master',
@@ -187,7 +192,7 @@ describe('API auth route coverage', () => {
         : ((route as typeof route & { capability?: CapabilityVerb }).capability ?? 'master'),
     ]));
 
-    expect(routes).toHaveLength(89);
+    expect(routes).toHaveLength(93);
     expect(Object.keys(actual)).toHaveLength(routes.length);
     expect(actual).toEqual(EXPECTED_ROUTE_ACCESS);
   });
@@ -200,7 +205,7 @@ describe('API auth route coverage', () => {
         return { method: route.slice(0, separator), url: route.slice(separator + 1) };
       });
 
-    expect(masterOnlyRoutes).toHaveLength(42);
+    expect(masterOnlyRoutes).toHaveLength(46);
     for (const route of masterOnlyRoutes) {
       const res = await app.inject({
         method: route.method,

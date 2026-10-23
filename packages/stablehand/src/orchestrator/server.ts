@@ -23,6 +23,7 @@ import {
   summarizeModelGatewayHealth,
   type ModelGatewayStatusConfig,
 } from './routes/model-gateway.js';
+import type { CampaignGatewayKeyService } from '../cost-control/campaign-gateway-keys.js';
 import { triggerRoutes } from './routes/triggers.js';
 import { createCanonicalIngestAdmission } from './canonical-ingest-admission.js';
 import { scheduleRoutes } from './routes/schedules.js';
@@ -96,6 +97,8 @@ export interface ServerOptions {
   canonicalLog?: CanonicalLog;
   /** Non-secret optional gateway deployment status configuration. */
   modelGateway?: ModelGatewayStatusConfig;
+  /** Mints and revokes campaign gateway keys; the routes answer 503 without it. */
+  campaignGatewayKeys?: Pick<CampaignGatewayKeyService, 'create' | 'revoke'>;
   /** Per-agent MCP servers; built from the registry and secret store when omitted. */
   mcpServerManager?: McpServerManager;
 }
@@ -350,6 +353,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     prefix: '/api/model-gateway',
     db,
     config: opts.modelGateway ?? { enabled: false },
+    ...(opts.campaignGatewayKeys ? { campaignKeys: opts.campaignGatewayKeys } : {}),
   });
   if (!opts.modelGateway?.enabled) {
     // Losing the gateway overlay env silently strands priced-usage turns

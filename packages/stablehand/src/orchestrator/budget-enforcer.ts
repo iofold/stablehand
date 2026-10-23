@@ -1,4 +1,4 @@
-import type { DatabaseRepository } from '../database/repository.js';
+import type { CampaignSpendChange, DatabaseRepository } from '../database/repository.js';
 import type { EventMap, TypedEventBus } from '../events/bus.js';
 import type { TurnUsage } from '@stablehand/contracts';
 import {
@@ -51,8 +51,9 @@ export interface PolicyCostHeadroom {
 const TAG = '[BudgetEnforcer]';
 
 /**
- * Evaluates budget policies at turn admission (block) and turn completion
- * (threshold warnings). Policy-evaluation failures are fail-open — a broken
+ * Evaluates budget policies at turn admission (block) and whenever recorded
+ * spend grows (threshold crossings): turn completion, late gateway cost for
+ * a turn, and campaign-key spend. Policy-evaluation failures are fail-open — a broken
  * policy or a spend-query error must never take down all agents — but
  * BudgetExceededError and TagNotProvisionedError are deliberate outcomes and
  * propagate.
@@ -209,6 +210,59 @@ export class BudgetEnforcer {
     }
   }
 
+  /**
+   * Campaign-key spend committed by the gateway reconciler (ctx-hmm3): emit
+   * budget.threshold for every warn/block threshold it crossed. Changes are
+   * summed per matched policy bucket first, so several campaign keys that
+   * feed one policy in the same batch are judged as one crossing. The event
+   * carries the campaign key that contributed most, and that key's notify
+   * agent (when set) so the agent's webhooks receive it.
+   */
+  async onCampaignSpendReconciled(changes: readonly CampaignSpendChange[]): Promise<void> {
+    try {
+      const policies = await this.loadPolicies();
+      const groups = new Map<string, {
+        match: MatchedPolicy;
+        totalTokens: number;
+        costUsd: number;
+        lead: CampaignSpendChange;
+        notifyAgentId: string | null;
+      }>();
+      for (const change of changes) {
+        for (const match of this.matchFrom(policies, change.tags)) {
+          const groupKey = `${match.policyId}\u0000${match.bucketLabel ?? ''}`;
+          const group = groups.get(groupKey);
+          if (!group) {
+            groups.set(groupKey, {
+              match,
+              totalTokens: change.totalTokensDelta,
+              costUsd: change.costUsdDelta,
+              lead: change,
+              notifyAgentId: change.notifyAgentId,
+            });
+            continue;
+          }
+          group.totalTokens += change.totalTokensDelta;
+          group.costUsd += change.costUsdDelta;
+          if (change.costUsdDelta > group.lead.costUsdDelta) group.lead = change;
+          group.notifyAgentId = group.lead.notifyAgentId ?? group.notifyAgentId ?? change.notifyAgentId;
+        }
+      }
+      for (const group of groups.values()) {
+        await this.emitCrossings(
+          group.match,
+          { totalTokens: group.totalTokens, costUsd: group.costUsd, turns: 0 },
+          {
+            ...(group.notifyAgentId ? { agentId: group.notifyAgentId } : {}),
+            campaignKeyId: group.lead.campaignKeyId,
+          },
+        );
+      }
+    } catch (err) {
+      this.deps.logger.error(`${TAG} campaign spend threshold check failed:`, err);
+    }
+  }
+
   private async evaluateThresholdCrossings(params: {
     agentId: string;
     tags: Record<string, string>;
@@ -216,49 +270,67 @@ export class BudgetEnforcer {
   }): Promise<void> {
     const matched = await this.matchPolicies(params.tags);
     for (const match of matched) {
-      const spendAfter = await this.deps.db.getBudgetSpend(
-        match.doc.selector,
-        windowStartMs(match.doc.window, Date.now()),
-        match.bucket,
-      );
-      const statusesAfter = metricStatuses(
-        match.doc.limits,
-        spendAfter,
-        match.doc.actions,
-      );
+      await this.emitCrossings(match, params.contribution, { agentId: params.agentId });
+    }
+  }
 
-      for (const action of match.doc.actions) {
-        const crossing = statusesAfter.find((after) => {
-          if (after.spent === null || after.ratio === null) return false;
-          const turnContribution = after.metric === 'totalTokens'
-            ? params.contribution.totalTokens
-            : after.metric === 'costUsd'
-              ? params.contribution.costUsd
-              : params.contribution.turns;
-          if (turnContribution === null || turnContribution <= 0) return false;
-          const before = after.spent - turnContribution;
-          return before < action.threshold * after.limit
-            && after.ratio >= action.threshold;
-        });
-        if (!crossing || crossing.spent === null) continue;
+  /**
+   * Emit budget.threshold for each action whose threshold this contribution
+   * crossed: spend before it was below, spend including it is at or above.
+   * Crossing-only keeps webhooks from firing on every change while over.
+   */
+  private async emitCrossings(
+    match: MatchedPolicy,
+    contribution: BudgetSpend,
+    attribution: { agentId?: string; campaignKeyId?: string },
+  ): Promise<void> {
+    const spendAfter = await this.deps.db.getBudgetSpend(
+      match.doc.selector,
+      windowStartMs(match.doc.window, Date.now()),
+      match.bucket,
+    );
+    const statusesAfter = metricStatuses(
+      match.doc.limits,
+      spendAfter,
+      match.doc.actions,
+    );
 
-        this.deps.eventBus?.emit('budget.threshold', {
-          policyId: match.policyId,
-          policyName: match.policyName,
-          bucket: match.bucketLabel,
-          action: action.action,
-          threshold: action.threshold,
-          metric: crossing.metric,
-          spent: crossing.spent,
-          limit: crossing.limit,
-          agentId: params.agentId,
-          timestamp: Date.now(),
-        });
-      }
+    for (const action of match.doc.actions) {
+      const crossing = statusesAfter.find((after) => {
+        if (after.spent === null || after.ratio === null) return false;
+        const changeContribution = after.metric === 'totalTokens'
+          ? contribution.totalTokens
+          : after.metric === 'costUsd'
+            ? contribution.costUsd
+            : contribution.turns;
+        if (changeContribution === null || changeContribution <= 0) return false;
+        const before = after.spent - changeContribution;
+        return before < action.threshold * after.limit
+          && after.ratio >= action.threshold;
+      });
+      if (!crossing || crossing.spent === null) continue;
+
+      this.deps.eventBus?.emit('budget.threshold', {
+        policyId: match.policyId,
+        policyName: match.policyName,
+        bucket: match.bucketLabel,
+        action: action.action,
+        threshold: action.threshold,
+        metric: crossing.metric,
+        spent: crossing.spent,
+        limit: crossing.limit,
+        ...(attribution.agentId ? { agentId: attribution.agentId } : {}),
+        ...(attribution.campaignKeyId ? { campaignKeyId: attribution.campaignKeyId } : {}),
+        timestamp: Date.now(),
+      });
     }
   }
 
   private async matchPolicies(tags: Record<string, string>): Promise<MatchedPolicy[]> {
+    return this.matchFrom(await this.loadPolicies(), tags);
+  }
+
+  private async loadPolicies(): Promise<Array<{ id: string; name: string; doc: BudgetPolicyDoc }>> {
     let policies: Awaited<ReturnType<BudgetDb['listBudgetPolicies']>>;
     try {
       policies = await this.deps.db.listBudgetPolicies();
@@ -267,7 +339,7 @@ export class BudgetEnforcer {
       return [];
     }
 
-    const matched: MatchedPolicy[] = [];
+    const valid: Array<{ id: string; name: string; doc: BudgetPolicyDoc }> = [];
     for (const policy of policies) {
       if (!policy.enabled) continue;
       const parsed = parseBudgetPolicyDoc(policy.doc);
@@ -275,7 +347,18 @@ export class BudgetEnforcer {
         this.deps.logger.warn(`${TAG} skipping invalid policy ${policy.id} (${policy.name}): ${parsed.error}`);
         continue;
       }
-      const doc = parsed.doc;
+      valid.push({ id: policy.id, name: policy.name, doc: parsed.doc });
+    }
+    return valid;
+  }
+
+  private matchFrom(
+    policies: ReadonlyArray<{ id: string; name: string; doc: BudgetPolicyDoc }>,
+    tags: Record<string, string>,
+  ): MatchedPolicy[] {
+    const matched: MatchedPolicy[] = [];
+    for (const policy of policies) {
+      const doc = policy.doc;
       if (!selectorMatches(doc.selector, tags)) continue;
 
       if (doc.groupBy) {

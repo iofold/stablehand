@@ -207,6 +207,76 @@ export const modelCallAttemptUsage = pgTable('model_call_attempt_usage', {
   aggregateIdx: index('idx_model_call_attempt_aggregate').on(table.modelCallUsageId),
 }));
 
+export type ModelGatewayCampaignCapSource = 'request' | 'budget_policy';
+
+/**
+ * Gateway virtual keys minted for a campaign (ctx-hmm3): model calls made
+ * outside Stablehand turns, such as an evaluation runner on the host, whose
+ * spend a budget policy must still count. Only the key's LiteLLM token hash
+ * is stored, never the key. Revocation is a soft stamp so spend rows that
+ * arrive after revocation are still attributed.
+ */
+export const modelGatewayCampaignKeys = pgTable('model_gateway_campaign_keys', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  // Attribution tags; budget policies select on these like on turn tags.
+  tags: jsonb('tags').notNull().$type<Record<string, string>>(),
+  keyAlias: text('key_alias').notNull(),
+  keyHash: text('key_hash').notNull(),
+  models: jsonb('models').notNull().$type<string[]>(),
+  requestedMaxBudgetUsd: doublePrecision('requested_max_budget_usd'),
+  // The cap the gateway enforces on the key; null when none was set.
+  maxBudgetUsd: doublePrecision('max_budget_usd'),
+  capSource: text('cap_source').$type<ModelGatewayCampaignCapSource>(),
+  capPolicyId: text('cap_policy_id'),
+  capPolicyName: text('cap_policy_name'),
+  // Agent whose webhooks receive this campaign's budget alerts.
+  notifyAgentId: text('notify_agent_id').references(() => agents.id, { onDelete: 'set null' }),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  createdBy: text('created_by'),
+  expiresAt: bigint('expires_at', { mode: 'number' }),
+  revokedAt: bigint('revoked_at', { mode: 'number' }),
+}, (table) => ({
+  aliasUniqueIdx: uniqueIndex('idx_model_gateway_campaign_keys_alias').on(table.keyAlias),
+  hashUniqueIdx: uniqueIndex('idx_model_gateway_campaign_keys_hash').on(table.keyHash),
+}));
+
+/**
+ * One row per gateway transaction made with a campaign key: spend with no
+ * turn, attributed to the campaign key's tags (copied at ingest, so budget
+ * queries select on them exactly as on `turns.tags`).
+ */
+export const modelGatewayCampaignSpend = pgTable('model_gateway_campaign_spend', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  campaignKeyId: text('campaign_key_id').notNull()
+    .references(() => modelGatewayCampaignKeys.id),
+  tags: jsonb('tags').notNull().$type<Record<string, string>>(),
+  gatewayProfile: text('gateway_profile').notNull(),
+  gatewayRevision: text('gateway_revision').notNull(),
+  gatewayTransactionId: text('gateway_transaction_id').notNull(),
+  requestedModel: text('requested_model'),
+  resolvedModel: text('resolved_model'),
+  provider: text('provider'),
+  status: text('status').notNull(),
+  inputTokens: bigint('input_tokens', { mode: 'number' }),
+  outputTokens: bigint('output_tokens', { mode: 'number' }),
+  totalTokens: bigint('total_tokens', { mode: 'number' }),
+  cacheReadTokens: bigint('cache_read_tokens', { mode: 'number' }),
+  cacheCreateTokens: bigint('cache_create_tokens', { mode: 'number' }),
+  reasoningTokens: bigint('reasoning_tokens', { mode: 'number' }),
+  costUsd: doublePrecision('cost_usd'),
+  costState: text('cost_state').$type<ModelGatewayCostState>().notNull(),
+  startedAt: bigint('started_at', { mode: 'number' }).notNull(),
+  endedAt: bigint('ended_at', { mode: 'number' }).notNull(),
+  ingestedAt: bigint('ingested_at', { mode: 'number' }).notNull(),
+}, (table) => ({
+  transactionUniqueIdx: uniqueIndex('idx_model_gateway_campaign_spend_transaction')
+    .on(table.gatewayProfile, table.gatewayTransactionId),
+  keyStartedIdx: index('idx_model_gateway_campaign_spend_key_started')
+    .on(table.campaignKeyId, table.startedAt),
+  tagsGinIdx: index('idx_model_gateway_campaign_spend_tags_gin').using('gin', table.tags),
+}));
+
 export const modelGatewayReconciliationState = pgTable('model_gateway_reconciliation_state', {
   gatewayProfile: text('gateway_profile').primaryKey(),
   gatewayRevision: text('gateway_revision').notNull(),

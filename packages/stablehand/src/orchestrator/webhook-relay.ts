@@ -54,6 +54,7 @@ const WEBHOOK_PAYLOAD_FIELDS = {
     'spent',
     'limit',
     'agentId',
+    'campaignKeyId',
     'timestamp',
   ],
   'tool_call.started': [

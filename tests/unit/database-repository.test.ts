@@ -117,6 +117,8 @@ describe('DatabaseRepository', () => {
         'messages',
         'model_call_attempt_usage',
         'model_call_usage',
+        'model_gateway_campaign_keys',
+        'model_gateway_campaign_spend',
         'model_gateway_reconciliation_state',
         'model_gateway_spend_quarantine',
         'pending_interrupts',
@@ -6994,6 +6996,8 @@ describe('DatabaseRepository', () => {
       expect(first).toEqual({
         attached: 1,
         quarantined: 0,
+        campaignAttached: 0,
+        campaignChanges: [],
         anomalies: [],
         affectedTurnIds: [turn.id],
         usageChanges: [{
@@ -7387,6 +7391,164 @@ describe('DatabaseRepository', () => {
         limit: 10,
       });
       expect(stale.reasons.map((row) => row.recentTotal)).toEqual([0, 0]);
+    });
+  });
+
+  describe('Campaign gateway spend (ctx-hmm3)', () => {
+    it('ingests campaign-key spend idempotently and counts it in budget spend by tags', async () => {
+      const now = Date.now();
+      const key = await repo.createModelGatewayCampaignKey({
+        id: `gck_${now}`,
+        name: 'repo campaign',
+        tags: { campaign: 'repo-campaign', user: 'carol' },
+        keyAlias: `stablehand-campaign-gck_${now}`,
+        keyHash: `hash-${now}`,
+        models: ['gpt-5.4-mini'],
+        createdAt: now,
+        createdBy: 'master',
+        expiresAt: now + 60_000,
+      });
+      expect(await repo.listModelGatewayCampaignKeyHashes()).toContainEqual({
+        id: key.id,
+        keyHash: `hash-${now}`,
+      });
+
+      // A tagged turn under the same campaign, for the mixed sums below.
+      const agent = await repo.createAgent({
+        name: 'Campaign Spend Agent',
+        harness: 'langgraph',
+        harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-5.4-mini' }),
+        systemPrompt: 'test',
+        tools: [],
+      });
+      const conversation = await repo.createConversation(agent.id);
+      const turn = await repo.createTurn({
+        agentId: agent.id,
+        conversationId: conversation.id,
+        mode: 'background',
+        status: 'completed',
+        startedAt: now,
+        tags: { campaign: 'repo-campaign', user: 'dave' },
+      });
+      await repo.finalizeTurnIfOpen(turn.id, {
+        completedAt: now,
+        error: null,
+        status: 'completed',
+        inputTokens: 90,
+        outputTokens: 10,
+        totalTokens: 100,
+        costUsd: 0.5,
+      });
+
+      const lease = await repo.claimModelGatewayReconciliationLease({
+        gatewayProfile: 'campaign-profile',
+        gatewayRevision: 'r1',
+        ownerId: 'worker-c',
+        nowMs: now,
+        leaseMs: 30_000,
+      });
+      const campaignRecord = (transactionId: string, costUsd: number | undefined, costState: 'priced' | 'unpriced') => ({
+        transactionId,
+        campaignKeyId: key.id,
+        requestedModel: 'gpt-5.4-mini',
+        status: 'success',
+        inputTokens: 40,
+        outputTokens: 10,
+        totalTokens: 50,
+        ...(costUsd !== undefined ? { costUsd } : {}),
+        costState,
+        startedAt: now + 10,
+        endedAt: now + 20,
+      });
+      const commit = (fenceToken: number, records: ReturnType<typeof campaignRecord>[]) => repo.reconcileModelGatewaySpend({
+        gatewayProfile: 'campaign-profile',
+        gatewayRevision: 'r1',
+        ownerId: 'worker-c',
+        fenceToken,
+        nowMs: now + 100,
+        processedThroughMs: now,
+        settleBeforeMs: now,
+        records: [],
+        invalid: [],
+        campaignRecords: records,
+      });
+      const first = await commit(lease!.fenceToken, [
+        campaignRecord('campaign-tx-1', 1.25, 'priced'),
+        campaignRecord('campaign-tx-2', undefined, 'unpriced'),
+      ]);
+      expect(first).toMatchObject({
+        campaignAttached: 2,
+        quarantined: 0,
+        campaignChanges: [{
+          campaignKeyId: key.id,
+          tags: { campaign: 'repo-campaign', user: 'carol' },
+          notifyAgentId: null,
+          costUsdDelta: 1.25,
+          totalTokensDelta: 100,
+        }],
+      });
+
+      // The overlap window re-reads the same transactions: no new spend.
+      const again = await repo.claimModelGatewayReconciliationLease({
+        gatewayProfile: 'campaign-profile',
+        gatewayRevision: 'r1',
+        ownerId: 'worker-c',
+        nowMs: now + 200,
+        leaseMs: 30_000,
+      });
+      const second = await commit(again!.fenceToken, [campaignRecord('campaign-tx-1', 1.25, 'priced')]);
+      expect(second.campaignAttached).toBe(1);
+      expect(second.campaignChanges).toEqual([]);
+
+      const spend = await repo.getModelGatewayCampaignKeySpend([key.id]);
+      expect(spend.get(key.id)).toMatchObject({
+        costUsd: 1.25,
+        totalTokens: 100,
+        calls: 2,
+        unpricedCalls: 1,
+      });
+
+      // Budget spend: the turn plus campaign spend; turn counts stay turns.
+      const total = await repo.getBudgetSpend({ campaign: 'repo-campaign' }, now - 1000);
+      expect(total.costUsd).toBeCloseTo(1.75, 10);
+      expect(total.totalTokens).toBe(200);
+      expect(total.turns).toBe(1);
+      expect(total.costReportedTurnCount).toBe(1);
+      const carol = await repo.getBudgetSpend(
+        { campaign: 'repo-campaign' },
+        now - 1000,
+        { key: 'user', value: 'carol' },
+      );
+      expect(carol).toMatchObject({ costUsd: 1.25, totalTokens: 100, turns: 0 });
+      const buckets = await repo.getBudgetSpendBuckets({ campaign: 'repo-campaign' }, now - 1000, 'user');
+      const byBucket = new Map(buckets.map((bucket) => [bucket.bucket, bucket]));
+      expect(byBucket.get('carol')).toMatchObject({ costUsd: 1.25, totalTokens: 100, turns: 0 });
+      expect(byBucket.get('dave')).toMatchObject({ costUsd: 0.5, totalTokens: 100, turns: 1 });
+      // Other campaigns and earlier windows see none of it.
+      expect((await repo.getBudgetSpend({ campaign: 'other' }, now - 1000)).costUsd).toBeNull();
+      expect((await repo.getBudgetSpend({ campaign: 'repo-campaign' }, now + 1000)).costUsd).toBeNull();
+    });
+
+    it('stamps revocation once and keeps the key for late spend', async () => {
+      const now = Date.now();
+      const key = await repo.createModelGatewayCampaignKey({
+        id: `gck_revoke_${now}`,
+        name: 'revoke me',
+        tags: { campaign: 'revoke' },
+        keyAlias: `stablehand-campaign-gck_revoke_${now}`,
+        keyHash: `hash-revoke-${now}`,
+        models: ['gpt-5.4-mini'],
+        createdAt: now,
+      });
+      const revoked = await repo.markModelGatewayCampaignKeyRevoked(key.id, now + 1);
+      expect(revoked?.revokedAt).toBe(now + 1);
+      const again = await repo.markModelGatewayCampaignKeyRevoked(key.id, now + 5);
+      expect(again?.revokedAt).toBe(now + 1);
+      expect(await repo.listModelGatewayCampaignKeyHashes()).toContainEqual({
+        id: key.id,
+        keyHash: `hash-revoke-${now}`,
+      });
+      expect(await repo.markModelGatewayCampaignKeyRevoked('gck_missing', now)).toBeUndefined();
     });
   });
 

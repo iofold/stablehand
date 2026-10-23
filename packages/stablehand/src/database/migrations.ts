@@ -678,6 +678,54 @@ async function applySchema(sql: postgres.Sql): Promise<void> {
     )
   `;
 
+  // ctx-hmm3: gateway keys minted for a campaign, and the spend made with
+  // them. Campaign spend has no turn; budget policies count it by tags.
+  await sql`
+    CREATE TABLE IF NOT EXISTS model_gateway_campaign_keys (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      tags JSONB NOT NULL,
+      key_alias TEXT NOT NULL,
+      key_hash TEXT NOT NULL,
+      models JSONB NOT NULL,
+      requested_max_budget_usd DOUBLE PRECISION,
+      max_budget_usd DOUBLE PRECISION,
+      cap_source TEXT,
+      cap_policy_id TEXT,
+      cap_policy_name TEXT,
+      notify_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+      created_at BIGINT NOT NULL,
+      created_by TEXT,
+      expires_at BIGINT,
+      revoked_at BIGINT
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS model_gateway_campaign_spend (
+      id TEXT PRIMARY KEY NOT NULL,
+      campaign_key_id TEXT NOT NULL REFERENCES model_gateway_campaign_keys(id),
+      tags JSONB NOT NULL,
+      gateway_profile TEXT NOT NULL,
+      gateway_revision TEXT NOT NULL,
+      gateway_transaction_id TEXT NOT NULL,
+      requested_model TEXT,
+      resolved_model TEXT,
+      provider TEXT,
+      status TEXT NOT NULL,
+      input_tokens BIGINT,
+      output_tokens BIGINT,
+      total_tokens BIGINT,
+      cache_read_tokens BIGINT,
+      cache_create_tokens BIGINT,
+      reasoning_tokens BIGINT,
+      cost_usd DOUBLE PRECISION,
+      cost_state TEXT NOT NULL,
+      started_at BIGINT NOT NULL,
+      ended_at BIGINT NOT NULL,
+      ingested_at BIGINT NOT NULL
+    )
+  `;
+
   // Encrypted per-turn credentials survive queued restart and HITL recovery,
   // but are deleted atomically when their turn reaches a terminal state.
   await sql`
@@ -1366,6 +1414,26 @@ async function applySchema(sql: postgres.Sql): Promise<void> {
   await sql`
     CREATE INDEX IF NOT EXISTS idx_model_gateway_quarantine_correlation
     ON model_gateway_spend_quarantine(gateway_profile, correlation_id)
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_model_gateway_campaign_keys_alias
+    ON model_gateway_campaign_keys(key_alias)
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_model_gateway_campaign_keys_hash
+    ON model_gateway_campaign_keys(key_hash)
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_model_gateway_campaign_spend_transaction
+    ON model_gateway_campaign_spend(gateway_profile, gateway_transaction_id)
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_model_gateway_campaign_spend_key_started
+    ON model_gateway_campaign_spend(campaign_key_id, started_at)
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_model_gateway_campaign_spend_tags_gin
+    ON model_gateway_campaign_spend USING gin(tags)
   `;
 
   // turn_start_requests

@@ -48,6 +48,8 @@ export type ApiKeyInsert = typeof pgSchema.apiKeys.$inferInsert;
 export type ApiKeyRow = typeof pgSchema.apiKeys.$inferSelect;
 export type BudgetPolicyInsert = typeof pgSchema.budgetPolicies.$inferInsert;
 export type BudgetPolicyRow = typeof pgSchema.budgetPolicies.$inferSelect;
+export type ModelGatewayCampaignKeyInsert = typeof pgSchema.modelGatewayCampaignKeys.$inferInsert;
+export type ModelGatewayCampaignKeyRow = typeof pgSchema.modelGatewayCampaignKeys.$inferSelect;
 export type SandboxSessionRow = Omit<
   typeof pgSchema.sandboxSessions.$inferSelect,
   'restoreAttempts' | 'lastRestoreError' | 'runtimeDefinitionHash'

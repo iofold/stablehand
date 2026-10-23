@@ -80,6 +80,7 @@ import { LiteLLMSpendClient } from '../cost-control/litellm-spend-client.js';
 import { ModelGatewayReconciler } from '../cost-control/model-gateway-reconciler.js';
 import { LiteLLMKeyClient } from '../cost-control/litellm-key-client.js';
 import { SessionGatewayKeyManager } from '../cost-control/session-gateway-keys.js';
+import { CampaignGatewayKeyService } from '../cost-control/campaign-gateway-keys.js';
 import type { ModelGatewayStatusConfig } from '../orchestrator/routes/model-gateway.js';
 import { createRuntimeDefinitionFingerprint } from '../orchestrator/session-manager/runtime-definition-fingerprint.js';
 import { ScheduleService } from '../schedules/index.js';
@@ -117,6 +118,8 @@ export interface AppContainer {
   modelGateway: ModelGatewayStatusConfig;
   /** Optional deployment-scoped spend reconciler; absent in direct-only mode. */
   modelGatewayReconciler?: ModelGatewayReconciler;
+  /** Mints and revokes campaign gateway keys; absent without the gateway admin key. */
+  campaignGatewayKeys?: CampaignGatewayKeyService;
   /** Durable canonical event spine (ADR-015); serves replay when STABLEHAND_CANONICAL_EVENTS=1. */
   canonicalLog: CanonicalLog;
   /**
@@ -455,12 +458,15 @@ export async function createContainer(
   // LiteLLM key, capped per run, so the gateway stops a run at its spend cap
   // mid-flight. Needs the gateway plus an admin key; otherwise sandboxes share
   // the runtime key and budgets apply at admission only, as before.
-  const sessionGatewayKeys = modelGatewayConfig.enabled && modelGatewayConfig.adminKey
+  const gatewayKeyClient = modelGatewayConfig.enabled && modelGatewayConfig.adminKey
+    ? new LiteLLMKeyClient({
+      baseUrl: modelGatewayConfig.baseUrl,
+      adminKey: modelGatewayConfig.adminKey,
+    })
+    : undefined;
+  const sessionGatewayKeys = modelGatewayConfig.enabled && gatewayKeyClient
     ? new SessionGatewayKeyManager({
-      client: new LiteLLMKeyClient({
-        baseUrl: modelGatewayConfig.baseUrl,
-        adminKey: modelGatewayConfig.adminKey,
-      }),
+      client: gatewayKeyClient,
       runtimeKey: modelGatewayConfig.runtimeKey,
       getTurnTags: async (turnId) => (await db.getTurn(turnId))?.tags ?? {},
       resolvePolicyHeadroom: (tags) => budgetEnforcer.costHeadroom(tags),
@@ -477,6 +483,21 @@ export async function createContainer(
       + 'so budgets are enforced when a run starts but runs are not stopped mid-flight at a spend cap.',
     );
   }
+  // Campaign keys (ctx-hmm3): gateway keys for tools that are not Stablehand
+  // turns, whose spend still counts against the campaign's budget policies.
+  const campaignGatewayKeys = modelGatewayConfig.enabled && gatewayKeyClient
+    ? new CampaignGatewayKeyService({
+      client: gatewayKeyClient,
+      runtimeKey: modelGatewayConfig.runtimeKey,
+      db,
+      resolvePolicyHeadroom: (tags) => budgetEnforcer.costHeadroom(tags),
+      logger: {
+        info: (msg: string, ...args: unknown[]) => console.log(msg, ...args),
+        warn: (msg: string, ...args: unknown[]) => console.warn(msg, ...args),
+        error: (msg: string, ...args: unknown[]) => console.error(msg, ...args),
+      },
+    })
+    : undefined;
   const releaseSandboxCredentials = sessionGatewayKeys
     ? (sessionId: string) => sessionGatewayKeys.revokeSessionKey(sessionId)
     : undefined;
@@ -720,11 +741,16 @@ export async function createContainer(
       }),
       // ctx-gfp8: fetch only the spend of keys Stablehand issued; another
       // workload sharing the gateway is counted and skipped, not quarantined.
+      // Campaign keys are re-read every run so a new key's spend is
+      // recognised on the next poll (ctx-hmm3).
       resolveIssuedKeys: async () => createIssuedGatewayKeys({
         runtimeKey: modelGatewayConfig.runtimeKey,
+        campaignKeys: await db.listModelGatewayCampaignKeyHashes(),
       }),
       onUsageReconciled: (change) =>
         budgetEnforcer.onTurnUsageReconciled(change),
+      onCampaignSpendReconciled: (changes) =>
+        budgetEnforcer.onCampaignSpendReconciled(changes),
       logger: console,
     }, {
       profile: modelGatewayConfig.profile,
@@ -819,6 +845,7 @@ export async function createContainer(
       }
       : { enabled: false },
     ...(modelGatewayReconciler ? { modelGatewayReconciler } : {}),
+    ...(campaignGatewayKeys ? { campaignGatewayKeys } : {}),
     canonicalLog,
     reconcileStrandedTurns: (bootTimeMs: number) => reconcileStrandedTurnsOnStartup(
       {

@@ -77,6 +77,8 @@ const ALL_TABLES = [
   'model_call_attempt_usage',
   'model_call_usage',
   'model_gateway_spend_quarantine',
+  'model_gateway_campaign_spend',
+  'model_gateway_campaign_keys',
   'model_gateway_reconciliation_state',
   'turns',
   'sandbox_sessions',

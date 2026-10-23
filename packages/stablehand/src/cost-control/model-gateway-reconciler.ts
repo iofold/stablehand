@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { TurnUsage } from '@stablehand/contracts';
 
-import type { DatabaseRepository } from '../database/repository.js';
+import type { CampaignSpendChange, DatabaseRepository } from '../database/repository.js';
 import { unrefTimer } from '../util/timing.js';
 import type { IssuedGatewayKeys } from './issued-gateway-keys.js';
 import type { LiteLLMSpendClient } from './litellm-spend-client.js';
@@ -63,6 +63,8 @@ interface ModelGatewayReconcilerDeps {
    */
   resolveIssuedKeys?: () => Promise<IssuedGatewayKeys>;
   onUsageReconciled?: (change: UsageChange) => Promise<void>;
+  /** Campaign-key spend committed by this run (ctx-hmm3), for budget alerts. */
+  onCampaignSpendReconciled?: (changes: CampaignSpendChange[]) => Promise<void>;
   logger: Logger;
 }
 
@@ -87,6 +89,8 @@ export type ModelGatewayReconciliationResult =
       status: 'success';
       attached: number;
       quarantined: number;
+      /** Campaign-key transactions written to the campaign spend ledger. */
+      campaignAttached: number;
       settledUnpriced: number;
       affectedTurnIds: string[];
       watermarkMs: number;
@@ -336,6 +340,7 @@ export class ModelGatewayReconciler {
         settleBeforeMs: effectiveThroughMs,
         records: spend.records,
         invalid: spend.invalid,
+        campaignRecords: spend.campaignRecords ?? [],
       });
       for (const anomaly of committed.anomalies) {
         this.deps.logger.error(
@@ -352,6 +357,15 @@ export class ModelGatewayReconciler {
             `${TAG} late usage callback failed for turn ${change.turnId}:`,
             error,
           );
+        }
+      }
+
+      const campaignChanges = committed.campaignChanges ?? [];
+      if (campaignChanges.length > 0) {
+        try {
+          await this.deps.onCampaignSpendReconciled?.(campaignChanges);
+        } catch (error) {
+          this.deps.logger.error(`${TAG} campaign spend callback failed:`, error);
         }
       }
 
@@ -374,6 +388,7 @@ export class ModelGatewayReconciler {
         status: 'success',
         attached: committed.attached,
         quarantined: committed.quarantined,
+        campaignAttached: committed.campaignAttached ?? 0,
         settledUnpriced: settled.length,
         affectedTurnIds: committed.affectedTurnIds,
         watermarkMs: committed.watermarkMs,

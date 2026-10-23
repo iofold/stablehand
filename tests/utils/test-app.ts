@@ -134,6 +134,8 @@ function defaultServerOptions(container: AppContainer, dataDir: string): ServerO
     lifecyclePolicy: container.lifecyclePolicy,
     turnStartupService: container.turnStartupService,
     canonicalLog: container.canonicalLog,
+    modelGateway: container.modelGateway,
+    ...(container.campaignGatewayKeys ? { campaignGatewayKeys: container.campaignGatewayKeys } : {}),
     dataDir,
   };
 }

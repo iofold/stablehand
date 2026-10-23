@@ -81,6 +81,7 @@ describe('ModelGatewayReconciler', () => {
       status: 'success',
       attached: 1,
       quarantined: 0,
+      campaignAttached: 0,
       settledUnpriced: 0,
       affectedTurnIds: ['turn-1'],
       watermarkMs: NOW - 10_000,
@@ -360,6 +361,59 @@ describe('ModelGatewayReconciler', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('commits campaign-key spend and hands the spend change to the budget alerts (ctx-hmm3)', async () => {
+    const deps = createDeps();
+    const campaignRecord = {
+      transactionId: 'tx-campaign',
+      campaignKeyId: 'gck_1',
+      status: 'success',
+      costState: 'priced',
+      costUsd: 0.4,
+      totalTokens: 100,
+      startedAt: NOW - 30_000,
+      endedAt: NOW - 29_000,
+    };
+    const change = {
+      campaignKeyId: 'gck_1',
+      tags: { campaign: 'bugfarm' },
+      notifyAgentId: null,
+      costUsdDelta: 0.4,
+      totalTokensDelta: 100,
+    };
+    deps.spendClient.listSpend.mockResolvedValue({
+      records: [],
+      campaignRecords: [campaignRecord],
+      invalid: [],
+      skippedForeign: 0,
+    });
+    deps.db.reconcileModelGatewaySpend.mockResolvedValue({
+      attached: 0,
+      quarantined: 0,
+      campaignAttached: 1,
+      campaignChanges: [change],
+      affectedTurnIds: [],
+      usageChanges: [],
+      anomalies: [],
+      watermarkMs: NOW - 10_000,
+    });
+    const onCampaignSpendReconciled = vi.fn().mockResolvedValue(undefined);
+    const reconciler = new ModelGatewayReconciler({ ...deps, onCampaignSpendReconciled }, {
+      profile: 'default',
+      revision: 'dev1-r1',
+      ownerId: 'worker-1',
+      now: () => NOW,
+    });
+
+    await expect(reconciler.runOnce()).resolves.toMatchObject({
+      status: 'success',
+      campaignAttached: 1,
+    });
+    expect(deps.db.reconcileModelGatewaySpend).toHaveBeenCalledWith(
+      expect.objectContaining({ campaignRecords: [campaignRecord] }),
+    );
+    expect(onCampaignSpendReconciled).toHaveBeenCalledWith([change]);
   });
 
   describe('keys Stablehand did not issue (ctx-gfp8)', () => {

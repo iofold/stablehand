@@ -1,10 +1,19 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  ModelGatewayCampaignKeyCreateInputSchema,
+  ModelGatewayCampaignKeyCreatedSchema,
+  ModelGatewayCampaignKeyListResponseSchema,
+  ModelGatewayCampaignKeySchema,
   ModelGatewayQuarantineSchema,
   ModelGatewayStatusSchema,
 } from '@stablehand/contracts';
 
 import type { DatabaseRepository } from '../../database/repository.js';
+import {
+  CampaignKeyError,
+  toPublicCampaignKey,
+  type CampaignGatewayKeyService,
+} from '../../cost-control/campaign-gateway-keys.js';
 
 type ModelGatewayStatusStore = Pick<
   DatabaseRepository,
@@ -14,13 +23,25 @@ type ModelGatewayStatusStore = Pick<
   | 'getGatewayTurnsAwaitingReconciliation'
 >;
 
+type CampaignKeyReadStore = Pick<
+  DatabaseRepository,
+  | 'listModelGatewayCampaignKeys'
+  | 'getModelGatewayCampaignKey'
+  | 'getModelGatewayCampaignKeySpend'
+>;
+
 export type ModelGatewayStatusConfig =
   | { enabled: false }
   | { enabled: true; profile: string; revision: string };
 
 interface ModelGatewayRouteOptions {
-  db: ModelGatewayStatusStore;
+  db: ModelGatewayStatusStore & CampaignKeyReadStore;
   config: ModelGatewayStatusConfig;
+  /**
+   * Mints and revokes campaign keys (ctx-hmm3). Absent when the gateway or
+   * its admin key is not configured; listing still works from the database.
+   */
+  campaignKeys?: Pick<CampaignGatewayKeyService, 'create' | 'revoke'>;
   now?: () => number;
   degradedLagMs?: number;
   awaitingGraceMs?: number;
@@ -201,6 +222,89 @@ export async function modelGatewayRoutes(
         reasons: summary.reasons,
         recent: summary.recent,
       });
+    },
+  );
+
+  // ── Campaign keys (ctx-hmm3) ──────────────────────────────────────
+  // No `capability` annotation: master-only under the fail-closed default
+  // (ADR 022). A campaign key is spending authority over model providers,
+  // like key administration and budgets, which are master-only too.
+
+  const campaignKeysUnavailable = (reply: FastifyReply): FastifyReply => reply.status(503).send({
+    error: 'Campaign keys are not available: this deployment has no model gateway admin key '
+      + '(STABLEHAND_MODEL_GATEWAY_ADMIN_KEY), so it cannot create or delete gateway keys.',
+    code: 'campaign_keys_unavailable',
+  });
+
+  const sendCampaignKeyError = (reply: FastifyReply, err: unknown): FastifyReply => {
+    if (err instanceof CampaignKeyError) {
+      return reply.status(err.statusCode).send({ error: err.message, code: err.code, ...err.details });
+    }
+    throw err;
+  };
+
+  app.post('/campaign-keys', async (request: FastifyRequest<{ Body: unknown }>, reply) => {
+    const parsed = ModelGatewayCampaignKeyCreateInputSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      const path = issue?.path.length ? `${issue.path.join('.')}: ` : '';
+      return reply.status(400).send({
+        error: `Invalid campaign key request: ${path}${issue?.message ?? 'invalid request'}`,
+        code: 'invalid_campaign_key_request',
+        issues: parsed.error.issues.map((entry) => ({
+          path: entry.path.join('.'),
+          message: entry.message,
+        })),
+      });
+    }
+    if (!opts.campaignKeys) return campaignKeysUnavailable(reply);
+    try {
+      const created = await opts.campaignKeys.create(parsed.data, 'master');
+      return reply
+        .header('Cache-Control', 'no-store')
+        .status(201)
+        .send(ModelGatewayCampaignKeyCreatedSchema.parse(created));
+    } catch (err) {
+      return sendCampaignKeyError(reply, err);
+    }
+  });
+
+  app.get('/campaign-keys', async () => {
+    const rows = await opts.db.listModelGatewayCampaignKeys();
+    const spend = await opts.db.getModelGatewayCampaignKeySpend(rows.map((row) => row.id));
+    const now = (opts.now ?? Date.now)();
+    return ModelGatewayCampaignKeyListResponseSchema.parse({
+      campaignKeys: rows.map((row) => toPublicCampaignKey(row, spend.get(row.id), now)),
+    });
+  });
+
+  app.get(
+    '/campaign-keys/:id',
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
+      const row = await opts.db.getModelGatewayCampaignKey(request.params.id);
+      if (!row) {
+        return reply.status(404).send({ error: `Unknown campaign key: ${request.params.id}` });
+      }
+      const spend = await opts.db.getModelGatewayCampaignKeySpend([row.id]);
+      return ModelGatewayCampaignKeySchema.parse(
+        toPublicCampaignKey(row, spend.get(row.id), (opts.now ?? Date.now)()),
+      );
+    },
+  );
+
+  app.delete(
+    '/campaign-keys/:id',
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
+      if (!opts.campaignKeys) return campaignKeysUnavailable(reply);
+      try {
+        const revoked = await opts.campaignKeys.revoke(request.params.id);
+        if (!revoked) {
+          return reply.status(404).send({ error: `Unknown campaign key: ${request.params.id}` });
+        }
+        return ModelGatewayCampaignKeySchema.parse(revoked);
+      } catch (err) {
+        return sendCampaignKeyError(reply, err);
+      }
     },
   );
 }

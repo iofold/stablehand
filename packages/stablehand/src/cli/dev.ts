@@ -192,6 +192,7 @@ export async function startDev() {
     lifecyclePolicy: container.lifecyclePolicy,
     canonicalLog: container.canonicalLog,
     modelGateway: container.modelGateway,
+    ...(container.campaignGatewayKeys ? { campaignGatewayKeys: container.campaignGatewayKeys } : {}),
   });
   timeline.mark('http-server');
   // Boot order matters (ctx-wbt, ADR-014): seed slot accounting from live

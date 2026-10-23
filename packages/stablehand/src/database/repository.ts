@@ -27,6 +27,7 @@ import type {
 } from '@stablehand/contracts';
 import type {
   InvalidLiteLLMSpendRecord,
+  LiteLLMCampaignSpendRecord,
   LiteLLMSpendRecord,
 } from '../cost-control/litellm-spend-client.js';
 import { projectGatewayTurnUsage } from '../cost-control/gateway-usage-projection.js';
@@ -71,6 +72,8 @@ import type {
   WebhookRow,
   ApiKeyRow,
   BudgetPolicyRow,
+  ModelGatewayCampaignKeyInsert,
+  ModelGatewayCampaignKeyRow,
 } from './types.js';
 
 export type {
@@ -93,6 +96,7 @@ export type {
   TurnSecretEnvelopeRow,
   TriggerFiringRow,
   WebhookRow,
+  ModelGatewayCampaignKeyRow,
 } from './types.js';
 
 export interface AnalyticsAgentRow extends AnalyticsMetrics {
@@ -112,6 +116,30 @@ const sanitizeTypedDbValue = <T>(value: T, context: string): T => sanitizeDbValu
 const DEFAULT_CLAIM_LEASE_MS = 60_000;
 /** Quarantined gateway spend rows not re-seen for this long are dropped. */
 const MODEL_GATEWAY_QUARANTINE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Sum two spend aggregates where null means "nothing reported", not zero. */
+function addNullableSpend(left: number | null, right: number | null): number | null {
+  if (left === null && right === null) return null;
+  return (left ?? 0) + (right ?? 0);
+}
+
+/** Change in one campaign key's ingested spend from one reconciliation commit. */
+export interface CampaignSpendChange {
+  campaignKeyId: string;
+  tags: Record<string, string>;
+  notifyAgentId: string | null;
+  costUsdDelta: number;
+  totalTokensDelta: number;
+}
+
+/** Ingested spend of one campaign key. */
+export interface CampaignKeySpendSummary {
+  costUsd: number;
+  totalTokens: number;
+  calls: number;
+  unpricedCalls: number;
+  lastSpendAt: number | null;
+}
 const CALLBACK_EVENT_SEQ_DEDUPE_INDEX = 'idx_outbox_callback_event_seq';
 const LIVE_SANDBOX_SESSION_INDEX = 'idx_sandbox_sessions_conversation_live';
 const RUNNING_CONVERSATION_TURN_INDEX = 'idx_turns_conversation_running';
@@ -6324,7 +6352,9 @@ export class DatabaseRepository {
    * Spend for one budget bucket: turns whose tags contain `selector` (plus
    * the groupBy pair when `bucket.value` is set; tag-key-absent when
    * `bucket.value` is null), started at/after `sinceMs`. Open turns count
-   * toward `turns` with zero tokens until they finalize.
+   * toward `turns` with zero tokens until they finalize. Campaign-key spend
+   * with matching tags (ctx-hmm3) adds to tokens and cost; it is not a turn,
+   * so it never changes the turn counts.
    */
   async getBudgetSpend(
     selector: Record<string, string>,
@@ -6362,13 +6392,60 @@ export class DatabaseRepository {
       })
       .from(this.schema.turns)
       .where(and(...conditions));
-    return row ?? {
+    const turnSpend = row ?? {
       totalTokens: null,
       costUsd: null,
       turns: 0,
       tokenReportedTurnCount: 0,
       costReportedTurnCount: 0,
     };
+    const [campaign] = await this.campaignSpendQuery(selector, sinceMs, bucket);
+    return {
+      ...turnSpend,
+      totalTokens: addNullableSpend(turnSpend.totalTokens, campaign?.totalTokens ?? null),
+      costUsd: addNullableSpend(turnSpend.costUsd, campaign?.costUsd ?? null),
+    };
+  }
+
+  /**
+   * Campaign-key spend with tags containing `selector`, started at/after
+   * `sinceMs`; optionally narrowed to one groupBy bucket, or grouped by a
+   * tag key (`bucket` is null for rows without it).
+   */
+  private campaignSpendQuery(
+    selector: Record<string, string>,
+    sinceMs: number,
+    bucket?: { key: string; value: string | null },
+    groupByKey?: string,
+  ): Promise<Array<{ bucket: string | null; totalTokens: number | null; costUsd: number | null }>> {
+    const spend = this.schema.modelGatewayCampaignSpend;
+    const containment: Record<string, string> = { ...selector };
+    const conditions: SQL[] = [sql`${spend.startedAt} >= ${sinceMs}`];
+    if (bucket) {
+      if (bucket.value !== null) {
+        containment[bucket.key] = bucket.value;
+      } else {
+        conditions.push(sql`NOT (${spend.tags} ? ${bucket.key})`);
+      }
+    }
+    if (Object.keys(containment).length > 0) {
+      conditions.push(sql`${spend.tags} @> ${JSON.stringify(containment)}::jsonb`);
+    }
+    // Unpriced calls carry no known cost; they still count their tokens.
+    const knownCost = sql<number | null>`
+      CASE WHEN ${spend.costState} = 'unpriced' THEN NULL ELSE ${spend.costUsd} END
+    `;
+    const query = this.db
+      .select({
+        bucket: groupByKey !== undefined
+          ? sql<string | null>`${spend.tags} ->> ${groupByKey}`.as('bucket')
+          : sql<string | null>`NULL::text`.as('bucket'),
+        totalTokens: sql<number | null>`sum(${spend.totalTokens})::float8`,
+        costUsd: sql<number | null>`sum(${knownCost})::float8`,
+      })
+      .from(spend)
+      .where(and(...conditions));
+    return groupByKey !== undefined ? query.groupBy(sql`bucket`) : query;
   }
 
   /** Spend grouped by a tag key; bucket is null for turns missing the key. */
@@ -6391,7 +6468,7 @@ export class DatabaseRepository {
       conditions.push(sql`${this.schema.turns.tags} @> ${JSON.stringify(selector)}::jsonb`);
     }
 
-    return this.db
+    const turnBuckets = await this.db
       .select({
         bucket: sql<string | null>`${this.schema.turns.tags} ->> ${groupByKey}`.as('bucket'),
         totalTokens: sql<number | null>`sum(${this.schema.turns.totalTokens})::float8`,
@@ -6406,6 +6483,116 @@ export class DatabaseRepository {
       // would bind the key as two distinct parameters, which Postgres then
       // rejects as select-expression-not-in-GROUP-BY.
       .groupBy(sql`bucket`);
+
+    // Campaign-key spend joins the same buckets (ctx-hmm3); a bucket with
+    // only campaign spend has no turns.
+    const campaignBuckets = await this.campaignSpendQuery(selector, sinceMs, undefined, groupByKey);
+    const merged = new Map(turnBuckets.map((row) => [row.bucket, row]));
+    for (const campaign of campaignBuckets) {
+      const existing = merged.get(campaign.bucket);
+      merged.set(campaign.bucket, existing
+        ? {
+          ...existing,
+          totalTokens: addNullableSpend(existing.totalTokens, campaign.totalTokens),
+          costUsd: addNullableSpend(existing.costUsd, campaign.costUsd),
+        }
+        : {
+          bucket: campaign.bucket,
+          totalTokens: campaign.totalTokens,
+          costUsd: campaign.costUsd,
+          turns: 0,
+          tokenReportedTurnCount: 0,
+          costReportedTurnCount: 0,
+        });
+    }
+    return [...merged.values()];
+  }
+
+  // ── Model gateway campaign keys (ctx-hmm3) ─────────────
+
+  async createModelGatewayCampaignKey(
+    data: ModelGatewayCampaignKeyInsert,
+  ): Promise<ModelGatewayCampaignKeyRow> {
+    const sanitized = sanitizeTypedDbValue(data, 'model_gateway_campaign_keys.insert');
+    return this.insertOne(
+      this.db.insert(this.schema.modelGatewayCampaignKeys).values(sanitized).returning(),
+      'model gateway campaign key',
+    );
+  }
+
+  async listModelGatewayCampaignKeys(): Promise<ModelGatewayCampaignKeyRow[]> {
+    return this.db
+      .select()
+      .from(this.schema.modelGatewayCampaignKeys)
+      .orderBy(
+        desc(this.schema.modelGatewayCampaignKeys.createdAt),
+        asc(this.schema.modelGatewayCampaignKeys.id),
+      );
+  }
+
+  async getModelGatewayCampaignKey(id: string): Promise<ModelGatewayCampaignKeyRow | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(this.schema.modelGatewayCampaignKeys)
+      .where(eq(this.schema.modelGatewayCampaignKeys.id, id))
+      .limit(1);
+    return row;
+  }
+
+  /** Stamp revocation once; later calls keep the first timestamp. */
+  async markModelGatewayCampaignKeyRevoked(
+    id: string,
+    revokedAt: number,
+  ): Promise<ModelGatewayCampaignKeyRow | undefined> {
+    const keys = this.schema.modelGatewayCampaignKeys;
+    const [row] = await this.db
+      .update(keys)
+      .set({ revokedAt: sql<number>`COALESCE(${keys.revokedAt}, ${revokedAt})` })
+      .where(eq(keys.id, id))
+      .returning();
+    return row;
+  }
+
+  /**
+   * Every campaign key's hash, revoked ones included: spend rows can reach
+   * the reconciler after a key is revoked and must still be attributed.
+   */
+  async listModelGatewayCampaignKeyHashes(): Promise<Array<{ id: string; keyHash: string }>> {
+    return this.db
+      .select({
+        id: this.schema.modelGatewayCampaignKeys.id,
+        keyHash: this.schema.modelGatewayCampaignKeys.keyHash,
+      })
+      .from(this.schema.modelGatewayCampaignKeys);
+  }
+
+  /** Ingested spend per campaign key, all time. Keys without spend are absent. */
+  async getModelGatewayCampaignKeySpend(
+    ids: readonly string[],
+  ): Promise<Map<string, CampaignKeySpendSummary>> {
+    if (ids.length === 0) return new Map();
+    const spend = this.schema.modelGatewayCampaignSpend;
+    const rows = await this.db
+      .select({
+        campaignKeyId: spend.campaignKeyId,
+        costUsd: sql<number>`
+          COALESCE(sum(CASE WHEN ${spend.costState} = 'unpriced' THEN 0 ELSE COALESCE(${spend.costUsd}, 0) END), 0)::float8
+        `,
+        totalTokens: sql<number>`COALESCE(sum(${spend.totalTokens}), 0)::float8`,
+        calls: sql<number>`count(*)::int`,
+        unpricedCalls: sql<number>`count(*) FILTER (WHERE ${spend.costState} = 'unpriced')::int`,
+        lastSpendAt: sql<number | null>`max(${spend.endedAt})::float8`,
+      })
+      .from(spend)
+      .where(inArray(spend.campaignKeyId, [...ids]))
+      .groupBy(spend.campaignKeyId);
+    return new Map(rows.map((row) => [row.campaignKeyId, {
+      costUsd: row.costUsd,
+      totalTokens: row.totalTokens,
+      calls: row.calls,
+      unpricedCalls: row.unpricedCalls,
+      lastSpendAt: row.lastSpendAt,
+    }]));
   }
 
   // ── Model gateway spend reconciliation ─────────────────
@@ -6557,9 +6744,15 @@ export class DatabaseRepository {
     settleBeforeMs: number;
     records: readonly LiteLLMSpendRecord[];
     invalid: readonly InvalidLiteLLMSpendRecord[];
+    /** Campaign-key transactions (ctx-hmm3): ledger rows with no turn. */
+    campaignRecords?: readonly LiteLLMCampaignSpendRecord[];
   }): Promise<{
     attached: number;
     quarantined: number;
+    /** Campaign-key transactions written to the campaign spend ledger. */
+    campaignAttached: number;
+    /** Per campaign key, the spend this commit added (re-reads add nothing). */
+    campaignChanges: CampaignSpendChange[];
     affectedTurnIds: string[];
     usageChanges: Array<{
       turnId: string;
@@ -6813,6 +7006,117 @@ export class DatabaseRepository {
         affectedTurnIds.add(turn.id);
       }
 
+      // Campaign-key spend (ctx-hmm3): one ledger row per transaction,
+      // attributed to the key's tags. Upserted, so the reconciler's overlap
+      // window re-reads add nothing; deltas feed the budget alerts.
+      let campaignAttached = 0;
+      const campaignSpend = this.schema.modelGatewayCampaignSpend;
+      const campaignKeys = new Map<string, ModelGatewayCampaignKeyRow | null>();
+      const campaignDeltas = new Map<string, { costUsdDelta: number; totalTokensDelta: number }>();
+      for (const record of input.campaignRecords ?? []) {
+        let key = campaignKeys.get(record.campaignKeyId);
+        if (key === undefined) {
+          const [found] = await tx
+            .select()
+            .from(this.schema.modelGatewayCampaignKeys)
+            .where(eq(this.schema.modelGatewayCampaignKeys.id, record.campaignKeyId))
+            .limit(1);
+          key = found ?? null;
+          campaignKeys.set(record.campaignKeyId, key);
+        }
+        if (!key) {
+          // Keys are never deleted, so this means a classification bug;
+          // keep the evidence instead of aborting the batch.
+          await quarantine({
+            transactionId: record.transactionId,
+            reason: 'unknown_campaign_key',
+            safeFields: {
+              ...(record.requestedModel ? { modelGroup: record.requestedModel } : {}),
+              ...(record.resolvedModel ? { model: record.resolvedModel } : {}),
+              ...(record.provider ? { provider: record.provider } : {}),
+              status: record.status,
+            },
+          });
+          quarantined++;
+          continue;
+        }
+
+        const [previous] = await tx
+          .select({
+            costUsd: campaignSpend.costUsd,
+            costState: campaignSpend.costState,
+            totalTokens: campaignSpend.totalTokens,
+          })
+          .from(campaignSpend)
+          .where(and(
+            eq(campaignSpend.gatewayProfile, gatewayProfile),
+            eq(campaignSpend.gatewayTransactionId, record.transactionId),
+          ))
+          .limit(1);
+        const updates = {
+          tags: key.tags,
+          gatewayRevision,
+          requestedModel: record.requestedModel ?? null,
+          resolvedModel: record.resolvedModel ?? null,
+          provider: record.provider ?? null,
+          status: record.status,
+          inputTokens: record.inputTokens ?? null,
+          outputTokens: record.outputTokens ?? null,
+          totalTokens: record.totalTokens ?? null,
+          cacheReadTokens: record.cacheReadTokens ?? null,
+          cacheCreateTokens: record.cacheCreateTokens ?? null,
+          reasoningTokens: record.reasoningTokens ?? null,
+          costUsd: record.costUsd ?? null,
+          costState: record.costState,
+          startedAt: record.startedAt,
+          endedAt: record.endedAt,
+          ingestedAt: input.nowMs,
+        };
+        await tx
+          .insert(campaignSpend)
+          .values({
+            ...updates,
+            campaignKeyId: key.id,
+            gatewayProfile,
+            gatewayTransactionId: record.transactionId,
+          })
+          .onConflictDoUpdate({
+            target: [campaignSpend.gatewayProfile, campaignSpend.gatewayTransactionId],
+            set: updates,
+          });
+        // A row quarantined before its key was known resolves here.
+        await tx
+          .delete(this.schema.modelGatewaySpendQuarantine)
+          .where(and(
+            eq(this.schema.modelGatewaySpendQuarantine.gatewayProfile, gatewayProfile),
+            eq(this.schema.modelGatewaySpendQuarantine.gatewayTransactionId, record.transactionId),
+          ));
+        campaignAttached++;
+
+        const knownCost = (costState: string, costUsd: number | null | undefined) => (
+          costState === 'unpriced' ? 0 : costUsd ?? 0
+        );
+        const costUsdDelta = knownCost(record.costState, record.costUsd)
+          - (previous ? knownCost(previous.costState, previous.costUsd) : 0);
+        const totalTokensDelta = (record.totalTokens ?? 0) - (previous?.totalTokens ?? 0);
+        const delta = campaignDeltas.get(key.id) ?? { costUsdDelta: 0, totalTokensDelta: 0 };
+        campaignDeltas.set(key.id, {
+          costUsdDelta: delta.costUsdDelta + costUsdDelta,
+          totalTokensDelta: delta.totalTokensDelta + totalTokensDelta,
+        });
+      }
+      const campaignChanges: CampaignSpendChange[] = [];
+      for (const [campaignKeyId, delta] of campaignDeltas) {
+        const key = campaignKeys.get(campaignKeyId);
+        if (!key || (delta.costUsdDelta === 0 && delta.totalTokensDelta === 0)) continue;
+        campaignChanges.push({
+          campaignKeyId,
+          tags: key.tags,
+          notifyAgentId: key.notifyAgentId ?? null,
+          ...delta,
+        });
+      }
+
       const usageChanges: Array<{
         turnId: string;
         agentId: string;
@@ -6999,6 +7303,8 @@ export class DatabaseRepository {
       return {
         attached,
         quarantined,
+        campaignAttached,
+        campaignChanges,
         affectedTurnIds: [...affectedTurnIds],
         usageChanges,
         anomalies,

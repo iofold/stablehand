@@ -104,7 +104,13 @@ export type EventMap = {
     metric: 'totalTokens' | 'costUsd' | 'turns';
     spent: number;
     limit: number;
-    agentId: string;
+    /**
+     * The agent whose turn crossed the threshold. For campaign-key spend,
+     * the key's notify agent; absent when it has none (no webhook then).
+     */
+    agentId?: string;
+    /** Set when campaign-key spend crossed the threshold (ctx-hmm3). */
+    campaignKeyId?: string;
     timestamp: number;
   };
   /**

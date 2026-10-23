@@ -375,6 +375,94 @@ describe('BudgetEnforcer.onTurnCompleted', () => {
   });
 });
 
+describe('BudgetEnforcer.onCampaignSpendReconciled (ctx-hmm3)', () => {
+  const CAMPAIGN_POLICY = {
+    id: 'p-campaign',
+    name: 'bugfarm cap',
+    enabled: true,
+    doc: {
+      selector: { campaign: 'bugfarm-2026-11' },
+      window: 'month-to-date',
+      limits: { costUsd: 100 },
+      actions: [
+        { threshold: 0.5, action: 'warn' },
+        { threshold: 0.85, action: 'warn' },
+        { threshold: 1, action: 'block' },
+      ],
+    },
+  };
+
+  function makeEnforcer(spentAfterUsd: number) {
+    const db = {
+      listBudgetPolicies: vi.fn().mockResolvedValue([
+        CAMPAIGN_POLICY,
+        { ...CAMPAIGN_POLICY, id: 'p-other', doc: { ...CAMPAIGN_POLICY.doc, selector: { campaign: 'other' } } },
+      ]),
+      getBudgetSpend: vi.fn().mockResolvedValue({ totalTokens: 1_000, costUsd: spentAfterUsd, turns: 2 }),
+      getTurn: vi.fn(),
+    };
+    const emit = vi.fn();
+    const enforcer = new BudgetEnforcer({ db: db as never, eventBus: { emit } as never, logger: silentLogger });
+    return { enforcer, emit, db };
+  }
+
+  const change = (overrides: Partial<{
+    campaignKeyId: string;
+    costUsdDelta: number;
+    notifyAgentId: string | null;
+  }> = {}) => ({
+    campaignKeyId: 'gck_1',
+    tags: { campaign: 'bugfarm-2026-11' },
+    notifyAgentId: 'agent-notify',
+    costUsdDelta: 10,
+    totalTokensDelta: 0,
+    ...overrides,
+  });
+
+  it('emits one event per warn threshold the campaign spend crossed, naming the key and notify agent', async () => {
+    // 40 → 90: crosses 50% and 85%, not the block at 100%.
+    const { enforcer, emit } = makeEnforcer(90);
+
+    await enforcer.onCampaignSpendReconciled([change({ costUsdDelta: 50 })]);
+
+    expect(emit).toHaveBeenCalledTimes(2);
+    expect(emit.mock.calls.map(([, payload]) => payload.threshold)).toEqual([0.5, 0.85]);
+    expect(emit).toHaveBeenCalledWith('budget.threshold', expect.objectContaining({
+      policyId: 'p-campaign',
+      action: 'warn',
+      metric: 'costUsd',
+      spent: 90,
+      limit: 100,
+      agentId: 'agent-notify',
+      campaignKeyId: 'gck_1',
+    }));
+  });
+
+  it('judges several keys feeding one policy in one batch as one crossing', async () => {
+    // 40 → 60 from two keys of 10 each: neither alone crossed 50%, together they did.
+    const { enforcer, emit } = makeEnforcer(60);
+
+    await enforcer.onCampaignSpendReconciled([
+      change({ campaignKeyId: 'gck_small', costUsdDelta: 9, notifyAgentId: null }),
+      change({ campaignKeyId: 'gck_big', costUsdDelta: 11, notifyAgentId: null }),
+    ]);
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    const payload = emit.mock.calls[0]?.[1];
+    expect(payload).toMatchObject({ threshold: 0.5, campaignKeyId: 'gck_big' });
+    expect(payload).not.toHaveProperty('agentId');
+  });
+
+  it('stays quiet when nothing was crossed and fails open on errors', async () => {
+    const { enforcer, emit, db } = makeEnforcer(70);
+    await enforcer.onCampaignSpendReconciled([change({ costUsdDelta: 5 })]);
+    expect(emit).not.toHaveBeenCalled();
+
+    db.getBudgetSpend.mockRejectedValue(new Error('db down'));
+    await expect(enforcer.onCampaignSpendReconciled([change({ costUsdDelta: 50 })])).resolves.toBeUndefined();
+  });
+});
+
 describe('BudgetEnforcer.costHeadroom', () => {
   const COST_DOC = {
     selector: { team: 'growth' },
