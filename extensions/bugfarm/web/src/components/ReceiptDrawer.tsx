@@ -41,7 +41,7 @@ function Dollars({ item, attempts }: { item: Item; attempts: Attempt[] }) {
   const attemptTotal = rows.reduce((sum, row) => sum + row.value, 0);
   const total = Math.max(item.cost_usd ?? 0, attemptTotal);
   const other = total - attemptTotal;
-  if (other > 0.004) rows.unshift({ label: 'Env build and checks', detail: '', value: other });
+  if (other > 0.004) rows.unshift({ label: 'Floor agents', detail: 'Writer and leak review', value: other });
   const max = Math.max(...rows.map((row) => row.value), 0.0001);
   return (
     <div>
