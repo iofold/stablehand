@@ -870,13 +870,17 @@ export async function calibrateMany(taskDirs: string[], panel: FrozenPanel, opts
   log('cal', `run ${runId}: trial containers carry ${RUN_LABEL}=${runId}`);
 
   // Prior spend on these tasks under this panel counts against the campaign budget.
+  let recoveredCount = 0;
+  let priorCount = 0;
   for (const d of taskDirs) {
     const t = readTaskInfo(d);
     const store = new AttemptStore(panel.id, t.name);
     // A killed run leaves records `running`: take Harbor's result if the trial finished, else an error.
     const recovered = recoverInterrupted(store);
     if (recovered.length) await board.write(recovered.map(attemptRow));
+    recoveredCount += recovered.length;
     const prior = store.all().filter((a) => a.status === 'done');
+    priorCount += prior.length;
     for (const a of prior) {
       campaign.adjust(bestCost(a));
       if (a.cost_usd_estimate !== undefined) costModel.observe(a.model, a.cost_usd_estimate);
@@ -885,7 +889,8 @@ export async function calibrateMany(taskDirs: string[], panel: FrozenPanel, opts
   log('cal', `campaign budget $${opts.totalBudget.toFixed(2)}, $${campaign.remaining().toFixed(2)} left after prior attempts; ${taskDirs.length} tasks, ${opts.concurrency} trials at a time`);
 
   const startedAt = Date.now();
-  if (opts.campaign) await board.write([campaignRow(opts.campaign, campaign.spentUsd(), { status: 'running', started_at: startedAt, unattended_since: startedAt, finished_at: null })]);
+  const resumed = priorCount > 0;
+  if (opts.campaign) await board.write([campaignRow(opts.campaign, campaign.spentUsd(), { status: 'running', unattended_since: startedAt, finished_at: null, ...(recoveredCount > 0 ? { recovered_from_crash: 1 } : {}), ...(resumed ? {} : { started_at: startedAt }) })]);
   log('cal', '--- screen ---');
   const screened = await Promise.all(taskDirs.map((d) => calibrate(d, panel, campaign.remaining(), { ...base, screenOnly: true, settleTimeoutMs: 0 })));
 
