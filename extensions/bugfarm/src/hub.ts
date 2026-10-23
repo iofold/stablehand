@@ -37,6 +37,7 @@ export class ChangeHub {
   private lastId = 0;
   private pumping: Promise<void> | null = null;
   private again = false;
+  private lastResetEpoch: string | null = null;
 
   constructor(
     private readonly store: HubStore,
@@ -93,8 +94,14 @@ export class ChangeHub {
     }
   }
 
-  /** Tell every subscriber the board was cleared; they reload from scratch. */
+  /**
+   * Tell every subscriber the board was cleared; they reload from scratch.
+   * The same reset can arrive twice (from the route and from NOTIFY); only
+   * the first one per epoch is sent.
+   */
   async reset(epoch: string): Promise<void> {
+    if (epoch === this.lastResetEpoch) return;
+    this.lastResetEpoch = epoch;
     this.lastId = await this.store.cursor();
     for (const entry of this.entries) {
       entry.queue = [];
