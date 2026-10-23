@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { toAtifV17 } from './calibrate-atif.ts';
 import { jobConfig, judge, labelsCompose } from './calibrate-harbor.ts';
 import { defaultPanel, panelSha, validatePanel } from './calibrate-panel.ts';
-import { BudgetPool, CostModel, calibrationToml, itemKeyFor, readBugfarmMetadata, readTaskInfo, writeTaskCalibration } from './calibrate.ts';
+import { BudgetPool, CostModel, calibrationToml, itemKeyFor, ladderPriority, readBugfarmMetadata, readTaskInfo, writeTaskCalibration } from './calibrate.ts';
 
 const tmp = mkdtempSync(join(tmpdir(), 'bugfarm-cal-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -119,6 +119,19 @@ describe('harbor job', () => {
     expect(judge({ verifier_result: { rewards: { reward: 0 } }, exception_info: { exception_type: 'AgentTimeoutError' } }).result).toBe('fail');
     expect(judge({ exception_info: { exception_type: 'RuntimeError', exception_message: 'tmux' } }).result).toBe('error');
     expect(judge(undefined).result).toBe('error');
+  });
+});
+
+describe('ladder priority', () => {
+  const v = (family: 'anthropic' | 'openai', passes: number, attempts: number) => ({ family, model: family, tally: { attempts, passes, fails: attempts - passes, errors: 0, pending: 0 } });
+  it('funds the tasks closest to a decision first', () => {
+    const perfect = ladderPriority([v('anthropic', 1, 1), v('openai', 0, 1)], 'anthropic');
+    const likelyAcceptFew = ladderPriority([v('anthropic', 0, 1), v('openai', 1, 1)], 'anthropic');
+    const likelyAcceptMore = ladderPriority([v('anthropic', 0, 4), v('openai', 1, 2)], 'anthropic');
+    const mixed = ladderPriority([v('anthropic', 1, 2), v('openai', 0, 2)], 'anthropic');
+    const nobody = ladderPriority([v('anthropic', 0, 2), v('openai', 0, 2)], 'anthropic');
+    expect([perfect, likelyAcceptMore, likelyAcceptFew, mixed, nobody]).toEqual([...[perfect, likelyAcceptMore, likelyAcceptFew, mixed, nobody]].sort((a, b) => a - b));
+    expect(likelyAcceptMore).toBeLessThan(likelyAcceptFew);
   });
 });
 

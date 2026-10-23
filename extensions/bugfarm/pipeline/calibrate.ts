@@ -11,18 +11,18 @@
 //
 // CLI: node --experimental-strip-types calibrate.ts <command>   (run without one for help)
 import { createHash, randomBytes } from 'node:crypto';
-import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PROFILES } from './lib/repos.ts';
-import { Semaphore, ensureDir, fileExists, isDir, log, parseArgs, readJson, secs, writeJson } from './lib/util.ts';
+import { Semaphore, ensureDir, fileExists, isDir, log, mapLimit, parseArgs, readJson, secs, writeJson } from './lib/util.ts';
 import { BoardClient, NullBoard } from './calibrate-board.ts';
 import type { BoardRow, BoardSink } from './calibrate-board.ts';
 import { SpendLog, checkRoutes, getCampaignKey, mintCampaignKey, readCampaignKey, readDotenv } from './calibrate-gateway.ts';
 import type { CampaignKeyFile, StablehandAdmin } from './calibrate-gateway.ts';
 import { RUN_LABEL, judge, readTrial, keepTrajectories, runAttempt } from './calibrate-harbor.ts';
 import { toAtifV17 } from './calibrate-atif.ts';
-import { decide, familyState, plan, stageFits, tally, wilson } from './calibrate-ladder.ts';
+import { cap, decide, familyState, frontierVerdict, plan, stageFits, tally, wilson } from './calibrate-ladder.ts';
 import type { AttemptResult, Decision, Family, FamilyView, Tally } from './calibrate-ladder.ts';
 import { CALIBRATION_DIR, defaultPanel, freezePanel, loadFrozenPanel, readPanelFile } from './calibrate-panel.ts';
 import type { FrozenPanel, PanelModel } from './calibrate-panel.ts';
@@ -195,15 +195,35 @@ export class AttemptStore {
     return this.all().filter((a) => a.model === model && a.cell === cell);
   }
 
-  save(rec: AttemptRecord): void {
-    writeJson(join(this.dir, `${rec.model}-${rec.cell}-t${String(rec.try).padStart(2, '0')}.json`), rec);
+  private path(rec: AttemptRecord): string {
+    return join(this.dir, `${rec.model}-${rec.cell}-t${String(rec.try).padStart(2, '0')}.json`);
   }
+
+  save(rec: AttemptRecord): void {
+    writeJson(this.path(rec), rec);
+  }
+
+  /** Only for a record whose trial never started (it was still waiting for a slot): not an attempt. */
+  dropUnstarted(rec: AttemptRecord): void {
+    rmSync(this.path(rec), { force: true });
+  }
+}
+
+/** Harbor writes the job config right before it starts; no config and no job dir means it never ran. */
+function neverStarted(rec: AttemptRecord): boolean {
+  return !isDir(rec.job_dir) && !fileExists(`${rec.job_dir}.config.json`);
 }
 
 /** A record left `running` by a killed process: read its Harbor result if it finished, else count it as an error. */
 export function recoverInterrupted(store: AttemptStore): AttemptRecord[] {
   const fixed: AttemptRecord[] = [];
   for (const rec of store.all().filter((a) => a.status === 'running')) {
+    if (neverStarted(rec)) {
+      // Queued for a trial slot when the process stopped: no trial ran and no model was called.
+      store.dropUnstarted(rec);
+      log('cal', `${rec.id}: dropped a queued attempt that never started`);
+      continue;
+    }
     const { trialDir, res } = readTrial(rec.job_dir);
     const verdict = res ? judge(res) : { result: 'error' as const, reward: null, exception: 'interrupted: the calibration process stopped during this attempt' };
     const slug = `${rec.model}-${rec.cell}-t${String(rec.try).padStart(2, '0')}`;
@@ -549,9 +569,20 @@ export async function calibrate(taskDir: string, panel: FrozenPanel, budget: num
   let costThisCall = 0;
 
   const remaining = () => Math.min(...pools.map((p) => p.remaining()));
-  const fits = (k: number, model: string) => {
+  const fits = (k: number, model: string, held = 0) => {
     const est = costModel.estimate(model);
-    return stageFits(remaining(), k, est, est * panel.reserve_factor);
+    return stageFits(remaining() - held, k, est, est * panel.reserve_factor);
+  };
+  // The frontier decides the band, so its next stage is protected: another family's stage only
+  // launches if the budget also covers the frontier's next stage.
+  const frontierHold = (): number => {
+    const f = views().find((v) => v.family === panel.frontier);
+    if (!f || frontierVerdict(f.tally, panel.ladder, panel.band)) return 0;
+    const launched = f.tally.attempts + f.tally.pending;
+    if (launched >= cap(panel.ladder)) return 0;
+    const target = panel.ladder.stages.find((s) => s > launched) ?? cap(panel.ladder);
+    const est = costModel.estimate(f.model);
+    return (target - launched) * (est + est * panel.reserve_factor);
   };
 
   const views = (blocked: Set<Family> = new Set()): FamilyView[] => ladderViews(panel, task, store, blocked);
@@ -668,7 +699,7 @@ export async function calibrate(taskDir: string, panel: FrozenPanel, budget: num
       const blocked = new Set<Family>();
       let launched = 0;
       for (const step of plan(views(), panel.frontier, panel.ladder, panel.band)) {
-        if (fits(step.launch, step.model)) {
+        if (fits(step.launch, step.model, step.family === panel.frontier ? 0 : frontierHold())) {
           for (let i = 0; i < step.launch; i++) launch(step.model, 'ladder');
           launched += step.launch;
         } else {
@@ -788,7 +819,10 @@ function rejectDetail(decision: Decision, difficulty: Record<string, { passes: n
 
 export interface ManyOptions extends Omit<CalibrateOptions, 'slots' | 'pools' | 'costModel' | 'itemKey' | 'screenOnly' | 'skipScreen' | 'onAttempt'> {
   totalBudget: number;
+  /** Trials at a time, across all tasks. */
   concurrency: number;
+  /** Tasks laddering at a time (default: half the trial slots). */
+  taskConcurrency?: number;
   /** Extra spend already charged to the same campaign key, outside these tasks. */
   alreadySpent?: number;
   /** Keep a campaign row on the board (spend against the cap) under this key. */
@@ -799,13 +833,24 @@ export function campaignRow(c: NonNullable<ManyOptions['campaign']>, spendUsd: n
   return { kind: 'campaign', key: c.key, payload: { name: c.name, repo: c.repo, cap_usd: c.cap_usd, spend_usd: Math.round(spendUsd * 1e6) / 1e6, ...extra } };
 }
 
-function screenRank(r: CalibrationResult): number {
-  // Cheapest to decide first: a cheap-model pass is likely too easy, a frontier pass needs one more
-  // frontier attempt, a double miss may need the whole ladder (81% of first misses repeated in the
-  // prior factory).
-  if (r.screen.cheap === 'pass') return 0;
-  if (r.screen.frontier === 'pass') return 1;
-  return 2;
+/**
+ * Ladder priority (lower goes first), from the attempts so far, screen included:
+ * 0. the frontier has passed every attempt: one more pass may settle `too_easy` cheaply;
+ * 1. someone passed and the frontier has only missed: likely `accept` once the frontier's misses
+ *    make the ceiling certain (in the prior factory 81% of first misses repeated); more misses first;
+ * 2. someone passed and the frontier is mixed: likely in band, but it needs the full ladder;
+ * 3. nobody has passed yet: the most expensive to decide, and possibly broken.
+ * Errors read as misses here.
+ */
+export function ladderPriority(views: FamilyView[], frontier: Family): number {
+  const f = views.find((v) => v.family === frontier);
+  if (!f) return 9;
+  const floor = views.some((v) => v.tally.passes > 0);
+  const { passes, attempts } = f.tally;
+  if (attempts > 0 && passes === attempts) return 0;
+  if (floor && passes === 0) return 1 - Math.min(attempts, 16) / 100;
+  if (floor) return 2;
+  return 3;
 }
 
 export async function calibrateMany(taskDirs: string[], panel: FrozenPanel, opts: ManyOptions): Promise<CalibrationResult[]> {
@@ -827,7 +872,11 @@ export async function calibrateMany(taskDirs: string[], panel: FrozenPanel, opts
   // Prior spend on these tasks under this panel counts against the campaign budget.
   for (const d of taskDirs) {
     const t = readTaskInfo(d);
-    const prior = new AttemptStore(panel.id, t.name).all().filter((a) => a.status === 'done');
+    const store = new AttemptStore(panel.id, t.name);
+    // A killed run leaves records `running`: take Harbor's result if the trial finished, else an error.
+    const recovered = recoverInterrupted(store);
+    if (recovered.length) await board.write(recovered.map(attemptRow));
+    const prior = store.all().filter((a) => a.status === 'done');
     for (const a of prior) {
       campaign.adjust(bestCost(a));
       if (a.cost_usd_estimate !== undefined) costModel.observe(a.model, a.cost_usd_estimate);
@@ -839,19 +888,28 @@ export async function calibrateMany(taskDirs: string[], panel: FrozenPanel, opts
   if (opts.campaign) await board.write([campaignRow(opts.campaign, campaign.spentUsd(), { status: 'running', started_at: startedAt, unattended_since: startedAt, finished_at: null })]);
   log('cal', '--- screen ---');
   const screened = await Promise.all(taskDirs.map((d) => calibrate(d, panel, campaign.remaining(), { ...base, screenOnly: true, settleTimeoutMs: 0 })));
-  const order = taskDirs.map((d, i) => ({ d, r: screened[i] })).sort((a, b) => screenRank(a.r) - screenRank(b.r));
 
+  // Ladder: greedy, in priority order. A few tasks at a time each draw on the whole remaining
+  // budget, so the tasks closest to a decision are funded to the end instead of every task getting
+  // a share too small for its next stage. Repeat while a pass still spends.
+  const taskConcurrency = opts.taskConcurrency ?? Math.max(1, Math.ceil(opts.concurrency / 2));
   const results = new Map<string, CalibrationResult>();
-  let open = order.map((o) => o.d);
+  let open = [...taskDirs];
   for (let pass = 1; open.length > 0; pass++) {
-    const share = campaign.remaining() / open.length;
-    if (share <= 0) break;
-    log('cal', `--- ladder pass ${pass}: ${open.length} tasks, $${share.toFixed(2)} each ---`);
+    if (campaign.remaining() <= 0) break;
+    const ordered = open
+      .map((d) => {
+        const t = readTaskInfo(d);
+        return { d, p: ladderPriority(ladderViews(panel, t, new AttemptStore(panel.id, t.name)), panel.frontier) };
+      })
+      .sort((a, b) => a.p - b.p)
+      .map((x) => x.d);
+    log('cal', `--- ladder pass ${pass}: ${ordered.length} tasks, ${taskConcurrency} at a time, $${campaign.remaining().toFixed(2)} left ---`);
     const before = campaign.spentUsd();
-    const rs = await Promise.all(open.map((d) => calibrate(d, panel, share, { ...base, skipScreen: true, settleTimeoutMs: 0 })));
-    rs.forEach((r, i) => results.set(open[i], r));
+    const rs = await mapLimit(ordered, taskConcurrency, (d) => calibrate(d, panel, Math.max(0, campaign.remaining()), { ...base, skipScreen: true, settleTimeoutMs: 0 }));
+    rs.forEach((r, i) => results.set(ordered[i], r));
     const spent = campaign.spentUsd() - before;
-    open = open.filter((d) => results.get(d)?.decision === 'over_budget');
+    open = ordered.filter((d) => results.get(d)?.decision === 'over_budget');
     if (spent <= 1e-6) break; // nothing could launch: the budget is spent
   }
   if (opts.campaign) await board.write([campaignRow(opts.campaign, campaign.spentUsd(), { status: 'done', finished_at: Date.now() })]);
@@ -980,7 +1038,7 @@ const USAGE = `usage: calibrate.ts <command> [options]
               Mint a Stablehand campaign gateway key for the panel's models (master token)
   one         <taskDir> --budget <usd> [--panel cal-v1] [--stage] [--item key]
               calibrate() one task and print its result as JSON
-  run         <taskDir...> | --tasks-dir <dir>  --budget <usd> [--concurrency 6] [--panel cal-v1] [--stage]
+  run         <taskDir...> | --tasks-dir <dir>  --budget <usd> [--concurrency 6] [--task-concurrency 3] [--panel cal-v1] [--stage]
               Screen every task, then ladder them within one budget; prints the report
   reconcile   [--panel cal-v1]   Re-price attempts from the spend log; compare with Stablehand's campaign spend
   board-sync  [--panel cal-v1] [--stage]   Re-send every stored attempt and item row to the board
@@ -1095,7 +1153,7 @@ async function main(): Promise<void> {
       const t0 = Date.now();
       const budget = num('budget');
       const campaign = { key: gw.key.tags.campaign ?? gw.key.id, name: str('campaign-name') ?? `Calibration ${panel.id}`, repo: readTaskInfo(dirs[0]).repo, cap_usd: gw.key.max_budget_usd ?? budget };
-      const results = await calibrateMany(dirs, panel, { gateway: gw, board: e.board, writeStage: Boolean(args.stage), totalBudget: budget, concurrency: Number(str('concurrency') ?? 6), campaign });
+      const results = await calibrateMany(dirs, panel, { gateway: gw, board: e.board, writeStage: Boolean(args.stage), totalBudget: budget, concurrency: Number(str('concurrency') ?? 6), taskConcurrency: str('task-concurrency') ? Number(str('task-concurrency')) : undefined, campaign });
       // Price everything from the gateway now that the run is over.
       await new Promise((r) => setTimeout(r, 30_000));
       const rec = await reconcile(panel.id, { gateway: gw, admin: e.admin, board: e.board });
