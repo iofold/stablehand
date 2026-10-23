@@ -74,9 +74,40 @@ function deadline(ms: number, message: string): { promise: Promise<never>; cance
  * HTTP(S)_PROXY environment and keeps its own trust store, so the proxy and the
  * deployment CA are wired in explicitly: the CA is imported once per process into the
  * NSS database Chromium reads, and every launch carries the proxy server and bypass list.
+ *
+ * The proxy URL carries the session's egress lease as credentials (ctx-3aef). Chromium
+ * cannot take credentials in --proxy-server, so they go to Playwright separately, which
+ * answers the proxy's 407 challenge with them.
  */
-function egressProxyServer(): string | undefined {
+function egressProxyUrl(): string | undefined {
   return process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || undefined;
+}
+
+export interface BrowserProxySettings {
+  server: string;
+  bypass?: string;
+  username?: string;
+  password?: string;
+}
+
+export function browserProxySettings(
+  proxyUrl: string | undefined,
+  bypass: string | undefined,
+): BrowserProxySettings | undefined {
+  if (!proxyUrl) return undefined;
+  if (!URL.canParse(proxyUrl)) return { server: proxyUrl, ...(bypass ? { bypass } : {}) };
+  const url = new URL(proxyUrl);
+  const credentials = url.username
+    ? {
+        username: decodeURIComponent(url.username),
+        password: decodeURIComponent(url.password),
+      }
+    : {};
+  return {
+    server: `${url.protocol}//${url.host}`,
+    ...(bypass ? { bypass } : {}),
+    ...credentials,
+  };
 }
 
 let egressCaTrust: Promise<void> | undefined;
@@ -138,16 +169,17 @@ async function launchAndRun<T>(
   timeouts: { hardCallTimeoutMs: number; closeTimeoutMs: number },
 ): Promise<T> {
   const { chromium } = await import('playwright');
-  const proxyServer = egressProxyServer();
-  if (proxyServer) await ensureEgressCaTrusted();
+  const proxy = browserProxySettings(
+    egressProxyUrl(),
+    process.env.NO_PROXY || process.env.no_proxy || undefined,
+  );
+  if (proxy) await ensureEgressCaTrusted();
   const browser = await chromium.launch({
     ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
       ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
       : {}),
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
-    ...(proxyServer
-      ? { proxy: { server: proxyServer, bypass: process.env.NO_PROXY || process.env.no_proxy || undefined } }
-      : {}),
+    ...(proxy ? { proxy } : {}),
   });
   const hardDeadline = deadline(
     timeouts.hardCallTimeoutMs,

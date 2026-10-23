@@ -8,7 +8,7 @@ vi.mock('playwright', () => ({
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createBrowserHandlers } from '../browser-handler.js';
+import { browserProxySettings, createBrowserHandlers } from '../browser-handler.js';
 
 const WORKSPACE = mkdtempSync(join(tmpdir(), 'browser-handler-test-'));
 
@@ -140,5 +140,43 @@ describe('browser-handler (ctx-lqas)', () => {
     expect(results.map((result) => result.status)).toEqual([
       'rejected', 'fulfilled', 'fulfilled', 'fulfilled', 'fulfilled', 'fulfilled',
     ]);
+  });
+});
+
+describe('browser egress proxy (ctx-3aef)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it('splits the session lease out of the proxy URL for Playwright', () => {
+    expect(browserProxySettings('http://sess-1:YWdlbnQ.c2ln@egress:8081', 'localhost,orchestrator')).toEqual({
+      server: 'http://egress:8081',
+      bypass: 'localhost,orchestrator',
+      username: 'sess-1',
+      password: 'YWdlbnQ.c2ln',
+    });
+    expect(browserProxySettings('http://egress:8080', undefined)).toEqual({ server: 'http://egress:8080' });
+    expect(browserProxySettings(undefined, 'localhost')).toBeUndefined();
+  });
+
+  it('launches Chromium with the lease as proxy credentials, never in --proxy-server', async () => {
+    vi.stubEnv('HTTPS_PROXY', 'http://sess-1:tok@egress:8081');
+    vi.stubEnv('NO_PROXY', 'localhost');
+    vi.stubEnv('STABLEHAND_EGRESS_CA', '');
+    mockBrowser();
+    const handlers = createBrowserHandlers({ workspaceDir: WORKSPACE });
+
+    await handlers.get('browse')!({ url: 'https://example.com' });
+
+    const options = launchMock.mock.calls[0]?.[0] as { proxy?: Record<string, string>; args?: string[] };
+    expect(options.proxy).toEqual({
+      server: 'http://egress:8081',
+      bypass: 'localhost',
+      username: 'sess-1',
+      password: 'tok',
+    });
+    expect(JSON.stringify(options.args)).not.toContain('tok');
+    vi.unstubAllEnvs();
   });
 });
