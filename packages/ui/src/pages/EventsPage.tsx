@@ -133,6 +133,37 @@ function summarizeMessageCommit(parsed: Record<string, unknown>): string {
   return summarizeRecord(parsed, ['messageId', 'toolCallId']);
 }
 
+const APPROVAL_OUTCOMES: Record<string, string> = {
+  approve: 'granted',
+  reject: 'refused',
+  timeout: 'expired',
+  suspend: 'paused',
+};
+
+/** Who resolved an approval, from the event's `resolvedBy` (ctx-lhr0). */
+function describeApprover(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const caller = value as Record<string, unknown>;
+  switch (caller.type) {
+    case 'api_key':
+      return `key ${stringField(caller, 'keyName') ?? stringField(caller, 'keyId') ?? '(unnamed)'}`;
+    case 'master_token':
+      return 'the master token';
+    case 'unauthenticated':
+      return 'an unauthenticated caller';
+    default:
+      return undefined;
+  }
+}
+
+function summarizeApprovalResolution(parsed: Record<string, unknown>): string {
+  const action = stringField(parsed, 'action');
+  const outcome = (action && APPROVAL_OUTCOMES[action]) || 'resolved';
+  const approver = describeApprover(parsed.resolvedBy);
+  const reason = stringField(parsed, 'reason');
+  return truncateSummary(`Approval ${outcome}${approver ? ` by ${approver}` : ''}${reason ? `: ${reason}` : ''}`);
+}
+
 function summarizeRunState(parsed: Record<string, unknown>, state: 'queued' | 'started'): string {
   const mode = stringField(parsed, 'mode');
   const task = stringField(parsed, 'taskDescription') ?? stringField(parsed, 'task');
@@ -206,8 +237,7 @@ function extractSummary(type: string, payload: unknown): string {
         return truncateSummary(`Approval requested: ${toolName}`);
       }
       if (name === 'stablehand.interrupt.resolved') {
-        const approved = parsed.approved === true ? 'approved' : parsed.approved === false ? 'rejected' : 'resolved';
-        return truncateSummary(`Approval ${approved}`);
+        return summarizeApprovalResolution(parsed);
       }
       if (name === 'stablehand.a2ui.render') {
         const block = recordField(parsed, 'block') ?? recordField(recordField(parsed, 'value') ?? {}, 'block');

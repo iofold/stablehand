@@ -214,6 +214,45 @@ describe('EventsPage', () => {
             block: { component: 'MetricCard', props: { label: 'Failures' } },
           }),
         },
+        {
+          seq: 7,
+          type: 'CUSTOM',
+          agentId: 'agent-1',
+          turnId: null,
+          conversationId: null,
+          createdAt: Date.now(),
+          payload: JSON.stringify({
+            name: 'stablehand.interrupt.resolved',
+            action: 'approve',
+            resolvedBy: { type: 'api_key', keyId: 'key_phone', keyName: 'phone-approver' },
+            reason: 'Receipts reconcile with the ledger',
+          }),
+        },
+        {
+          seq: 8,
+          type: 'CUSTOM',
+          agentId: 'agent-1',
+          turnId: null,
+          conversationId: null,
+          createdAt: Date.now(),
+          payload: JSON.stringify({
+            name: 'stablehand.interrupt.resolved',
+            action: 'reject',
+            resolvedBy: { type: 'master_token' },
+          }),
+        },
+        {
+          seq: 9,
+          type: 'CUSTOM',
+          agentId: 'agent-1',
+          turnId: null,
+          conversationId: null,
+          createdAt: Date.now(),
+          payload: JSON.stringify({
+            name: 'stablehand.interrupt.resolved',
+            action: 'timeout',
+          }),
+        },
       ],
       nextCursor: undefined,
     });
@@ -230,6 +269,11 @@ describe('EventsPage', () => {
     expect(container.textContent).toContain('Assistant message: Restore failed because');
     expect(container.textContent).toContain('Assistant text: Streaming restore analysis');
     expect(container.textContent).toContain('UI rendered: MetricCard');
+    expect(container.textContent).toContain(
+      'Approval granted by key phone-approver: Receipts reconcile with the ledger',
+    );
+    expect(container.textContent).toContain('Approval refused by the master token');
+    expect(container.textContent).toContain('Approval expired');
   });
 
   it('keeps the event log responsive by separating mobile rows from the desktop table', async () => {
