@@ -18,6 +18,11 @@
  *   ANALYST_TZ            IANA timezone           (default "UTC")
  *   ANALYST_GALLERY       auto | rotate | off     (default auto)
  *   GALLERY_API_KEY       the gallery's current key, to check it still works
+ *   ANALYST_APPROVE_BEFORE_PUBLISH
+ *                         1 = the agent asks a person (request-approval) before
+ *                         it uploads the brief; 0 = it publishes on its own.
+ *                         Unset leaves an existing agent as it is and creates
+ *                         one that publishes on its own.
  *
  * Gallery key: the gallery reads artifacts with its own scoped key
  * (artifacts:read + webhooks:manage, bound to this agent), never the master
@@ -29,6 +34,11 @@
 
 import { fileURLToPath } from 'node:url';
 
+import {
+  manifestToAgentCreateInput,
+  manifestToAgentPatchInput,
+  type AgentManifest,
+} from '@stablehand/manifest';
 import { loadManifestProject } from '@stablehand/manifest/node';
 
 const API_BASE = (process.env.API_URL ?? 'http://localhost:3002').replace(/\/+$/, '');
@@ -44,6 +54,43 @@ const EVENT_TYPE = 'custom.overnight.brief';
 const SCHEDULE_NAME = 'overnight-analyst-daily';
 const GALLERY_KEY_NAME = 'artifact-gallery';
 const GALLERY_CAPABILITIES = ['artifacts:read', 'webhooks:manage'];
+const APPROVAL_TOOL = 'request-approval';
+const APPROVE_BEFORE_PUBLISH = parseSwitch('ANALYST_APPROVE_BEFORE_PUBLISH');
+
+// Appended to the manifest's instructions when publishing needs approval.
+// Publishing is the one step other people see, so it is the one gated; the
+// screenshots stay private artifacts and upload without asking.
+const APPROVAL_INSTRUCTIONS = `
+Publishing needs a person's approval. After you write overnight-brief.html
+and before you upload it (step 3), call request-approval once with reason
+"Publish today's brief to the gallery" and details with three fields:
+headline (the most important development, one line), sources (the URLs you
+read) and file ("overnight-brief.html"). Upload the brief only if the request
+is approved. If it is rejected, do not upload the brief, and say in your
+summary that it was not published.`;
+
+/** undefined when unset; true or false for an explicit setting. */
+function parseSwitch(name: string): boolean | undefined {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return undefined;
+  if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
+  if (['0', 'false', 'no', 'off'].includes(raw)) return false;
+  throw new Error(`${name} must be 1 or 0 (got ${raw})`);
+}
+
+/** The manifest with the approval step added or left out. */
+function withApprovalStep(manifest: AgentManifest, enabled: boolean): AgentManifest {
+  const tools = (manifest.spec.tools ?? []).filter((tool) => !('ref' in tool && tool.ref === APPROVAL_TOOL));
+  const base = manifest.spec.instructions.replace(APPROVAL_INSTRUCTIONS, '').trimEnd();
+  return {
+    ...manifest,
+    spec: {
+      ...manifest.spec,
+      instructions: enabled ? `${base}\n${APPROVAL_INSTRUCTIONS}\n` : `${base}\n`,
+      tools: enabled ? [...tools, { ref: APPROVAL_TOOL }] : tools,
+    },
+  };
+}
 
 function jsonHeaders(token: string | undefined = API_TOKEN): Record<string, string> {
   return {
@@ -65,19 +112,34 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
 }
 
 async function ensureAgent(): Promise<string> {
-  const agents = await request('/api/agents') as Array<{ id: string; name: string }>;
+  const agents = await request('/api/agents') as Array<{ id: string; name: string; tools?: string[] }>;
   const existing = agents.find((agent) => agent.name === AGENT_NAME);
-  if (existing) {
-    console.log(`agent ${AGENT_NAME} already exists (${existing.id})`);
-    return existing.id;
-  }
   const manifestUrl = new URL('./agents/overnight-analyst/agent.yaml', import.meta.url);
   const project = await loadManifestProject(fileURLToPath(manifestUrl));
+  if (existing) {
+    console.log(`agent ${AGENT_NAME} already exists (${existing.id})`);
+    const hasApproval = existing.tools?.includes(APPROVAL_TOOL) ?? false;
+    if (APPROVE_BEFORE_PUBLISH !== undefined && APPROVE_BEFORE_PUBLISH !== hasApproval) {
+      const manifest = withApprovalStep(project.manifest, APPROVE_BEFORE_PUBLISH);
+      // Manifest-backed agents are edited through their manifest.
+      await request(`/api/agents/${encodeURIComponent(existing.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(manifestToAgentPatchInput(manifest)),
+      });
+      console.log(APPROVE_BEFORE_PUBLISH
+        ? 'updated the agent: it now asks for approval before publishing the brief'
+        : 'updated the agent: it now publishes the brief without asking');
+    }
+    return existing.id;
+  }
+  const createInput = APPROVE_BEFORE_PUBLISH
+    ? manifestToAgentCreateInput(withApprovalStep(project.manifest, true))
+    : project.agentCreateInput;
   const created = await request('/api/agents', {
     method: 'POST',
-    body: JSON.stringify(project.agentCreateInput),
+    body: JSON.stringify(createInput),
   }) as { id: string };
-  console.log(`created agent ${AGENT_NAME} (${created.id})`);
+  console.log(`created agent ${AGENT_NAME} (${created.id})${APPROVE_BEFORE_PUBLISH ? ', asking for approval before publishing' : ''}`);
   return created.id;
 }
 

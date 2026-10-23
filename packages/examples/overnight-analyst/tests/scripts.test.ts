@@ -25,8 +25,16 @@ interface ApiKeyRow {
   status: 'active' | 'expired' | 'revoked';
 }
 
+interface MockAgent {
+  id: string;
+  name: string;
+  harnessConfig?: Record<string, unknown>;
+  tools?: string[];
+  systemPrompt?: string;
+}
+
 interface MockState {
-  agents: Array<{ id: string; name: string; harnessConfig?: Record<string, unknown> }>;
+  agents: MockAgent[];
   schedules: Array<{ name: string }>;
   triggers: Array<{ agentId: string; eventType: string }>;
   keys: ApiKeyRow[];
@@ -77,9 +85,15 @@ async function runScript(
     }
     if (method === 'GET' && path === '/api/agents') return send(response, 200, state.agents);
     if (method === 'POST' && path === '/api/agents') {
-      const created = { id: 'agent-1', ...(body as { name: string; harnessConfig: Record<string, unknown> }) };
+      const created = { id: 'agent-1', ...(body as Omit<MockAgent, 'id'>) };
       state.agents.push(created);
       return send(response, 201, created);
+    }
+    if (method === 'PATCH' && path.startsWith('/api/agents/')) {
+      const agent = state.agents.find((candidate) => candidate.id === path.slice('/api/agents/'.length));
+      if (!agent) return send(response, 404, { error: 'Agent not found' });
+      Object.assign(agent, body as Partial<MockAgent>);
+      return send(response, 200, agent);
     }
     if (method === 'GET' && path === '/api/schedules') return send(response, 200, { schedules: state.schedules });
     if (method === 'POST' && path === '/api/schedules') {
@@ -213,6 +227,64 @@ describe('overnight-analyst seed', () => {
 
     const rotated = await runScript(seedPath, state, { ANALYST_GALLERY: 'rotate' });
     expect(galleryKeyLines(rotated.stdout)).toHaveLength(1);
+  });
+});
+
+describe('overnight-analyst seed: approval before publishing', () => {
+  const posted = (requests: Recorded[]) => requests.find(
+    (request) => request.method === 'POST' && request.path === '/api/agents',
+  )?.body as { tools: string[]; systemPrompt: string; manifest: { spec: { tools: Array<{ ref: string }> } } };
+
+  it('publishes without asking by default', async () => {
+    const { code, requests } = await runScript(seedPath, freshState());
+
+    expect(code).toBe(0);
+    const agent = posted(requests);
+    expect(agent.tools).toEqual(['browse', 'screenshot', 'artifact_upload']);
+    expect(agent.systemPrompt).not.toContain('request-approval');
+  });
+
+  it('asks for approval before uploading the brief when ANALYST_APPROVE_BEFORE_PUBLISH=1', async () => {
+    const { code, stdout, requests } = await runScript(seedPath, freshState(), { ANALYST_APPROVE_BEFORE_PUBLISH: '1' });
+
+    expect(code).toBe(0);
+    const agent = posted(requests);
+    expect(agent.tools).toEqual(['browse', 'screenshot', 'artifact_upload', 'request-approval']);
+    expect(agent.manifest.spec.tools.map((tool) => tool.ref)).toContain('request-approval');
+    expect(agent.systemPrompt).toContain('before you upload it (step 3), call request-approval once');
+    expect(agent.systemPrompt).toContain('Upload the brief only if the request\nis approved.');
+    expect(stdout).toContain('asking for approval before publishing');
+  });
+
+  it('turns the step on and off for an existing agent, and leaves it alone when unset', async () => {
+    const state = freshState();
+    await runScript(seedPath, state);
+
+    const on = await runScript(seedPath, state, { ANALYST_APPROVE_BEFORE_PUBLISH: '1', ANALYST_GALLERY: 'off' });
+    const patch = on.requests.filter((request) => request.method === 'PATCH');
+    expect(patch.map((request) => request.path)).toEqual(['/api/agents/agent-1']);
+    expect((patch[0].body as { tools: string[] }).tools).toContain('request-approval');
+    expect((patch[0].body as { manifest: unknown }).manifest).toBeDefined();
+    expect(on.stdout).toContain('now asks for approval before publishing');
+
+    const again = await runScript(seedPath, state, { ANALYST_APPROVE_BEFORE_PUBLISH: '1', ANALYST_GALLERY: 'off' });
+    expect(again.requests.filter((request) => request.method !== 'GET')).toEqual([]);
+
+    const unset = await runScript(seedPath, state, { ANALYST_GALLERY: 'off' });
+    expect(unset.requests.filter((request) => request.method !== 'GET')).toEqual([]);
+    expect(state.agents[0].tools).toContain('request-approval');
+
+    const off = await runScript(seedPath, state, { ANALYST_APPROVE_BEFORE_PUBLISH: '0', ANALYST_GALLERY: 'off' });
+    const removed = off.requests.find((request) => request.method === 'PATCH')?.body as { tools: string[]; systemPrompt: string };
+    expect(removed.tools).toEqual(['browse', 'screenshot', 'artifact_upload']);
+    expect(removed.systemPrompt).not.toContain('request-approval');
+  });
+
+  it('refuses a switch value it does not understand', async () => {
+    const { code, requests } = await runScript(seedPath, freshState(), { ANALYST_APPROVE_BEFORE_PUBLISH: 'maybe' });
+
+    expect(code).not.toBe(0);
+    expect(requests).toEqual([]);
   });
 });
 

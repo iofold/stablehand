@@ -36,7 +36,7 @@ docker compose exec -e API_URL=http://localhost:3001 \
   orchestrator node --experimental-strip-types seed.ts
 ```
 
-All `ANALYST_*` variables are optional. The defaults are Hacker News and The Verge, `0 7 * * *`, and `UTC`. Re-running the seed is safe: anything that already exists by name is left alone. A key's secret is shown only once, so on a re-run the seed keeps the existing gallery key; pass `-e GALLERY_API_KEY` to check that the one in your environment still works (a refused key is replaced), or `-e ANALYST_GALLERY=rotate` to mint a new one and revoke the old. `ANALYST_GALLERY=off` skips the key.
+All `ANALYST_*` variables are optional. The defaults are Hacker News and The Verge, `0 7 * * *`, `UTC`, and no approval step. Re-running the seed is safe: anything that already exists by name is left alone. A key's secret is shown only once, so on a re-run the seed keeps the existing gallery key; pass `-e GALLERY_API_KEY` to check that the one in your environment still works (a refused key is replaced), or `-e ANALYST_GALLERY=rotate` to mint a new one and revoke the old. `ANALYST_GALLERY=off` skips the key.
 
 To seed from your host instead, install the workspace and build the manifest package first (Node 22 and pnpm):
 
@@ -46,6 +46,12 @@ pnpm --filter "@stablehand/manifest..." build
 cd packages/examples/overnight-analyst
 STABLEHAND_API_TOKEN=... npx --yes tsx seed.ts
 ```
+
+## Ask before publishing
+
+Pass `-e ANALYST_APPROVE_BEFORE_PUBLISH=1` to the seed and the agent gets the `request-approval` tool and one more step: after it writes the brief and before it uploads it, it asks a person, with the headline, the sources and the file name. The run waits until someone presses Approve or Reject on the approval card, in any open tab of the UI or on a phone. Rejected, the brief is not uploaded and the summary says so. The screenshots still upload without asking; only the brief reaches the gallery.
+
+It is off by default because a run that waits for a person cannot finish unattended: the installer's first run and an unwatched schedule would sit at the approval card. Run the seed again with `=1` or `=0` to turn the step on or off for an existing agent; leaving it unset changes nothing.
 
 ## Run it now
 
