@@ -1,0 +1,20 @@
+{
+  "name": "@stablehand/example-inbox-agent",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "description": "Inbox agent: each email gets its own sandboxed run, fields quoted from the email, a reply a person approves before it is sent, and one conversation per thread",
+  "scripts": {
+    "seed": "node --experimental-strip-types seed.ts",
+    "send": "node --experimental-strip-types send-email.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stablehand/manifest": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.3"
+  }
+}

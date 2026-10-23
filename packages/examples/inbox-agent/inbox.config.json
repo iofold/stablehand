@@ -1,0 +1,17 @@
+{
+  "campaign": "inbox-agent",
+  "eventType": "custom.inbox.email",
+  "replyFrom": {
+    "name": "Fernway Support",
+    "email": "support@fernway.example"
+  },
+  "mail": {
+    "provider": "mailpit",
+    "mailpitUrl": "http://mailpit:8025",
+    "resendUrl": "https://api.resend.com/emails"
+  },
+  "budget": {
+    "weeklyUsd": 2,
+    "weeklyRuns": 60
+  }
+}

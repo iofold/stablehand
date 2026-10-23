@@ -113,6 +113,17 @@ services:
       NOTES_MCP_TOKEN: ${NOTES_MCP_TOKEN:-}
     restart: unless-stopped
 
+  # Local test inbox for the inbox agent example: replies the agent sends land here (web UI on 8025).
+  # docker compose --profile inbox-agent up -d mailpit   (and add mailpit to STABLEHAND_EGRESS_ALLOWLIST)
+  mailpit:
+    image: axllent/mailpit:v1.31.3
+    profiles: ["inbox-agent"]
+    ports:
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+    environment:
+      MP_MAX_MESSAGES: "500"
+    restart: unless-stopped
+
   # Sandbox egress broker (ctx-2ctd): mitmproxy with the Stablehand policy addon. Dual-homed so it
   # can reach the internet on behalf of sandboxes that cannot. Rules: packages/egress-proxy.
   egress:
