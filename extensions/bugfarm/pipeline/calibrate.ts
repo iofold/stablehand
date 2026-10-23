@@ -1010,6 +1010,29 @@ export function summaries(panelId: string): CalibrationResult[] {
   return readdirSync(dir).map((t) => join(dir, t, 'summary.json')).filter(fileExists).map((p) => readJson<CalibrationResult>(p));
 }
 
+/** Every finished attempt under a panel, by model: passes, errors, cost and time. */
+export function modelTable(panelId: string): string {
+  const dir = join(panelDir(panelId), 'tasks');
+  const byModel = new Map<string, { n: number; pass: number; err: number; cost: number; secs: number; screen: number }>();
+  for (const t of isDir(dir) ? readdirSync(dir) : []) {
+    for (const a of new AttemptStore(panelId, t).all().filter((x) => x.status === 'done')) {
+      const m = byModel.get(a.model) ?? { n: 0, pass: 0, err: 0, cost: 0, secs: 0, screen: 0 };
+      m.n++;
+      if (a.result === 'pass') m.pass++;
+      if (a.result === 'error') m.err++;
+      if (a.phase === 'screen') m.screen++;
+      m.cost += bestCost(a);
+      m.secs += a.seconds ?? 0;
+      byModel.set(a.model, m);
+    }
+  }
+  const lines = ['| model | attempts (screen) | passes | errors | cost | $/attempt | min/attempt |', '|---|---|---|---|---|---|---|'];
+  for (const [model, m] of [...byModel].sort((a, b) => b[1].cost - a[1].cost)) {
+    lines.push(`| ${model} | ${m.n} (${m.screen}) | ${m.pass} | ${m.err} | $${m.cost.toFixed(2)} | $${(m.cost / m.n).toFixed(3)} | ${(m.secs / m.n / 60).toFixed(1)} |`);
+  }
+  return lines.join('\n');
+}
+
 export function reportTable(panel: FrozenPanel, results: CalibrationResult[]): string {
   const fams = panel.families.filter((f) => f.ladder).map((f) => f.family);
   const head = ['item', 'decision', ...fams.map((f) => `${f} (${panel.families.find((x) => x.family === f)?.ladder})`), 'attempts', 'cost'];
@@ -1167,6 +1190,8 @@ async function main(): Promise<void> {
       const report = { panel: { id: panel.id, sha: panel.sha }, wall_seconds: secs(Date.now() - t0), results: fresh, reconciliation: rec };
       writeJson(join(panelDir(panel.id), `run-${new Date().toISOString().replace(/[:.]/g, '')}.json`), report);
       console.log(reportTable(panel, fresh));
+      console.log('');
+      console.log(modelTable(panel.id));
       console.log(JSON.stringify(rec, null, 2));
       break;
     }
@@ -1213,6 +1238,8 @@ async function main(): Promise<void> {
     case 'report': {
       const panel = loadFrozenPanel(panelId);
       console.log(reportTable(panel, summaries(panel.id)));
+      console.log('');
+      console.log(modelTable(panel.id));
       break;
     }
     case 'atif17': {
