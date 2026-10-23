@@ -41,7 +41,8 @@ describe('StablehandControlClient', () => {
       .mockResolvedValueOnce(jsonResponse({ schedules: [schedule] }))
       .mockResolvedValueOnce(jsonResponse(schedule))
       .mockResolvedValueOnce(jsonResponse(schedule))
-      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse({ ...schedule, lastFiredAt: 3 }));
     const client = new clientModule.StablehandControlClient({
       apiBase: 'https://stablehand.test/api',
       fetch: fetchImpl,
@@ -58,12 +59,14 @@ describe('StablehandControlClient', () => {
     })).resolves.toEqual(schedule);
     await expect(client.schedules.update('schedule-1', { enabled: false })).resolves.toEqual(schedule);
     await expect(client.schedules.delete('schedule-1')).resolves.toBeUndefined();
+    await expect(client.schedules.fire('schedule-1')).resolves.toMatchObject({ lastFiredAt: 3 });
 
     expect(fetchImpl.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
       ['https://stablehand.test/api/schedules', 'GET'],
       ['https://stablehand.test/api/schedules', 'POST'],
       ['https://stablehand.test/api/schedules/schedule-1', 'PATCH'],
       ['https://stablehand.test/api/schedules/schedule-1', 'DELETE'],
+      ['https://stablehand.test/api/schedules/schedule-1/fire', 'POST'],
     ]);
   });
 

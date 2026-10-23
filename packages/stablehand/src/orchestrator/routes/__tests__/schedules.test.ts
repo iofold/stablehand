@@ -31,6 +31,7 @@ async function createApp(overrides: Record<string, unknown> = {}) {
     create: vi.fn().mockResolvedValue(stored),
     update: vi.fn().mockResolvedValue(stored),
     delete: vi.fn().mockResolvedValue(true),
+    fireNow: vi.fn().mockResolvedValue({ ...stored, lastFiredAt: 5 }),
     ...overrides,
   };
   const app = Fastify({ logger: false });
@@ -171,5 +172,26 @@ describe('schedule routes', () => {
     expect(tooLarge.service.create).not.toHaveBeenCalled();
     expect(conflict.statusCode).toBe(409);
     expect(notFound.statusCode).toBe(404);
+  });
+
+  it('fires a schedule now and returns it with the new last fire', async () => {
+    const { app, service } = await createApp();
+    apps.push(app);
+
+    const fired = await app.inject({ method: 'POST', url: '/api/schedules/schedule-1/fire' });
+
+    expect(fired.statusCode).toBe(200);
+    expect(ScheduleSchema.parse(fired.json()).lastFiredAt).toBe(5);
+    expect(service.fireNow).toHaveBeenCalledWith('schedule-1');
+  });
+
+  it('returns 404 when firing a schedule that does not exist', async () => {
+    const { app } = await createApp({ fireNow: vi.fn().mockResolvedValue(undefined) });
+    apps.push(app);
+
+    const fired = await app.inject({ method: 'POST', url: '/api/schedules/missing/fire' });
+
+    expect(fired.statusCode).toBe(404);
+    expect(fired.json()).toEqual({ error: 'Schedule not found' });
   });
 });

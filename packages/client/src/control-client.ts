@@ -479,6 +479,17 @@ export class StablehandControlClient {
           responseSchema: VoidResponseSchema,
           ...requestOptions,
         }),
+      /** Emit the schedule's event once now; returns the schedule with its new last fire. */
+      fire: (
+        scheduleId: string,
+        requestOptions: StablehandRequestOptions = {},
+      ): Promise<Schedule> =>
+        this.transport.request({
+          method: 'POST',
+          path: `/schedules/${segment(scheduleId, 'scheduleId')}/fire`,
+          responseSchema: ScheduleSchema,
+          ...requestOptions,
+        }),
     };
 
     this.interrupts = {

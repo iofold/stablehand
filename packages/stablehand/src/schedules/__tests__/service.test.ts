@@ -44,6 +44,10 @@ function harness(initial = [row()]) {
     claimScheduleFire: vi.fn().mockResolvedValue({ claimed: true, previousLastFiredAt: null }),
     restoreScheduleFireClaim: vi.fn().mockResolvedValue(undefined),
     recordScheduleMissedFires: vi.fn().mockResolvedValue(undefined),
+    recordScheduleManualFire: vi.fn().mockImplementation(async (id: string, nowMs: number) => {
+      const current = initial.find((schedule) => schedule.id === id);
+      return current ? { ...current, lastFiredAt: nowMs } : undefined;
+    }),
   };
   const triggerManager = { emitCustomEventAsync: vi.fn().mockResolvedValue(undefined) };
   const service = new ScheduleService({
@@ -431,5 +435,32 @@ describe('ScheduleService', () => {
     release();
     await stopping;
     expect(settled).toBe(true);
+  });
+
+  it('fires a schedule once on request, even while it is off, and records the fire', async () => {
+    const off = row({ id: 'schedule-2', name: 'off', enabled: false });
+    const { repository, service, triggerManager } = harness([row(), off]);
+    await service.start();
+
+    const fired = await service.fireNow('schedule-2');
+
+    expect(triggerManager.emitCustomEventAsync).toHaveBeenCalledWith(
+      'custom.schedule.weekly-canary',
+      'agent-1',
+      { source: 'canary' },
+    );
+    expect(repository.recordScheduleManualFire).toHaveBeenCalledWith('schedule-2', expect.any(Number));
+    expect(repository.claimScheduleFire).not.toHaveBeenCalled();
+    expect(fired).toMatchObject({ id: 'schedule-2', enabled: false, nextRunAt: null, lastFiredAt: expect.any(Number) });
+    await expect(service.fireNow('missing')).resolves.toBeUndefined();
+    await service.stop();
+  });
+
+  it('does not record a manual fire when the event cannot be emitted', async () => {
+    const { repository, service, triggerManager } = harness();
+    triggerManager.emitCustomEventAsync.mockRejectedValueOnce(new Error('spine down'));
+
+    await expect(service.fireNow('schedule-1')).rejects.toThrow('spine down');
+    expect(repository.recordScheduleManualFire).not.toHaveBeenCalled();
   });
 });

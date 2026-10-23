@@ -145,6 +145,7 @@ Turn and conversation lifecycle statuses were always served SCREAMING_CASE by RE
 | GET | `/api/schedules/:id` | Get cron schedule |
 | PATCH | `/api/schedules/:id` | Update cron schedule |
 | DELETE | `/api/schedules/:id` | Delete cron schedule |
+| POST | `/api/schedules/:id/fire` | Emit the schedule's event once now |
 | **Catalogs & Tools** |  |  |
 | GET | `/api/catalogs/tools` | List tools |
 | POST | `/api/catalogs/tools/test` | Test-run a tool |
@@ -1877,6 +1878,12 @@ history identical for manual and scheduled emissions.
 - **Response:** no body (`204`).
 - **Notes:** Returns `404` if not found.
 
+#### `POST /api/schedules/:id/fire`
+
+- **Description:** Emits the schedule's event and payload once, now, as a clock fire would, and records the time as `lastFiredAt`. The cron clock is unchanged.
+- **Response:** updated schedule object.
+- **Notes:** Works while the schedule is disabled, so you can try it before turning it on. Returns `404` if not found. A failed emission returns an error and leaves `lastFiredAt` unchanged.
+
 #### Delivery and restart semantics
 
 - Enabled schedules are rehydrated from PostgreSQL during orchestrator startup.
@@ -1884,7 +1891,7 @@ history identical for manual and scheduled emissions.
 - Fires missed while the orchestrator is down are skipped. There is no catch-up queue. Consumers that cannot tolerate gaps should reconcile current state on every fire rather than treating each tick as an irreplaceable command.
 - Croner overrun protection skips a new local invocation while the prior one is still running. Its timezone/DST behavior applies: nonexistent local times are skipped and repeated local times fire once.
 - The scheduler assumes one orchestrator replica. A multi-replica deployment needs a database-owned scheduler such as `pg-boss`; do not run this in-process scheduler concurrently in multiple replicas.
-- Bundled clients use `client.schedules.list/get/create/update/delete(...)`. The operational CLI exposes the corresponding `schedules` commands.
+- Bundled clients use `client.schedules.list/get/create/update/delete/fire(...)`. The operational CLI exposes the corresponding `schedules` commands.
 - Schedules are explicit control-plane resources. The old, non-executable `spec.triggers[].schedule` manifest shape is not accepted; create schedules through this API, the bundled client, or the CLI.
 - Hard-deleting an agent first stops and drains its agent-scoped schedule fires; the database then removes those schedule rows with the rest of the agent-owned state. Global schedules are unaffected.
 

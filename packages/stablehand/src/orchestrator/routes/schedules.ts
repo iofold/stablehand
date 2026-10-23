@@ -18,7 +18,7 @@ import {
 } from '../../schedules/index.js';
 
 export interface ScheduleRouteOptions {
-  service: Pick<ScheduleService, 'list' | 'get' | 'create' | 'update' | 'delete'>;
+  service: Pick<ScheduleService, 'list' | 'get' | 'create' | 'update' | 'delete' | 'fireNow'>;
 }
 
 function invalidBody(reply: FastifyReply, issues: { path: PropertyKey[]; message: string }[]) {
@@ -105,6 +105,16 @@ export async function scheduleRoutes(
     } catch (error) {
       return mapServiceError(error, reply);
     }
+  });
+
+  // POST /api/schedules/:id/fire: emit the schedule's event once, now.
+  app.post('/:id/fire', { config: { capability: 'schedules:manage' } }, async (
+    request: FastifyRequest<{ Params: { id: string } }>,
+    reply,
+  ) => {
+    const schedule = await service.fireNow(request.params.id);
+    if (!schedule) return reply.status(404).send({ error: 'Schedule not found' });
+    return ScheduleSchema.parse(schedule);
   });
 
   app.delete('/:id', { config: { capability: 'schedules:manage' } }, async (

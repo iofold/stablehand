@@ -47,6 +47,7 @@ interface ScheduleRepository {
     previousLastFiredAt: number | null,
   ): Promise<void>;
   recordScheduleMissedFires(id: string, count: number, nowMs: number): Promise<void>;
+  recordScheduleManualFire(id: string, nowMs: number): Promise<ScheduleRow | undefined>;
 }
 
 interface CustomEventEmitter {
@@ -271,6 +272,27 @@ export class ScheduleService {
       if (!deleted) return false;
       await this.reconcileUnlocked(id);
       return true;
+    });
+  }
+
+  /**
+   * Fire a schedule once now, outside its clock: the same event and payload
+   * a cron fire emits, recorded as the last fire. Works while the schedule is
+   * off, so it can be tried before it is switched on. Returns undefined when
+   * the schedule does not exist.
+   */
+  async fireNow(id: string): Promise<Schedule | undefined> {
+    return this.runSerialized(id, async () => {
+      const row = await this.repository.getSchedule(id);
+      if (!row) return undefined;
+      if (row.agentId !== null && this.retiredAgentIds.has(row.agentId)) return undefined;
+      await this.triggerManager.emitCustomEventAsync(
+        row.eventType,
+        row.agentId ?? undefined,
+        row.payload,
+      );
+      const fired = await this.repository.recordScheduleManualFire(id, Date.now());
+      return this.project(fired ?? row);
     });
   }
 

@@ -2625,6 +2625,13 @@ describe('DatabaseRepository', () => {
       await repo.recordScheduleMissedFires(created.id, 2, windowMs + 95_000);
       expect(await repo.getSchedule(created.id)).toMatchObject({ missedFireCount: 5 });
 
+      // A manual fire records its time even when it falls inside the claimed window.
+      await expect(repo.recordScheduleManualFire(created.id, windowMs + 21_500)).resolves.toMatchObject({
+        id: created.id,
+        lastFiredAt: windowMs + 21_500,
+      });
+      await expect(repo.recordScheduleManualFire('missing-schedule', windowMs)).resolves.toBeUndefined();
+
       await expect(repo.deleteSchedule(created.id)).resolves.toBe(true);
       await expect(repo.deleteSchedule(global.id)).resolves.toBe(true);
       await expect(repo.getSchedule(created.id)).resolves.toBeUndefined();

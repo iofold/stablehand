@@ -65,6 +65,7 @@ const EXPECTED_ROUTE_ACCESS: Readonly<Record<string, ExpectedRouteAccess>> = {
   'GET /api/schedules/:id': 'schedules:manage',
   'PATCH /api/schedules/:id': 'schedules:manage',
   'DELETE /api/schedules/:id': 'schedules:manage',
+  'POST /api/schedules/:id/fire': 'schedules:manage',
 
   'POST /api/triggers/emit': 'triggers:emit',
 
@@ -186,7 +187,7 @@ describe('API auth route coverage', () => {
         : ((route as typeof route & { capability?: CapabilityVerb }).capability ?? 'master'),
     ]));
 
-    expect(routes).toHaveLength(88);
+    expect(routes).toHaveLength(89);
     expect(Object.keys(actual)).toHaveLength(routes.length);
     expect(actual).toEqual(EXPECTED_ROUTE_ACCESS);
   });

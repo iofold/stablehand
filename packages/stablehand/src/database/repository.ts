@@ -4662,6 +4662,16 @@ export class DatabaseRepository {
   }
 
   /** Record windows that provably never fired (ctx-hljx); no backfill. */
+  /** Record a fire someone asked for by hand; returns the updated row. */
+  async recordScheduleManualFire(id: string, nowMs: number): Promise<ScheduleRow | undefined> {
+    const [row] = await this.db
+      .update(this.schema.schedules)
+      .set({ lastFiredAt: nowMs })
+      .where(eq(this.schema.schedules.id, id))
+      .returning();
+    return row;
+  }
+
   async recordScheduleMissedFires(id: string, count: number, nowMs: number): Promise<void> {
     await this.db
       .update(this.schema.schedules)
