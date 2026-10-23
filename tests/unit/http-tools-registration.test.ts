@@ -219,12 +219,16 @@ describe('http tools registration lifecycle', () => {
             httpTools: [createHttpTool({ name: 'weather-api' })],
           },
         }),
+        createRegistrationAgent({ id: 'agent-3', metadata: {} }),
       ]),
     } satisfies AgentRepository;
+    const refreshSpy = vi.spyOn(registry, 'refresh');
 
-    await registerExistingAgentHttpTools(db, registry);
+    await expect(registerExistingAgentHttpTools(db, registry)).resolves.toBe(2);
 
     expect(db.listAgents).toHaveBeenCalledTimes(1);
+    // One refresh for the whole batch: per-agent refreshes made boot quadratic.
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
     expect(registry.listAll().map((tool) => tool.name).sort()).toEqual(['search-api', 'weather-api']);
     expect(registry.getProvider('search-api')?.name).toBe('http-agent-1');
     expect(registry.getProvider('weather-api')?.name).toBe('http-agent-2');

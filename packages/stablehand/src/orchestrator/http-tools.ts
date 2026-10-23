@@ -136,13 +136,18 @@ async function resolveProviderSecrets(
   return readAgentToolSecrets(secretProvider, agentId);
 }
 
-export async function registerAgentHttpTools(
+type HttpToolAgent = { id: string; name: string; metadata?: Record<string, unknown> | null };
+
+/**
+ * Replace the agent's HTTP tool provider without refreshing the registry.
+ * Returns false when the agent declares no HTTP tools (nothing registered).
+ */
+async function replaceAgentHttpToolProvider(
   toolRegistry: DefaultToolRegistry,
-  agent: { id: string; name: string; metadata?: Record<string, unknown> | null },
-  secretProvider?: SecretProvider,
-  /** Injectable fetch (defaults to the SSRF egress guard). Override in tests. */
-  fetchFn: typeof fetch = getGuardedFetch(),
-): Promise<void> {
+  agent: HttpToolAgent,
+  secretProvider: SecretProvider | undefined,
+  fetchFn: typeof fetch,
+): Promise<boolean> {
   const providerName = getAgentHttpToolProviderName(agent.id);
   toolRegistry.removeProvider(providerName);
 
@@ -155,11 +160,7 @@ export async function registerAgentHttpTools(
     metadata: agent.metadata ?? undefined,
   });
   if (configs.length === 0) {
-    console.warn(
-      `[httpTools] agent "${agent.name}" (${agent.id}) has no httpTools in metadata — no HTTP tool provider registered`,
-    );
-    await toolRegistry.refresh();
-    return;
+    return false;
   }
 
   toolRegistry.addProvider(new HTTPToolProvider(configs, {
@@ -168,20 +169,51 @@ export async function registerAgentHttpTools(
     secrets: await resolveProviderSecrets(agent.id, secretProvider),
     fetchFn,
   }));
+  return true;
+}
+
+export async function registerAgentHttpTools(
+  toolRegistry: DefaultToolRegistry,
+  agent: HttpToolAgent,
+  secretProvider?: SecretProvider,
+  /** Injectable fetch (defaults to the SSRF egress guard). Override in tests. */
+  fetchFn: typeof fetch = getGuardedFetch(),
+): Promise<void> {
+  const registered = await replaceAgentHttpToolProvider(toolRegistry, agent, secretProvider, fetchFn);
+  if (!registered) {
+    console.warn(
+      `[httpTools] agent "${agent.name}" (${agent.id}) has no httpTools in metadata — no HTTP tool provider registered`,
+    );
+  }
   await toolRegistry.refresh();
 }
 
+/**
+ * Boot-time registration for every stored agent. Providers are added first
+ * and the registry is refreshed once: a refresh re-lists every provider, so
+ * refreshing per agent made boot quadratic in the agent count (ctx-new8).
+ * Agents without HTTP tools are the common case and are not logged one by one.
+ */
 export async function registerExistingAgentHttpTools(
   db: Pick<DatabaseRepository, 'listAgents'>,
   toolRegistry: DefaultToolRegistry,
   secretProvider?: SecretProvider,
-): Promise<void> {
+): Promise<number> {
   const agents = await db.listAgents();
+  const fetchFn = getGuardedFetch();
+  let registered = 0;
   for (const agent of agents) {
-    await registerAgentHttpTools(toolRegistry, {
+    if (await replaceAgentHttpToolProvider(toolRegistry, {
       id: agent.id,
       name: agent.name,
       metadata: agent.metadata ?? undefined,
-    }, secretProvider);
+    }, secretProvider, fetchFn)) {
+      registered++;
+    }
   }
+  await toolRegistry.refresh();
+  console.log(
+    `[httpTools] registered HTTP tool providers for ${registered} of ${agents.length} agent(s)`,
+  );
+  return registered;
 }
