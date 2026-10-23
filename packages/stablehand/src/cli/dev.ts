@@ -22,6 +22,7 @@ import {
 } from '../orchestrator/grpc/orchestrator-service.js';
 import { createToolApprovalGate } from '../orchestrator/tool-approval-gate.js';
 import { startRuntimeApi } from './runtime-startup.js';
+import { StartupTimeline } from '../util/startup-timeline.js';
 
 function agentInputToDefinition(
   input: AgentCreateInput,
@@ -54,6 +55,10 @@ function agentInputToDefinition(
 }
 
 export async function startDev() {
+  // ctx-new8: one log line with per-phase boot durations. The first phase is
+  // everything before this function ran (Node startup, preloads, imports).
+  const timeline = new StartupTimeline();
+  timeline.mark('modules');
   const cwd = process.cwd();
 
   // ctx-tl9r: install the process-level safety net before any runtime work.
@@ -136,7 +141,10 @@ export async function startDev() {
   const apiPort = parseInt(process.env.STABLEHAND_PORT || '3001', 10);
   const uiPort = parseInt(process.env.STABLEHAND_UI_PORT || '3200', 10);
 
-  const container: AppContainer = await createContainer(config, dataDir);
+  timeline.mark('project');
+  const container: AppContainer = await createContainer(config, dataDir, {
+    startupTimeline: timeline,
+  });
   console.log('  \x1b[32m✓\x1b[0m Database initialized');
   console.log('  \x1b[1mExecution:\x1b[0m sandbox (Docker containers)');
 
@@ -191,6 +199,7 @@ export async function startDev() {
   }
 
   console.log(`  \x1b[32m✓\x1b[0m Registered ${agentDefs.length} agent(s), ${toolDefs.length} tool(s)`);
+  timeline.mark('agents');
 
   const makeToolContext = (ctx: ToolHandlerContext) => ({
     agentId: ctx.agentId,
@@ -247,18 +256,22 @@ export async function startDev() {
     canonicalLog: container.canonicalLog,
     modelGateway: container.modelGateway,
   });
+  timeline.mark('http-server');
   // Boot order matters (ctx-wbt, ADR-014): seed slot accounting from live
   // containers BEFORE lifecycle reconciliation so reconciliation-driven
   // removals free real slots; reconcile stranded turns AFTER it so sandbox
   // rows are repaired first. Fastify listen runs onReady hooks (including
   // durable HITL resumption), so schedule activation and listen are both
   // intentionally inside this fail-closed barrier rather than preceding or
-  // racing recovery.
+  // racing recovery. It measures well under a second on dev1 (ctx-new8), so
+  // /api/health answering 200 still means recovery has run.
   await startRuntimeApi({
     server,
     runtime: container,
     listen: { port: apiPort, host: '0.0.0.0' },
+    timeline,
   });
+  console.log(timeline.summary());
   console.log(`  \x1b[32mAPI:\x1b[0m  http://localhost:${apiPort}`);
 
   // ── Start UI server ─────────────────────────────────

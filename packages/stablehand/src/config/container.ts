@@ -82,6 +82,7 @@ import { SessionGatewayKeyManager } from '../cost-control/session-gateway-keys.j
 import type { ModelGatewayStatusConfig } from '../orchestrator/routes/model-gateway.js';
 import { createRuntimeDefinitionFingerprint } from '../orchestrator/session-manager/runtime-definition-fingerprint.js';
 import { ScheduleService } from '../schedules/index.js';
+import type { StartupPhaseRecorder } from '../util/startup-timeline.js';
 
 const LOCATION_TO_PROTO = {
   sandbox: ToolLocation.SANDBOX,
@@ -140,6 +141,8 @@ export interface AppContainer {
 export interface AppContainerOptions {
   /** Override sandbox ownership identity for isolated embedders and test runtimes. */
   containerScopeIdentity?: string;
+  /** Receives the `migrations` and `services` startup phases (ctx-new8). */
+  startupTimeline?: StartupPhaseRecorder;
 }
 
 export { VALID_WEBHOOK_EVENTS };
@@ -235,8 +238,12 @@ export async function createContainer(
   // ── Database ────────────────────────────────────────────
   const dbConn: DatabaseConnection = await createDatabase(config.database.url);
 
-  // Run migrations
-  await runMigrations(dbConn.pgClient);
+  // Run migrations (skipped when this build's schema pass already completed)
+  const migration = await runMigrations(dbConn.pgClient);
+  options.startupTimeline?.mark(
+    'migrations',
+    migration.schema === 'current' ? 'schema current' : 'schema applied',
+  );
 
   const db = new DatabaseRepository(dbConn.db);
   const settingsService = new SystemSettingsService(db);
@@ -762,6 +769,7 @@ export async function createContainer(
 
   callbackDispatcher.start();
   modelGatewayReconciler?.start();
+  options.startupTimeline?.mark('services');
 
   return {
     config,

@@ -1,3 +1,5 @@
+import type { StartupPhaseRecorder } from '../util/startup-timeline.js';
+
 export interface RuntimeApiListenOptions {
   port: number;
   host: string;
@@ -25,6 +27,8 @@ export interface StartRuntimeApiOptions {
   runtime: RecoverableRuntime;
   listen: RuntimeApiListenOptions;
   bootTimeMs?: number;
+  /** Receives one phase per recovery stage and `listen` (ctx-new8). */
+  timeline?: StartupPhaseRecorder;
 }
 
 function describeError(error: unknown): string {
@@ -44,6 +48,17 @@ async function runStartupStage<T>(
   }
 }
 
+/** Running turns handed to crash takeover (ADR 025), when the runtime reports them. */
+function takeoverDetail(result: unknown): string | undefined {
+  if (typeof result !== 'object' || result === null || !('adopting' in result)) {
+    return undefined;
+  }
+  const adopting = result.adopting;
+  return typeof adopting === 'number' && adopting > 0
+    ? `taking over ${adopting} running turn(s)`
+    : undefined;
+}
+
 /**
  * Reconstruct durable runtime ownership before Fastify runs `onReady` hooks or
  * accepts traffic. The interrupt-resume worker starts from an `onReady` hook,
@@ -53,6 +68,7 @@ export async function startRuntimeApi(
   options: StartRuntimeApiOptions,
 ): Promise<string> {
   const bootTimeMs = options.bootTimeMs ?? Date.now();
+  const timeline = options.timeline;
   const rehydrateAccounting =
     options.runtime.containerManager.rehydrateAccounting;
   if (rehydrateAccounting) {
@@ -61,17 +77,23 @@ export async function startRuntimeApi(
       () => rehydrateAccounting.call(options.runtime.containerManager),
     );
   }
+  timeline?.mark('slot-accounting');
   await runStartupStage(
     'Sandbox lifecycle startup reconciliation',
     () => options.runtime.lifecyclePolicy.start(),
   );
-  await runStartupStage(
+  timeline?.mark('sandbox-reconciliation');
+  const turns = await runStartupStage(
     'Stranded-turn startup reconciliation',
     () => options.runtime.reconcileStrandedTurns(bootTimeMs),
   );
+  timeline?.mark('turn-reconciliation', takeoverDetail(turns));
   await runStartupStage(
     'Schedule service startup',
     () => options.runtime.scheduleService.start(),
   );
-  return options.server.listen(options.listen);
+  timeline?.mark('schedules');
+  const address = await options.server.listen(options.listen);
+  timeline?.mark('listen');
+  return address;
 }

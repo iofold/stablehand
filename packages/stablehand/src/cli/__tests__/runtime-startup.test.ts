@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { startRuntimeApi } from '../runtime-startup.js';
+import { StartupTimeline } from '../../util/startup-timeline.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -114,6 +115,60 @@ describe('runtime API startup barrier', () => {
       'Stranded-turn startup reconciliation failed: database unavailable',
     );
     expect(listen).not.toHaveBeenCalled();
+  });
+
+  it('records each recovery stage on the startup timeline, listen last', async () => {
+    let clock = 0;
+    const timeline = new StartupTimeline(() => clock);
+    const step = (ms: number) => {
+      clock += ms;
+    };
+
+    await startRuntimeApi({
+      server: {
+        listen: vi.fn(async () => {
+          step(5);
+          return 'http://127.0.0.1:3001';
+        }),
+      },
+      runtime: {
+        containerManager: {
+          rehydrateAccounting: vi.fn(async () => {
+            step(1);
+            return 0;
+          }),
+        },
+        lifecyclePolicy: {
+          start: vi.fn(async () => {
+            step(20);
+          }),
+        },
+        reconcileStrandedTurns: vi.fn(async () => {
+          step(3);
+          return { failed: 0, redispatched: 0, skippedHitlParked: 0, adopting: 2 };
+        }),
+        scheduleService: {
+          start: vi.fn(async () => {
+            step(4);
+          }),
+        },
+      },
+      listen: { port: 3001, host: '0.0.0.0' },
+      timeline,
+    });
+
+    expect(timeline.list()).toEqual([
+      { phase: 'slot-accounting', durationMs: 1 },
+      { phase: 'sandbox-reconciliation', durationMs: 20 },
+      { phase: 'turn-reconciliation', durationMs: 3, detail: 'taking over 2 running turn(s)' },
+      { phase: 'schedules', durationMs: 4 },
+      { phase: 'listen', durationMs: 5 },
+    ]);
+    expect(timeline.summary()).toBe(
+      '[startup] ready 33 ms after process start: slot-accounting 1 ms, '
+      + 'sandbox-reconciliation 20 ms, turn-reconciliation 3 ms (taking over 2 running turn(s)), '
+      + 'schedules 4 ms, listen 5 ms',
+    );
   });
 
   it('fails closed without listening when schedule activation fails', async () => {
