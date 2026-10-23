@@ -215,6 +215,11 @@ def _deny(flow: http.HTTPFlow, decision: policy.Decision, who: lease.SessionPoli
     )
 
 
+# A refused CONNECT closes the client connection. Node's https module (NODE_USE_ENV_PROXY) otherwise
+# waits on the open connection for minutes instead of failing the request.
+CONNECT_REFUSAL_HEADERS = {DENIED_HEADER: "denied", "Connection": "close"}
+
+
 def _refusal_headers(refusal: lease.Refusal) -> dict[str, str]:
     headers = {DENIED_HEADER: "denied"}
     if refusal.status == 407:
@@ -347,7 +352,9 @@ class StablehandEgress:
         flow.request.headers.pop("Proxy-Authorization", None)
         if refusal is not None:
             _log_refusal(flow, refusal)
-            flow.response = http.Response.make(refusal.status, b"", _refusal_headers(refusal))
+            flow.response = http.Response.make(
+                refusal.status, b"", {**_refusal_headers(refusal), **CONNECT_REFUSAL_HEADERS},
+            )
             return
         assert who is not None
         decision = policy.evaluate_connect(
@@ -358,7 +365,7 @@ class StablehandEgress:
             self.connection_policy[flow.client_conn] = who
             return
         _log("egress.denied", flow, decision, who)
-        flow.response = http.Response.make(403, b"", {DENIED_HEADER: "denied"})
+        flow.response = http.Response.make(403, b"", CONNECT_REFUSAL_HEADERS)
 
     async def requestheaders(self, flow: http.HTTPFlow) -> None:
         """Judge every request before mitmproxy opens an upstream connection or forwards a byte."""

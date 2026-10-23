@@ -276,6 +276,7 @@ class LeaseIdentityTests(unittest.TestCase):
         logs = run_quiet(addon.http_connect, tunnel)
         self.assertEqual(tunnel.response.status_code, 407)
         self.assertEqual(tunnel.response.headers["Proxy-Authenticate"], stablehand_egress.PROXY_REALM)
+        self.assertEqual(tunnel.response.headers["Connection"], "close")
         self.assertEqual(logs[0]["reason"], "lease_required")
         plain = on_port(request_flow("GET", "pypi.org", 80, ["pypi.org"]), 8081)
         run_quiet(addon.requestheaders, plain)
@@ -295,6 +296,7 @@ class LeaseIdentityTests(unittest.TestCase):
                                           [proxy_auth("sess-deny")]), port)
             logs = run_quiet(addon.http_connect, github)
             self.assertEqual(github.response.status_code, 403)
+            self.assertEqual(github.response.headers["Connection"], "close")
             self.assertEqual((logs[0]["session"], logs[0]["agent"], logs[0]["source"], logs[0]["reason"]),
                              ("sess-deny", "agent-sess-deny", "agent:deny", "no_matching_rule"))
             model = on_port(connect_flow("api.openai.com", 443, "api.openai.com:443",
