@@ -36,6 +36,7 @@ import {
   FileWriteResponseSchema,
   HealthResponseSchema,
   InterruptListResponseSchema,
+  InterruptRecordDetailSchema,
   InterruptRecordListInputSchema,
   InterruptRecordListResponseSchema,
   InterruptResolveInputSchema,
@@ -85,6 +86,7 @@ import {
   type FileWriteInput,
   type Interrupt,
   type InterruptRecord,
+  type InterruptRecordDetail,
   type InterruptRecordListInput,
   type InterruptResolveInput,
   type Message,
@@ -622,9 +624,23 @@ export class StablehandControlClient {
           method: 'GET',
           path: queryPath(
             `/agents/${segment(agentId, 'agentId')}/interrupts`,
-            { include_resolved: input.includeResolved ? 'true' : undefined },
+            { includeResolved: input.includeResolved ? 'true' : undefined },
           ),
           responseSchema: InterruptListResponseSchema,
+          ...requestOptions,
+        }),
+      /**
+       * One interrupt, including who resolved it, why, and the `data` sent
+       * with the resolution.
+       */
+      get: (
+        interruptId: string,
+        requestOptions: StablehandRequestOptions = {},
+      ): Promise<InterruptRecordDetail> =>
+        this.transport.request({
+          method: 'GET',
+          path: `/interrupts/${segment(interruptId, 'interruptId')}`,
+          responseSchema: InterruptRecordDetailSchema,
           ...requestOptions,
         }),
       resolve: (

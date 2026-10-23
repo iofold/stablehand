@@ -56,6 +56,8 @@ export interface ResolveInterruptInput extends StablehandRequestOptions {
   // ctx-iqzy: 'submit' was removed server-side; approve/reject only.
   action: 'approve' | 'reject';
   data?: unknown;
+  /** Why the approval was granted or refused; recorded with the resolution. */
+  reason?: string;
 }
 
 const AgUiRunRequestSchema = z.strictObject({

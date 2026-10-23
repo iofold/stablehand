@@ -810,6 +810,8 @@ describe('StablehandAgUiClient', () => {
         expiresAt: 200,
         resolvedAt: null,
         resolvedAction: null,
+        resolvedBy: null,
+        resolvedReason: null,
       }],
       nextBefore: 100,
     };
@@ -830,6 +832,60 @@ describe('StablehandAgUiClient', () => {
       'https://stablehand.test/api/interrupts?status=resolved&agentId=agent-1&limit=25&before=123',
       expect.objectContaining({ method: 'GET' }),
     );
+  });
+
+  it('reads one approval with who resolved it, and asks for resolved ones by the right name (ctx-lhr0)', async () => {
+    const detail = {
+      id: 'interrupt-1',
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      sandboxSessionId: null,
+      toolCallId: 'tool-call-1',
+      toolName: 'request-approval',
+      args: {},
+      status: 'resolved',
+      createdAt: 100,
+      expiresAt: 200,
+      resolvedAt: 150,
+      resolvedAction: 'approve',
+      resolvedBy: { type: 'api_key', keyId: 'key_phone', keyName: 'phone-approver' },
+      resolvedReason: 'Receipts reconcile',
+      resolvedData: { publishTo: 'hub' },
+    };
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(detail))
+      .mockResolvedValueOnce(jsonResponse({ interrupts: [] }))
+      .mockResolvedValueOnce(jsonResponse({
+        resolved: true,
+        action: 'reject',
+        resolvedAt: 160,
+        resolvedBy: { type: 'master_token' },
+        resolvedReason: 'Leaks the fix',
+      }));
+    const client = new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.interrupts.get('interrupt-1')).resolves.toEqual(detail);
+    await client.interrupts.list('agent-1', { includeResolved: true });
+    await expect(client.interrupts.resolve('agent-1', {
+      interruptId: 'interrupt-2',
+      action: 'reject',
+      reason: 'Leaks the fix',
+    })).resolves.toMatchObject({ resolvedBy: { type: 'master_token' }, resolvedReason: 'Leaks the fix' });
+
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      'https://stablehand.test/api/interrupts/interrupt-1',
+      'https://stablehand.test/api/agents/agent-1/interrupts?includeResolved=true',
+      'https://stablehand.test/api/agents/agent-1/interrupt',
+    ]);
+    expect(JSON.parse(String(fetchImpl.mock.calls[2]?.[1]?.body))).toEqual({
+      interruptId: 'interrupt-2',
+      action: 'reject',
+      reason: 'Leaks the fix',
+    });
   });
 
   it('uses canonical artifact registration and read contracts', async () => {
