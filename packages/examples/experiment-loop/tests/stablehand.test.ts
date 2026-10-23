@@ -44,6 +44,23 @@ describe('Stablehand adapter', () => {
     await expect(runTurn(api, 'agent-x', 'task', {}, 'key-4', { ...FAST, sessionWaitSec: 0 })).rejects.toThrow('concurrency_limit_reached');
   });
 
+  it('rides out an orchestrator restart on requests that are safe to repeat', async () => {
+    let down = 2;
+    const flaky: typeof fetch = async (input, init) => {
+      if (down > 0) {
+        down -= 1;
+        throw new TypeError('fetch failed');
+      }
+      return fake.fetch(input, init);
+    };
+    const restarting = new StablehandApi({ baseUrl: 'http://stablehand.test', fetchImpl: flaky, retryUnreachableMs: 5000 });
+    fake.turnScripts.push({ statuses: ['COMPLETED'], answer: 'done' });
+    expect(await runTurn(restarting, 'agent-x', 'task', {}, 'key-5', FAST)).toMatchObject({ status: 'COMPLETED', answer: 'done' });
+
+    down = 1;
+    await expect(restarting.post('/api/triggers/emit', { type: 'custom.experiment.x', payload: {} })).rejects.toThrow('fetch failed');
+  });
+
   it('reports a run the tag budget refused as BLOCKED', async () => {
     fake.turnStartError = { status: 429, body: { error: 'Budget "x" exhausted', code: 'budget_exceeded' } };
     const outcome = await runTurn(api, 'agent-x', 'task', {}, 'key-2', FAST);

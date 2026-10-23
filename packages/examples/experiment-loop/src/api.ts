@@ -18,7 +18,15 @@ export interface ApiClientOptions {
   /** A scoped key (cmk_...) or the master token. */
   token?: string;
   fetchImpl?: typeof fetch;
+  /**
+   * How long to keep retrying a request that is safe to repeat (GET, PATCH,
+   * or a POST with an Idempotency-Key) while Stablehand is unreachable, for
+   * example during an orchestrator restart. Default 3 minutes.
+   */
+  retryUnreachableMs?: number;
 }
+
+const RETRY_STATUSES: ReadonlySet<number> = new Set([502, 504]);
 
 export interface RequestOptions {
   json?: unknown;
@@ -52,12 +60,27 @@ export class StablehandApi {
       ...(options.json !== undefined ? { 'Content-Type': 'application/json' } : {}),
       ...(options.headers ?? {}),
     };
-    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      method,
-      headers,
-      ...(options.json !== undefined ? { body: JSON.stringify(options.json) } : {}),
-      ...(options.body !== undefined ? { body: options.body } : {}),
-    });
+    const repeatable = method === 'GET' || method === 'PATCH' || headers['Idempotency-Key'] !== undefined;
+    const giveUpAt = Date.now() + (this.options.retryUnreachableMs ?? 180_000);
+    let res: Response;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+          method,
+          headers,
+          ...(options.json !== undefined ? { body: JSON.stringify(options.json) } : {}),
+          ...(options.body !== undefined ? { body: options.body } : {}),
+        });
+      } catch (error) {
+        // fetch rejects with a TypeError when the server cannot be reached.
+        if (!(error instanceof TypeError) || !repeatable || Date.now() >= giveUpAt) throw error;
+        await sleep(Math.min(10_000, 500 * attempt));
+        continue;
+      }
+      if (!repeatable || !RETRY_STATUSES.has(res.status) || Date.now() >= giveUpAt) break;
+      await res.text();
+      await sleep(Math.min(10_000, 500 * attempt));
+    }
     const text = await res.text();
     if (!res.ok) {
       const retryAfter = res.headers.get('retry-after');
