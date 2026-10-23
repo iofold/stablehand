@@ -1,8 +1,21 @@
+# Rendered to /etc/nginx/conf.d/default.conf when the container starts: the
+# nginx image's entrypoint substitutes the two STABLEHAND_UI_ values, which
+# 18-stablehand-upstream.envsh sets just before.
 server {
     listen 80;
     server_name _;
     root /usr/share/nginx/html;
     index index.html;
+
+    # Look the API's address up per request, cached for 10 s, through the
+    # container's own DNS server (127.0.0.11 under Docker Compose, the cluster
+    # DNS under Kubernetes). A host written straight into proxy_pass is
+    # resolved once at start, so recreating the orchestrator container (new
+    # address) left /api answering 502 until this container restarted. The
+    # variable is what makes nginx resolve at request time. proxy_pass with a
+    # variable and no path forwards the client's request URI as sent.
+    resolver ${STABLEHAND_UI_RESOLVER} valid=10s ipv6=off;
+    set $stablehand_api ${STABLEHAND_UI_API_UPSTREAM};
 
     # Gzip compression
     gzip on;
@@ -13,7 +26,7 @@ server {
     # Covers the native agent stream and AG-UI runs; without the ag-ui arm those
     # runs fall into the buffered /api/ block and inherit its 60s read timeout.
     location ~ ^/api/(agents/[^/]+/stream|ag-ui/[^/]+/run)$ {
-        proxy_pass http://orchestrator:3001;
+        proxy_pass http://$stablehand_api;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -29,7 +42,7 @@ server {
 
     # Regular API proxy (buffered)
     location /api/ {
-        proxy_pass http://orchestrator:3001/api/;
+        proxy_pass http://$stablehand_api;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

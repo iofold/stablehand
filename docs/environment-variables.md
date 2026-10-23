@@ -102,6 +102,8 @@ Used for persistent artifact storage (file uploads/downloads).
 | Name | Default | Required? | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
 | `CORS_ORIGINS` | `http://localhost:3200` | No | Comma-separated list of allowed CORS origins. | `https://app.example.com` |
+| `STABLEHAND_API_UPSTREAM` | `orchestrator:3001` | No | UI image only: `host:port` its nginx forwards `/api` to, looked up on each request (cached 10 s) so a recreated orchestrator is reached without restarting the UI. Under Kubernetes a short name gets the pod's namespace domain. | `stablehand-api:3001` |
+| `STABLEHAND_UI_RESOLVER` | nameservers in `/etc/resolv.conf` | No | UI image only: DNS server(s) nginx uses for `STABLEHAND_API_UPSTREAM`. The default is right for Docker (`127.0.0.11`) and Kubernetes (cluster DNS). | `10.43.0.10` |
 | `STABLEHAND_DOMAIN` | — | With the Traefik overlay | Hostname Traefik routes to the UI when `deploy/compose/traefik/docker-compose.yml` is in the compose file list. The overlay also adds `https://$STABLEHAND_DOMAIN` to the default `CORS_ORIGINS`. | `stablehand.example.com` |
 | `LITELLM_DOMAIN` | `litellm.localhost` | No | Host the Traefik router in `deploy/compose/model-gateway/traefik.yml` serves the LiteLLM admin UI on. | `litellm.example.com` |
 | `COMPOSE_FILE` | `.env.example`: base + model gateway + gallery | No | Compose's own variable: the files that make up the stack, `:`-separated. `docker-compose.yml` alone runs without the gateway and gallery. | `docker-compose.yml:deploy/compose/model-gateway/docker-compose.yml` |

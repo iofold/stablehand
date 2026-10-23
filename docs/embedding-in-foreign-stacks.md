@@ -121,6 +121,9 @@ This is the most critical setting for foreign stacks. When a sandbox container s
 *   **Default**: `http://orchestrator:3001`
 *   **Requirement**: If your orchestrator service is named `stablehand-api` in your compose file, you **must** set `ORCHESTRATOR_CALLBACK_URL=http://stablehand-api:3001`. Failure to do this results in agents hanging or timing out immediately.
 
+### STABLEHAND_API_UPSTREAM (UI image)
+The UI image's nginx forwards `/api` to `orchestrator:3001`. If your orchestrator service has another name, set `STABLEHAND_API_UPSTREAM=stablehand-api:3001` on the UI container. nginx looks the address up through the container's DNS server on each request (cached for 10 s), so recreating the orchestrator does not need a UI restart. Under Kubernetes a short service name is completed with the pod's namespace domain; give a full name for a service in another namespace.
+
 ### Sandbox DNS Isolation
 Sandbox containers are isolated from your main application network by default. They can only see the orchestrator and other services explicitly added to the `stablehand-agents` network (like MinIO). If your agents need to reach your internal API, you must add your API service to the `stablehand-agents` network.
 

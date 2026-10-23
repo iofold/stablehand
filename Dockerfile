@@ -110,8 +110,12 @@ FROM nginx:alpine AS ui
 # Remove default nginx config
 RUN rm /etc/nginx/conf.d/default.conf
 
-# Copy custom nginx config
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# The nginx config is a template the image's entrypoint renders at start, after
+# 18-stablehand-upstream.envsh has read the DNS server from /etc/resolv.conf and
+# the API address from STABLEHAND_API_UPSTREAM (default orchestrator:3001).
+ENV NGINX_ENVSUBST_FILTER=STABLEHAND_UI_
+COPY packages/ui/nginx/default.conf.template /etc/nginx/templates/default.conf.template
+COPY --chmod=755 packages/ui/nginx/18-stablehand-upstream.envsh /docker-entrypoint.d/18-stablehand-upstream.envsh
 
 # Copy built UI assets
 COPY --from=build /app/packages/ui/dist/ /usr/share/nginx/html/

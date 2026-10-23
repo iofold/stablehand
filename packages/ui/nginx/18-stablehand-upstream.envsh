@@ -1,0 +1,36 @@
+#!/bin/sh
+# Sourced by the nginx image's /docker-entrypoint.sh before it renders
+# /etc/nginx/templates (20-envsubst-on-templates.sh). Sets the values the UI's
+# nginx config needs to reach the API:
+#
+#   STABLEHAND_UI_RESOLVER      DNS server nginx asks for the API's address.
+#                               Default: the nameservers in /etc/resolv.conf,
+#                               which is 127.0.0.11 under Docker Compose and
+#                               the cluster DNS under Kubernetes.
+#   STABLEHAND_UI_API_UPSTREAM  host:port of the API, from
+#                               STABLEHAND_API_UPSTREAM (default orchestrator:3001).
+#
+# nginx's own resolver ignores resolv.conf search domains. Under Kubernetes a
+# short service name such as "orchestrator" therefore gets the pod's first
+# search domain (its namespace, e.g. stablehand.svc.cluster.local) appended,
+# the name the pod's system resolver would try first.
+
+stablehand_nameservers=$(awk '$1 == "nameserver" { printf "%s%s", sep, ($2 ~ /:/ ? "[" $2 "]" : $2); sep = " " }' /etc/resolv.conf 2>/dev/null || true)
+STABLEHAND_UI_RESOLVER=${STABLEHAND_UI_RESOLVER:-${stablehand_nameservers:-127.0.0.11}}
+
+STABLEHAND_UI_API_UPSTREAM=${STABLEHAND_API_UPSTREAM:-orchestrator:3001}
+stablehand_api_host=${STABLEHAND_UI_API_UPSTREAM%%:*}
+if [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
+  case $stablehand_api_host in
+    *.* | \[*) ;;
+    *)
+      stablehand_search=$(awk '$1 == "search" { print $2; exit }' /etc/resolv.conf 2>/dev/null || true)
+      if [ -n "$stablehand_search" ]; then
+        STABLEHAND_UI_API_UPSTREAM="$stablehand_api_host.$stablehand_search${STABLEHAND_UI_API_UPSTREAM#"$stablehand_api_host"}"
+      fi
+      ;;
+  esac
+fi
+
+export STABLEHAND_UI_RESOLVER STABLEHAND_UI_API_UPSTREAM
+echo "stablehand-ui: API at $STABLEHAND_UI_API_UPSTREAM, DNS $STABLEHAND_UI_RESOLVER"
