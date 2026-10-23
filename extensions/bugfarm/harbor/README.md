@@ -73,6 +73,11 @@ default 2), `max_tool_calls`, `turn_timeout_sec`, `bash_max_timeout_sec`, `keep_
 `deny_web_tools`, `native_tools` (`all` or `none`), `harness_config` (JSON merged into the harness config), `relay_bind`, `relay_host`,
 `relay_port`, `workdir`.
 
+Running next to the Bugfarm pipeline: the pipeline's cleanup (`removeLabelledContainers`) removes every
+container labelled `bugfarm=1`, and Bugfarm task images carry that label, so it also kills benchmark
+trials in flight. Until that cleanup is scoped to the pipeline's own runs, benchmark task copies need a
+different value (`LABEL bugfarm=bench` in `environment/Dockerfile` and in the compose labels).
+
 How a campaign's spend is capped: harness turns run on Stablehand's per-session gateway keys and are
 counted by their `campaign` tag, so the budget blocks new turns at admission and caps each turn mid-run.
 The campaign key is for model calls made outside Stablehand (for example terminus-2 cells) and counts
