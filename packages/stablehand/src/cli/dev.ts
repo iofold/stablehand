@@ -126,10 +126,8 @@ export async function startDev() {
 
   // Print startup banner
   console.log(`
-  \x1b[36m╔═══════════════════════════════════════╗
-  ║          C T X M I L L               ║
-  ║   Vertical AI Product Framework      ║
-  ╚═══════════════════════════════════════╝\x1b[0m
+  \x1b[36m\x1b[1mStablehand\x1b[0m
+  \x1b[36mScheduled agents on your own servers\x1b[0m
   `);
 
   console.log('  \x1b[1mModels:\x1b[0m    per-agent harness configuration');
