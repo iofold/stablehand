@@ -6,7 +6,9 @@ import {
   type InterruptResumeAttemptRow,
   type TurnDeliveryLeaseRow,
 } from '../database/repository.js';
+import type { TypedEventBus } from '../events/bus.js';
 import { unrefTimer } from '../util/timing.js';
+import { InterruptContinuationUnrecoverableError } from './interrupt-continuation-error.js';
 import type {
   PreparedInterruptContinuation,
   PreparedInterruptContinuationReady,
@@ -17,9 +19,18 @@ import {
 } from './session-manager/session-recovery-coordinator.js';
 import type { TurnDeliveryFence } from './turn-delivery-fence.js';
 import {
+  acquireTurnDeliveryLease,
   monitorClaimedTurnDeliveryLease,
   type TurnDeliveryLeaseGuard,
 } from './turn-delivery-lease.js';
+import {
+  APPROVAL_RESUME_SANDBOX_ENDED_RUN,
+  TURN_ERROR_SANDBOX_ALREADY_ENDED_TURN,
+  TurnFinalizer,
+  isApprovalNotResumedError,
+  turnErrorApprovalNotResumed,
+} from './turn-finalizer.js';
+import { repairConversationRunningToolCalls } from './turn-reconciler.js';
 
 const TAG = '[InterruptResumeAttemptWorker]';
 const DEFAULT_LEASE_MS = 60_000;
@@ -33,6 +44,7 @@ const DEFAULT_SCAN_LIMIT = 50;
  * than restoring 50 sandboxes at once.
  */
 const MAX_CONCURRENT_INTERRUPT_RESUMES = 3;
+const MAX_LAST_ERROR_IN_COPY = 300;
 
 export type InterruptResumeAttemptStore = Pick<
   DatabaseRepository,
@@ -41,12 +53,14 @@ export type InterruptResumeAttemptStore = Pick<
   | 'getRecoverableInterruptResumeAttempts'
   | 'getExhaustedInterruptResumeAttempts'
   | 'claimInterruptResumeDelivery'
+  | 'claimTurnDeliveryLease'
   | 'renewTurnDeliveryLease'
   | 'releaseTurnDeliveryLease'
   | 'completeInterruptResumeDelivery'
   | 'failInterruptResumeDelivery'
   | 'completeTerminalInterruptResumeAttempt'
   | 'failUnclaimedInterruptResumeAttempt'
+  | 'exhaustInterruptResumeAttempt'
 >;
 
 interface InterruptResumeSessionManager {
@@ -72,6 +86,95 @@ interface Logger {
   info(message: string, ...args: unknown[]): void;
   warn(message: string, ...args: unknown[]): void;
   error(message: string, ...args: unknown[]): void;
+}
+
+/**
+ * Closes a turn whose approval can no longer be applied (ctx-2jp0). Called
+ * with the turn's delivery lease held; returns true when this call closed it.
+ */
+export interface ParkedTurnCloser {
+  closeTurn(input: {
+    turnId: string;
+    error: string;
+    fence: TurnDeliveryFence;
+    signal: AbortSignal;
+  }): Promise<boolean>;
+}
+
+/**
+ * The production closer: repair the turn's running tool calls and finalize
+ * it as an error through the single terminal writer (ADR 014), fenced by the
+ * caller's delivery lease.
+ */
+export function createParkedTurnCloser(deps: {
+  db: Pick<
+    DatabaseRepository,
+    | 'getTurn'
+    | 'getMessages'
+    | 'stageAssistantMessageUpdate'
+    | 'finalizeTurnIfOpen'
+    | 'finalizeTurnAndMarkLifecycleDraining'
+  >;
+  eventBus: Pick<TypedEventBus, 'emitAsync'>;
+  logger: Logger;
+}): ParkedTurnCloser {
+  const finalizer = new TurnFinalizer({
+    db: deps.db,
+    eventBus: deps.eventBus,
+    logger: deps.logger,
+  });
+  return {
+    async closeTurn({ turnId, error, fence, signal }) {
+      const turn = await deps.db.getTurn(turnId);
+      if (!turn || turn.completedAt !== null) {
+        return false;
+      }
+      signal.throwIfAborted();
+      if (turn.conversationId) {
+        await repairConversationRunningToolCalls(deps, turn.conversationId, {
+          turnId,
+          deliveryFence: fence,
+          signal,
+        });
+      }
+      signal.throwIfAborted();
+      const result = await finalizer.finalize({
+        turnId,
+        agentId: turn.agentId,
+        conversationId: turn.conversationId ?? '',
+        ...(turn.sandboxSessionId ? { sandboxSessionId: turn.sandboxSessionId } : {}),
+        status: 'error',
+        error,
+        durationMs: Date.now() - turn.startedAt,
+        expectedDeliveryFence: fence,
+      });
+      return result.finalized;
+    },
+  };
+}
+
+/** The turn error for an attempt that will not be retried again. */
+export function interruptResumeGiveUpError(attempt: InterruptResumeAttemptRow): string {
+  const lastError = attempt.lastError ?? '';
+  if (isApprovalNotResumedError(lastError)) {
+    return lastError;
+  }
+  if (lastError.includes(TURN_ERROR_SANDBOX_ALREADY_ENDED_TURN)) {
+    return turnErrorApprovalNotResumed(APPROVAL_RESUME_SANDBOX_ENDED_RUN);
+  }
+  const detail = lastError.length > MAX_LAST_ERROR_IN_COPY
+    ? `${lastError.slice(0, MAX_LAST_ERROR_IN_COPY)}...`
+    : lastError;
+  const attempts = Math.max(attempt.attempts, 1);
+  return turnErrorApprovalNotResumed(
+    `resuming it failed ${attempts} time${attempts === 1 ? '' : 's'}`
+    + (detail ? ` (last error: ${detail})` : ''),
+  );
+}
+
+function isTerminalTurn(turn: { completedAt: number | null; status: string }): boolean {
+  return turn.completedAt !== null
+    || (turn.status !== 'queued' && turn.status !== 'running');
 }
 
 interface InterruptResumeAttemptWorkerOptions {
@@ -113,6 +216,8 @@ export class InterruptResumeAttemptWorker {
       db: InterruptResumeAttemptStore;
       sessionManager: InterruptResumeSessionManager;
       logger: Logger;
+      /** Closes turns whose resume is given up; without it they are only logged. */
+      turnCloser?: ParkedTurnCloser;
     },
     options: InterruptResumeAttemptWorkerOptions = {},
   ) {
@@ -213,9 +318,10 @@ export class InterruptResumeAttemptWorker {
   }
 
   /**
-   * ctx-eu6a: move budget-exhausted pending attempts to a terminal 'failed'
-   * state with an operator-visible error, so they stop sitting invisibly at
-   * the head of the recovery queue.
+   * ctx-eu6a, ctx-2jp0: attempts that will not be retried again are given
+   * up, and their still-open turns are closed with clear copy, so an
+   * approved turn never sits RUNNING after its resume stopped being retried.
+   * Rows whose turn ended some other way are settled as completed.
    */
   private async sweepExhausted(): Promise<void> {
     const exhausted = await this.deps.db.getExhaustedInterruptResumeAttempts(
@@ -225,15 +331,24 @@ export class InterruptResumeAttemptWorker {
       if (this.stopping) {
         return;
       }
-      const failed = await this.deps.db.failUnclaimedInterruptResumeAttempt(
-        attempt.id,
-        `resume budget exhausted after ${attempt.attempts} attempts: ${attempt.lastError ?? 'unknown error'}`,
-      );
-      if (failed) {
+      if (this.runningAttemptIds.has(attempt.id)) {
+        continue;
+      }
+      this.runningAttemptIds.add(attempt.id);
+      try {
+        const turn = await this.deps.db.getTurn(attempt.turnId);
+        if (turn && isTerminalTurn(turn)) {
+          await this.deps.db.completeTerminalInterruptResumeAttempt(attempt.id);
+          continue;
+        }
+        await this.giveUp(attempt, interruptResumeGiveUpError(attempt));
+      } catch (err) {
         this.deps.logger.error(
-          `${TAG} resume attempt ${attempt.id} (turn ${attempt.turnId}) exhausted `
-          + `after ${attempt.attempts} attempts; marked failed: ${attempt.lastError ?? ''}`,
+          `${TAG} could not give up exhausted attempt ${attempt.id} (turn ${attempt.turnId}):`,
+          err,
         );
+      } finally {
+        this.runningAttemptIds.delete(attempt.id);
       }
     }
   }
@@ -261,47 +376,12 @@ export class InterruptResumeAttemptWorker {
     if (this.stopping) {
       return;
     }
-    if (!attempt.sandboxSessionId) {
-      const failed = await this.deps.db.failUnclaimedInterruptResumeAttempt(
-        attempt.id,
-        'Interrupt resume attempt has no sandbox session',
-      );
-      if (!failed) {
-        this.deps.logger.warn(
-          `${TAG} could not fail unclaimed attempt ${attempt.id}; ownership changed`,
-        );
-      }
-      return;
-    }
 
-    // ctx-eu6a: retry budget. A row that has burned its attempts is terminated
-    // here instead of re-driving an expensive restore forever (defense in depth
-    // — the recovery scan already excludes it; this also covers enqueue()).
-    if (attempt.attempts >= MAX_INTERRUPT_RESUME_ATTEMPTS) {
-      const failed = await this.deps.db.failUnclaimedInterruptResumeAttempt(
-        attempt.id,
-        `resume budget exhausted after ${attempt.attempts} attempts: ${attempt.lastError ?? 'unknown error'}`,
-      );
-      if (failed) {
-        this.deps.logger.error(
-          `${TAG} resume attempt ${attempt.id} exhausted after ${attempt.attempts} attempts; marked failed`,
-        );
-      } else {
-        this.deps.logger.warn(
-          `${TAG} could not fail exhausted attempt ${attempt.id}; ownership changed`,
-        );
-      }
-      return;
-    }
-
+    // A turn that already ended (cancelled, or closed by an earlier give-up)
+    // needs no resume: settle the attempt, including a failed one, so the
+    // recovery scan stops selecting it.
     const originalTurn = await this.deps.db.getTurn(attempt.turnId);
-    if (
-      originalTurn
-      && (
-        originalTurn.completedAt !== null
-        || (originalTurn.status !== 'queued' && originalTurn.status !== 'running')
-      )
-    ) {
+    if (originalTurn && isTerminalTurn(originalTurn)) {
       const repaired = await this.deps.db.completeTerminalInterruptResumeAttempt(
         attempt.id,
       );
@@ -310,6 +390,23 @@ export class InterruptResumeAttemptWorker {
           `${TAG} terminal repair lost for attempt ${attempt.id}`,
         );
       }
+      return;
+    }
+
+    if (!attempt.sandboxSessionId) {
+      await this.giveUp(
+        attempt,
+        turnErrorApprovalNotResumed('it had no sandbox to continue in'),
+      );
+      return;
+    }
+
+    // ctx-eu6a: retry budget. A row that has burned its attempts is given up
+    // here instead of re-driving an expensive restore forever (defense in
+    // depth — the recovery scan already excludes it; this also covers
+    // enqueue() and a person re-approving an exhausted card).
+    if (attempt.attempts >= MAX_INTERRUPT_RESUME_ATTEMPTS) {
+      await this.giveUp(attempt, interruptResumeGiveUpError(attempt));
       return;
     }
 
@@ -440,6 +537,15 @@ export class InterruptResumeAttemptWorker {
         if (executionGuard.signal.aborted) {
           return;
         }
+        if (err instanceof InterruptContinuationUnrecoverableError) {
+          // ctx-2jp0: retrying would fail the same way; close the turn now.
+          await this.giveUp(
+            attempt,
+            turnErrorApprovalNotResumed(err.reason),
+            executionGuard,
+          );
+          return;
+        }
         const message = err instanceof Error ? err.message : String(err);
         const failed = await this.deps.db.failInterruptResumeDelivery(
           attempt.id,
@@ -454,6 +560,79 @@ export class InterruptResumeAttemptWorker {
       }
     } finally {
       await guard?.release();
+    }
+  }
+
+  /**
+   * Stop retrying an approval's resume and close its turn with `error`
+   * (ctx-2jp0). The attempt is marked failed at the retry budget first, so a
+   * crash before the turn is closed leaves it for the next sweep to close.
+   */
+  private async giveUp(
+    attempt: InterruptResumeAttemptRow,
+    error: string,
+    guard?: TurnDeliveryLeaseGuard,
+  ): Promise<void> {
+    const exhausted = await this.deps.db.exhaustInterruptResumeAttempt(
+      attempt.id,
+      error,
+      guard?.fence,
+    );
+    if (!exhausted) {
+      this.deps.logger.warn(
+        `${TAG} could not stop retrying attempt ${attempt.id}; another worker owns it`,
+      );
+      return;
+    }
+    this.deps.logger.error(
+      `${TAG} giving up resume attempt ${attempt.id} for turn ${attempt.turnId} `
+      + `after ${exhausted.attempts} attempt(s): ${error}`,
+    );
+
+    const closer = this.deps.turnCloser;
+    if (!closer) {
+      this.deps.logger.error(
+        `${TAG} turn ${attempt.turnId} stays open: no turn closer is configured`,
+      );
+      return;
+    }
+    const lease = guard ?? await acquireTurnDeliveryLease(
+      { db: this.deps.db, logger: this.deps.logger },
+      attempt.turnId,
+      {
+        leaseMs: this.leaseMs,
+        heartbeatMs: this.heartbeatMs,
+        now: this.now,
+        givenUpResumeAttemptId: attempt.id,
+      },
+    );
+    if (!lease) {
+      this.deps.logger.info(
+        `${TAG} turn ${attempt.turnId} is owned elsewhere; the next sweep closes it`,
+      );
+      return;
+    }
+    try {
+      const closed = await closer.closeTurn({
+        turnId: attempt.turnId,
+        error,
+        fence: lease.fence,
+        signal: lease.signal,
+      });
+      if (closed) {
+        this.deps.logger.info(
+          `${TAG} closed turn ${attempt.turnId} after giving up its approval resume`,
+        );
+      }
+    } catch (err) {
+      this.deps.logger.error(
+        `${TAG} failed to close turn ${attempt.turnId}; the next sweep retries:`,
+        err,
+      );
+    } finally {
+      if (!guard) {
+        await lease.release();
+      }
     }
   }
 

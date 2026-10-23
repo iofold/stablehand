@@ -472,8 +472,10 @@ describe('interrupt resume attempt leases', () => {
         ownerId: 'retry-resume-owner',
         leaseDurationMs: 60_000,
       });
+      // The failed restore counted against the budget (ctx-2jp0), and the
+      // claim counts this delivery.
       expect(active).toMatchObject({
-        attempt: { status: 'in_progress', attempts: 1 },
+        attempt: { status: 'in_progress', attempts: 2 },
       });
 
       expect(
@@ -486,7 +488,7 @@ describe('interrupt resume attempt leases', () => {
       ).toMatchObject({
         id: active!.attempt.id,
         status: 'in_progress',
-        attempts: 1,
+        attempts: 2,
       });
     } finally {
       await secondConnection.close();

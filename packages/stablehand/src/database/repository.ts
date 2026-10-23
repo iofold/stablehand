@@ -212,6 +212,12 @@ export const TURN_QUEUE_ADMISSION_LOCK_ID = 424243;
 /** ctx-eu6a: retry budget for interrupt resume attempts and its backoff step. */
 export const MAX_INTERRUPT_RESUME_ATTEMPTS = 3;
 export const INTERRUPT_RESUME_BACKOFF_STEP_MS = 15_000;
+/**
+ * Attempts whose turn ended some other way (for example, cancelled) are
+ * settled as completed. Failed ones included (ctx-2jp0): the recovery scan
+ * re-selects them, so leaving them failed repeated the repair forever.
+ */
+const TERMINAL_REPAIRABLE_RESUME_STATUSES = ['pending', 'in_progress', 'failed'];
 
 /**
  * Thrown by createTurnWithSecretEnvelope when the authoritative in-transaction
@@ -2686,9 +2692,22 @@ export class DatabaseRepository {
      * instance id names a single-process slot such as a container hostname.
      */
     previousBootTakeover?: { instancePrefix: string; ownBootPrefix: string };
+    /**
+     * ctx-2jp0: the resume attempt the caller gave up (failed at the retry
+     * budget). It no longer keeps the turn reserved for the resume path, so
+     * the caller can claim the turn to close it.
+     */
+    givenUpResumeAttemptId?: string;
   }): Promise<TurnDeliveryLeaseRow | undefined> {
     const turnId = sanitizeDbText(input.turnId, 'turnDeliveryLeases.turnId');
     const ownerId = sanitizeDbText(input.ownerId, 'turnDeliveryLeases.ownerId');
+    const givenUpResumeAttempt = input.givenUpResumeAttemptId === undefined
+      ? sql``
+      : sql` AND NOT (
+          ${this.schema.interruptResumeAttempts.id} = ${sanitizeDbText(input.givenUpResumeAttemptId, 'turnDeliveryLeases.givenUpResumeAttemptId')}
+          AND ${this.schema.interruptResumeAttempts.status} = 'failed'
+          AND ${this.schema.interruptResumeAttempts.attempts} >= ${MAX_INTERRUPT_RESUME_ATTEMPTS}
+        )`;
     const takeover = input.previousBootTakeover;
     const instancePrefix = takeover
       ? sanitizeDbText(takeover.instancePrefix, 'turnDeliveryLeases.instancePrefix')
@@ -2724,7 +2743,9 @@ export class DatabaseRepository {
             WHERE ${this.schema.pendingInterrupts.turnId} = ${this.schema.turns.id}
               AND (
                 ${this.schema.pendingInterrupts.status} IN ('pending', 'timed_out')
-                OR ${this.schema.interruptResumeAttempts.status} IN ('pending', 'in_progress', 'failed')
+                OR (
+                  ${this.schema.interruptResumeAttempts.status} IN ('pending', 'in_progress', 'failed')${givenUpResumeAttempt}
+                )
               )
           )`,
           sql<boolean>`NOT EXISTS (
@@ -4930,6 +4951,27 @@ export class DatabaseRepository {
     });
   }
 
+  /**
+   * The resume attempt of an approved turn that the resume worker still owns
+   * (ctx-2jp0): pending, in progress, or failed (retried, or given up and
+   * closed by the worker's sweep). Startup reconciliation leaves such a turn
+   * to the worker instead of taking it over or failing it.
+   */
+  async getOpenInterruptResumeAttemptForTurn(
+    turnId: string,
+  ): Promise<InterruptResumeAttemptRow | undefined> {
+    return this.db.query.interruptResumeAttempts.findFirst({
+      where: and(
+        eq(this.schema.interruptResumeAttempts.turnId, turnId),
+        inArray(
+          this.schema.interruptResumeAttempts.status,
+          ['pending', 'in_progress', 'failed'],
+        ),
+      ),
+      orderBy: (row, { desc: descending }) => [descending(row.createdAt)],
+    });
+  }
+
   async getActionableInterruptsForAgent(
     agentId: string,
   ): Promise<Array<{ interrupt: InterruptRow; resumeAttempt?: InterruptResumeAttemptRow }>> {
@@ -5297,6 +5339,9 @@ export class DatabaseRepository {
       if (!interrupt) {
         return undefined;
       }
+      // ctx-2jp0: a failed attempt under the retry budget is claimable, so
+      // the recovery scan's automatic retry actually runs (it used to be
+      // selected and then silently refused here, leaving the turn RUNNING).
       const [attempt] = await tx
         .select()
         .from(this.schema.interruptResumeAttempts)
@@ -5304,9 +5349,18 @@ export class DatabaseRepository {
           eq(this.schema.interruptResumeAttempts.id, attemptId),
           eq(this.schema.interruptResumeAttempts.interruptId, interrupt.id),
           eq(this.schema.interruptResumeAttempts.turnId, turn.id),
-          inArray(
-            this.schema.interruptResumeAttempts.status,
-            ['pending', 'in_progress'],
+          or(
+            inArray(
+              this.schema.interruptResumeAttempts.status,
+              ['pending', 'in_progress'],
+            ),
+            and(
+              eq(this.schema.interruptResumeAttempts.status, 'failed'),
+              lt(
+                this.schema.interruptResumeAttempts.attempts,
+                MAX_INTERRUPT_RESUME_ATTEMPTS,
+              ),
+            ),
           ),
         ))
         .for('update');
@@ -5559,7 +5613,7 @@ export class DatabaseRepository {
           eq(this.schema.interruptResumeAttempts.id, sanitizedId),
           inArray(
             this.schema.interruptResumeAttempts.status,
-            ['pending', 'in_progress'],
+            TERMINAL_REPAIRABLE_RESUME_STATUSES,
           ),
         ))
         .limit(1);
@@ -5589,7 +5643,7 @@ export class DatabaseRepository {
           eq(this.schema.interruptResumeAttempts.turnId, terminalTurn.id),
           inArray(
             this.schema.interruptResumeAttempts.status,
-            ['pending', 'in_progress'],
+            TERMINAL_REPAIRABLE_RESUME_STATUSES,
           ),
         ))
         .for('update');
@@ -5611,6 +5665,12 @@ export class DatabaseRepository {
     });
   }
 
+  /**
+   * Record a failure that happened before the attempt claimed delivery (for
+   * example, restoring its checkpointed sandbox failed). It counts against the
+   * retry budget like a claimed failure (ctx-2jp0): a retried failed attempt
+   * whose preparation keeps failing used to loop without ever exhausting.
+   */
   async failUnclaimedInterruptResumeAttempt(
     attemptId: string,
     error: string,
@@ -5623,6 +5683,7 @@ export class DatabaseRepository {
       .update(this.schema.interruptResumeAttempts)
       .set({
         status: 'failed',
+        attempts: sql`${this.schema.interruptResumeAttempts.attempts} + 1`,
         updatedAt: databaseClockMs(),
         completedAt: null,
         lastError: sanitizeDbText(
@@ -5632,7 +5693,7 @@ export class DatabaseRepository {
       })
       .where(and(
         eq(this.schema.interruptResumeAttempts.id, sanitizedId),
-        eq(this.schema.interruptResumeAttempts.status, 'pending'),
+        inArray(this.schema.interruptResumeAttempts.status, ['pending', 'failed']),
       ))
       .returning();
     return failed;
@@ -5681,23 +5742,93 @@ export class DatabaseRepository {
   }
 
   /**
-   * ctx-eu6a: pending/failed attempts that have exhausted the retry budget.
-   * These are excluded from the recovery scan; the worker sweeps them to a
-   * terminal 'failed' state so they surface to operators instead of sitting
-   * invisibly stuck at the head of the pending queue.
+   * Attempts the worker will not retry again (ctx-eu6a, ctx-2jp0): at or over
+   * the retry budget and either pending, or failed / in progress without a
+   * live delivery lease while their turn is still open. The worker gives each
+   * one up and closes its turn with clear copy, so an approved turn is never
+   * left RUNNING after its resume stopped being retried.
    */
   async getExhaustedInterruptResumeAttempts(
     limit = 50,
   ): Promise<InterruptResumeAttemptRow[]> {
+    const attempts = this.schema.interruptResumeAttempts;
+    const turnIsOpen = sql<boolean>`EXISTS (
+      SELECT 1
+      FROM ${this.schema.turns}
+      WHERE ${this.schema.turns.id} = ${attempts.turnId}
+        AND ${this.schema.turns.completedAt} IS NULL
+        AND ${this.schema.turns.status} IN ('queued', 'running')
+    )`;
+    const leaseIsLive = sql<boolean>`EXISTS (
+      SELECT 1
+      FROM ${this.schema.turnDeliveryLeases}
+      WHERE ${this.schema.turnDeliveryLeases.turnId} = ${attempts.turnId}
+        AND ${this.schema.turnDeliveryLeases.leaseExpiresAt} > ${databaseClockMs()}
+    )`;
     return this.db
       .select()
-      .from(this.schema.interruptResumeAttempts)
+      .from(attempts)
       .where(and(
-        eq(this.schema.interruptResumeAttempts.status, 'pending'),
-        gte(this.schema.interruptResumeAttempts.attempts, MAX_INTERRUPT_RESUME_ATTEMPTS),
+        gte(attempts.attempts, MAX_INTERRUPT_RESUME_ATTEMPTS),
+        or(
+          eq(attempts.status, 'pending'),
+          and(eq(attempts.status, 'failed'), turnIsOpen),
+          and(eq(attempts.status, 'in_progress'), turnIsOpen, sql`NOT ${leaseIsLive}`),
+        ),
       ))
-      .orderBy(asc(this.schema.interruptResumeAttempts.updatedAt))
+      .orderBy(asc(attempts.updatedAt))
       .limit(Math.max(1, Math.min(Math.trunc(limit), 500)));
+  }
+
+  /**
+   * Stop retrying a resume attempt (ctx-2jp0): mark it failed at the retry
+   * budget so neither the recovery scan nor a claim picks it up again. A
+   * pending or failed attempt always qualifies; an in-progress one only when
+   * no other owner holds a live delivery lease on its turn (`fence` names the
+   * caller's own lease, if it holds one).
+   */
+  async exhaustInterruptResumeAttempt(
+    attemptIdInput: string,
+    errorInput: string,
+    fence?: ExpectedTurnDeliveryFence,
+  ): Promise<InterruptResumeAttemptRow | undefined> {
+    const attemptId = sanitizeDbText(
+      attemptIdInput,
+      'interruptResumeAttempts.exhaust.id',
+    );
+    const error = sanitizeDbText(errorInput, 'interruptResumeAttempts.exhaust.error');
+    const attempts = this.schema.interruptResumeAttempts;
+    const leases = this.schema.turnDeliveryLeases;
+    const ownLease = fence
+      ? sql` AND NOT (
+          ${leases.ownerId} = ${sanitizeDbText(fence.ownerId, 'interruptResumeAttempts.exhaust.ownerId')}
+          AND ${leases.fenceToken} = ${validateTurnDeliveryFenceToken(fence.fenceToken, 'interruptResumeAttempts.exhaust.fenceToken')}
+        )`
+      : sql``;
+    const otherLiveLease = sql<boolean>`EXISTS (
+      SELECT 1
+      FROM ${leases}
+      WHERE ${leases.turnId} = ${attempts.turnId}
+        AND ${leases.leaseExpiresAt} > ${databaseClockMs()}${ownLease}
+    )`;
+    const [exhausted] = await this.db
+      .update(attempts)
+      .set({
+        status: 'failed',
+        attempts: sql`GREATEST(${attempts.attempts}, ${MAX_INTERRUPT_RESUME_ATTEMPTS})`,
+        lastError: error,
+        completedAt: null,
+        updatedAt: databaseClockMs(),
+      })
+      .where(and(
+        eq(attempts.id, attemptId),
+        or(
+          inArray(attempts.status, ['pending', 'failed']),
+          and(eq(attempts.status, 'in_progress'), sql`NOT ${otherLiveLease}`),
+        ),
+      ))
+      .returning();
+    return exhausted;
   }
 
   async retryFailedInterruptResumeAttempt(

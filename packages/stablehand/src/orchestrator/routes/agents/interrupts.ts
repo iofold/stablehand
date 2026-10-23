@@ -1,19 +1,27 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { InterruptResumeAttemptRow } from '../../../database/repository.js';
-import { InterruptResumeAttemptWorker } from '../../interrupt-resume-attempt-worker.js';
+import {
+  InterruptResumeAttemptWorker,
+  createParkedTurnCloser,
+} from '../../interrupt-resume-attempt-worker.js';
 import type { AgentSubRouteOptions } from './types.js';
 
 export async function interruptRoutes(
   app: FastifyInstance,
   opts: AgentSubRouteOptions,
 ): Promise<void> {
-  const { db, interrupts, sessionManager, loadAgent } = opts;
+  const { db, interrupts, sessionManager, loadAgent, eventBus } = opts;
   const resumeWorker = sessionManager
     ? new InterruptResumeAttemptWorker({
         db,
         sessionManager,
         logger: app.log,
+        // ctx-2jp0: a turn whose approval resume is given up is closed with
+        // clear copy instead of staying RUNNING.
+        ...(eventBus
+          ? { turnCloser: createParkedTurnCloser({ db, eventBus, logger: app.log }) }
+          : {}),
       })
     : undefined;
 

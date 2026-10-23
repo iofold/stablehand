@@ -86,6 +86,13 @@ function createDb(rows: InterruptResumeAttemptRow[]) {
     failInterruptResumeDelivery: vi.fn().mockResolvedValue(undefined),
     completeTerminalInterruptResumeAttempt: vi.fn().mockResolvedValue(undefined),
     failUnclaimedInterruptResumeAttempt: vi.fn().mockResolvedValue(undefined),
+    exhaustInterruptResumeAttempt: vi.fn().mockImplementation(async (id: string, error: string) => ({
+      ...createAttempt({ id }),
+      status: 'failed',
+      attempts: 10_000,
+      lastError: error,
+    })),
+    claimTurnDeliveryLease: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -170,11 +177,13 @@ describe('ctx-eu6a: interrupt resume attempt worker queueing', () => {
     // The worker reads attempt.attempts and never spends an expensive restore
     // on a row past its budget.
     expect(sessionManager.prepareInterruptContinuation).not.toHaveBeenCalled();
-    // It records the exhaustion durably (marked failed) so the row stops being
-    // eligible and becomes operator-visible.
-    expect(db.failUnclaimedInterruptResumeAttempt).toHaveBeenCalledWith(
+    // It records the exhaustion durably (marked failed at the budget) so the
+    // row stops being eligible, with copy that says the run cannot continue
+    // (ctx-2jp0: the turn itself is then closed, see the give-up tests).
+    expect(db.exhaustInterruptResumeAttempt).toHaveBeenCalledWith(
       poisoned.id,
-      expect.stringContaining('resume budget exhausted'),
+      expect.stringContaining('resuming it failed 10000 times'),
+      undefined,
     );
   });
 });

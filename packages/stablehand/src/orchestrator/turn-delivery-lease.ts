@@ -42,6 +42,8 @@ export interface TurnDeliveryLeaseOptions {
   now?: () => number;
   /** ADR 025: also take over a dead earlier boot's unexpired lease. */
   previousBootTakeover?: { instancePrefix: string; ownBootPrefix: string };
+  /** ctx-2jp0: claim a turn whose only resume attempt the caller gave up. */
+  givenUpResumeAttemptId?: string;
 }
 
 export interface ClaimedTurnDeliveryLeaseOptions {
@@ -75,6 +77,9 @@ export async function acquireTurnDeliveryLease(
     leaseDurationMs: leaseMs,
     ...(options.previousBootTakeover
       ? { previousBootTakeover: options.previousBootTakeover }
+      : {}),
+    ...(options.givenUpResumeAttemptId
+      ? { givenUpResumeAttemptId: options.givenUpResumeAttemptId }
       : {}),
   });
   if (!claimed) {

@@ -115,6 +115,14 @@ describe('ctx-eu6a: interrupt resume recovery scan retry split', () => {
       'malformed checkpoint',
     );
     expect(failed?.status).toBe('failed');
+    // The failure counts against the budget (ctx-2jp0), so its retry waits one
+    // backoff step; let that time pass.
+    expect(failed?.attempts).toBe(1);
+    await testDb.conn.pgClient`
+      UPDATE interrupt_resume_attempts
+      SET updated_at = updated_at - 60000
+      WHERE id = ${broken.attemptId}
+    `;
 
     // The pending row has already burned a large attempt count; nothing in the
     // query or the worker consults it.
