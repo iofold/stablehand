@@ -67,7 +67,6 @@ sed -i.bak \
   -e "s|^LITELLM_SALT_KEY=.*|LITELLM_SALT_KEY=$(openssl rand -hex 32)|" \
   -e "s|^LITELLM_DATABASE_PASSWORD=.*|LITELLM_DATABASE_PASSWORD=$(openssl rand -hex 24)|" \
   -e "s|^GALLERY_WEBHOOK_SECRET=.*|GALLERY_WEBHOOK_SECRET=$(openssl rand -hex 24)|" \
-  -e 's|^STABLEHAND_EGRESS_EXTRA_ALLOW=.*|STABLEHAND_EGRESS_EXTRA_ALLOW="GET *;HEAD *"|' \
   .env && rm .env.bak
 ```
 
@@ -175,7 +174,7 @@ Settings live in `.env` (start from [.env.example](.env.example)). The full list
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` | Provider keys. Agents reference them as `$secret:NAME` in their manifests. |
 | `SECRET_MASTER_KEY` | Encrypts per-agent secrets (AES-256-GCM). Required. |
 | `STABLEHAND_API_TOKEN` | Operator master token for the API and UI. Required. Create scoped `cmk_` keys for extensions under Settings, Access keys. |
-| `STABLEHAND_EGRESS_EXTRA_ALLOW` | Extra egress rules for sandboxes, `;`-separated, appended to [packages/egress-proxy/rules.default.txt](packages/egress-proxy/rules.default.txt). |
+| `STABLEHAND_EGRESS_EXTRA_ALLOW` | Extra egress rules for every agent's sandboxes, `;`-separated, appended to [packages/egress-proxy/rules.default.txt](packages/egress-proxy/rules.default.txt). Per-agent rules go on the agent instead: [docs/sandbox-egress.md](docs/sandbox-egress.md). |
 | `COMPOSE_FILE` | The compose files that make up the stack. `.env.example` lists the base file, the model gateway and the gallery. |
 | `STABLEHAND_IMAGE_TAG` | Tag of the `ghcr.io/iofold/stablehand-*` images. `latest` follows master; set a release such as `0.1.0` or `sha-<commit>` to pin one. |
 | `LITELLM_MASTER_KEY`, `STABLEHAND_MODEL_GATEWAY_*` | Model gateway credentials; [deploy/compose/model-gateway](deploy/compose/model-gateway/README.md) explains each. |
@@ -197,7 +196,7 @@ Remove an overlay from `COMPOSE_FILE` to run without it. `COMPOSE_FILE=docker-co
 | PostgreSQL | localhost:5433 |
 | Artifact gallery | http://localhost:8090 |
 | LiteLLM gateway | http://127.0.0.1:4400, loopback only |
-| Sandbox egress proxy | `egress:8080`, on the internal agents network only |
+| Sandbox egress proxy | `egress:8081` (`8080` for sandboxes started before per-agent egress), on the internal agents network only |
 | pgAdmin (`--profile debug`) | http://localhost:5050 |
 
 Day-to-day commands: `docker compose logs -f`, `docker compose down`, and `docker compose down -v` to also delete the data volumes.

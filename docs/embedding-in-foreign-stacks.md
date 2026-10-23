@@ -272,7 +272,9 @@ Values are encrypted at rest with AES-256-GCM using `SECRET_MASTER_KEY`; plainte
 
 ## Sandbox Egress
 
-Stablehand does not currently enforce an outbound proxy or domain allowlist for sandbox containers. If your environment requires egress control, apply it outside Stablehand with your Docker network, firewall, Kubernetes NetworkPolicy, service mesh, or gateway.
+On Docker, sandboxes reach the internet only through the `egress` service, an allowlist proxy that applies each agent's `egress` setting; see [sandbox-egress.md](sandbox-egress.md). If you embed the orchestrator in your own compose file, keep the sandbox network `internal: true`, run the `egress` service on it and on a network with internet access, and point `STABLEHAND_SANDBOX_EGRESS_PROXY_URL` at its lease listener (`http://egress:8081`). The proxy checks session credentials at `http://orchestrator:3001/api/egress/lease`; set `STABLEHAND_EGRESS_LEASE_URL` if your orchestrator service has another name.
+
+On Kubernetes, Stablehand does not deploy the proxy yet. Apply egress control with a NetworkPolicy, service mesh or gateway; per-agent `egress` settings are not enforced there.
 
 ## Volume Mounting
 

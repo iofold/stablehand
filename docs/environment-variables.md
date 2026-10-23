@@ -6,6 +6,7 @@ This document provides a comprehensive reference for all environment variables u
 
 - [Core](#core)
 - [Sandbox](#sandbox)
+- [Sandbox Egress Proxy](#sandbox-egress-proxy)
 - [AI / Model](#ai--model)
 - [LangSmith / Tracing](#langsmith--tracing)
 - [Storage (S3 / MinIO)](#storage-s3--minio)
@@ -63,6 +64,24 @@ sandbox Jobs.
 | `STABLEHAND_SANDBOX_OTEL_RESOURCE_ATTRIBUTES` | `OTEL_RESOURCE_ATTRIBUTES` or local stablehand attrs | No | Base sandbox resource attributes. `stablehand.component=sandbox` and `stablehand.harness=<harness>` are appended automatically. Keep `deployment.environment` accurate for the source environment when exporting to a shared collector. | `deployment.environment=local,service.namespace=stablehand` |
 | `OTEL_NODE_ENABLED_INSTRUMENTATIONS` | `aws-sdk,dns,grpc,http,net,openai,pg,pino,runtime-node,undici` | No | Comma-separated auto-instrumentation list used by the stablehand OTEL register when not explicitly overridden. | `http,undici,openai` |
 | `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `false` | No | Keep disabled unless intentionally exporting prompt/completion content to the configured OTEL backend. The stablehand register also sets OpenAI auto-instrumentation content capture off by default. | `false` |
+
+## Sandbox Egress Proxy
+
+What sandboxes can reach, and the per-agent `egress` setting, are explained in [sandbox-egress.md](sandbox-egress.md). The first three variables are read by the orchestrator, the rest by the `egress` service.
+
+| Variable | Default | Required | Description | Example |
+|---|---|---|---|---|
+| `STABLEHAND_SANDBOX_EGRESS_PROXY_URL` | compose: `http://egress:8081`; otherwise unset | No | Proxy every sandbox uses. Each sandbox gets it with its own session credentials added, so the proxy applies that agent's egress setting. Empty: sandboxes get no proxy settings (on the compose stack's internal network that means no internet at all). | `http://egress:8081` |
+| `STABLEHAND_SANDBOX_EGRESS_CA_VOLUME` | compose: `<project>_egress-ca-public` | No | Volume holding the proxy's public CA, mounted read-only into every sandbox. | `stablehand_egress-ca-public` |
+| `STABLEHAND_SANDBOX_NO_PROXY` | `localhost,127.0.0.1,::1,orchestrator,minio,litellm,host.docker.internal` | No | Hosts sandboxes reach directly instead of through the proxy. | `localhost,orchestrator,minio` |
+| `STABLEHAND_EGRESS_EXTRA_ALLOW` | empty | No | Extra server-allowlist rules, `;`-separated, for every agent except those set to `deny`. | `GET news.ycombinator.com/**` |
+| `STABLEHAND_EGRESS_RUNTIME_ALLOW` | empty | No | Extra rules every agent keeps, including those set to `deny`. For services the runtime itself needs. | `* api.smith.langchain.com/**` |
+| `STABLEHAND_EGRESS_RULES` | bundled `rules.default.txt` | No | File with the server allowlist (registries, git hosting). | `/etc/stablehand/rules.txt` |
+| `STABLEHAND_EGRESS_RUNTIME_RULES` | bundled `rules.runtime.txt` | No | File with the runtime rules (model providers). | `/etc/stablehand/runtime.txt` |
+| `STABLEHAND_EGRESS_LEASE_URL` | `http://orchestrator:3001/api/egress/lease` | No | Where the proxy checks each sandbox's session credentials. | `http://stablehand-orchestrator:3001/api/egress/lease` |
+| `STABLEHAND_EGRESS_UNLEASED` | `global` | No | What port 8080 does with requests that carry no session credentials: `global` (server allowlist, for sandboxes started before per-agent egress) or `deny`. Set `deny` once those sandboxes are gone. | `deny` |
+| `STABLEHAND_EGRESS_PORT`, `STABLEHAND_EGRESS_LEASE_PORT` | `8080`, `8081` | No | The proxy's two listeners: credentials optional, credentials required. | `8080` |
+| `STABLEHAND_EGRESS_LOG_ALLOWED` | `0` | No | `1` logs allowed requests as well as blocked ones. | `1` |
 
 ## AI / Model
 

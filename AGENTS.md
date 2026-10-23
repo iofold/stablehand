@@ -156,5 +156,5 @@ docker build --target harness-pi-agent -t stablehand/harness-pi-agent -f Dockerf
 - **A2UI render tool** — Intrinsic tool (a2ui-render) for agent-driven structured UI blocks. Replaces legacy inline A2UI extraction from message content.
 - **Daemon tools** — Tool location 'daemon' for tools executed by sandbox daemon process (not harness or orchestrator). Currently: artifact_upload, artifact_download.
 - **CI matrix** — Node 22 + 24. The test job covers unit/integration gates; browser certification is agent-browser against Docker.
-- **Service ports** — UI: 3200, API: 3002 (nginx-proxied 3001), PostgreSQL: 5433, gRPC sandbox: 50051, Sandbox egress proxy: egress:8080 (internal agents network only, not published), PgAdmin: 5050 (debug profile).
+- **Service ports** — UI: 3200, API: 3002 (nginx-proxied 3001), PostgreSQL: 5433, gRPC sandbox: 50051, Sandbox egress proxy: egress:8081 with the session lease, egress:8080 for pre-lease sandboxes (internal agents network only, not published), PgAdmin: 5050 (debug profile).
 - **Local stack URL** — The UI is at `http://localhost:3200` and the API at `http://localhost:3002` for the local Docker stack.

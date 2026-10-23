@@ -151,6 +151,8 @@ Turn and conversation lifecycle statuses were always served SCREAMING_CASE by RE
 | POST | `/api/catalogs/tools/test` | Test-run a tool |
 | **Sandbox Metrics** |  |  |
 | GET | `/api/sandbox/metrics` | Container metrics |
+| **Sandbox Egress** |  |  |
+| POST | `/api/egress/lease` | Check a sandbox session's egress lease (called by the egress proxy; public, the lease is the credential) |
 | **Model Gateway Campaign Keys** |  |  |
 | POST | `/api/model-gateway/campaign-keys` | Create a campaign gateway key and return it once (master-only) |
 | GET | `/api/model-gateway/campaign-keys` | List campaign keys with their spend (master-only) |
@@ -406,6 +408,10 @@ Per-agent sandbox resource limits:
     "memoryMb": 1024,
     "pidsLimit": 256,
     "timeoutSec": 600
+  },
+  "egress": {
+    "mode": "allow",
+    "rules": ["GET *", "HEAD *"]
   }
 }
 ```
@@ -437,6 +443,7 @@ Per-agent sandbox resource limits:
   - `httpTools` entries must include `name`, `description`, and `endpoint`. `timeoutMs` is integer milliseconds with a minimum of `100`.
   - An invalid body returns `400` with `code: "invalid_agent_definition"` (or `"invalid_agent_update"` on PATCH) and `issues: [{ "path": "...", "message": "..." }]`.
   - An invalid `harnessConfig` returns `400` with `code: "invalid_harness_config"` and `issues: [{ "path": "...", "message": "..." }]`.
+  - `egress` sets where the agent's sandboxes may connect: `{ "mode": "default" | "deny" | "allow", "rules"?: string[] }`. `default` uses the server allowlist and takes no rules; `deny` keeps only what the runtime needs (model provider and gateway, artifact store) plus any `rules`; `allow` adds `rules` (at least one) to the server allowlist. Rules read `<METHOD|*> <host>[:<port>][/<path>]`, up to 200, and cannot carry `!internal`. Responses carry `egress: null` when the agent has no setting of its own. See [sandbox-egress.md](sandbox-egress.md).
   - If workspaces are enabled, Stablehand creates and seeds a base workspace automatically.
 
 #### `GET /api/agents/:id`
@@ -510,6 +517,7 @@ Per-agent sandbox resource limits:
   - If you change `harness`, you must also send `harnessConfig`.
   - `resourceLimits` updates are metadata overrides and take precedence over manifest defaults on future sandbox starts.
   - Set `resourceLimits` to `null` to clear the metadata override and fall back to manifest/default limits.
+  - Set `egress` to `null` to go back to the server allowlist. Running sandboxes pick up an `egress` change within about 30 seconds. Manifest-backed agents change it through `manifest` (`spec.egress`).
 
 #### `DELETE /api/agents/:id`
 
@@ -1956,7 +1964,7 @@ history identical for manual and scheduled emissions.
     `{ "error": <human message>, "code": "invalid_tool_test_request" }`,
     not a success-flagged test result.
 
-### r. Sandbox Metrics (`/api/sandbox`)
+### r. Sandbox Metrics and Egress (`/api/sandbox`, `/api/egress`)
 
 #### `GET /api/sandbox/metrics`
 
@@ -1985,6 +1993,39 @@ history identical for manual and scheduled emissions.
 ```
 
 - **Notes:** Only available when sandbox container management is enabled.
+
+#### `POST /api/egress/lease`
+
+- **Description:** Tells the sandbox egress proxy which rules apply to a sandbox session. Every
+  sandbox presents its session lease to the proxy as proxy credentials; the proxy sends the lease
+  here when it has not seen it recently. You do not call this yourself.
+- **Authentication:** none beyond the lease itself, which is signed by the orchestrator for one
+  session and one agent.
+- **Request body:**
+
+```json
+{ "sessionId": "3e98a63a-5c88-4f1d-80bd-a1d636545c4b", "token": "<lease token>" }
+```
+
+- **Response:**
+
+```json
+{
+  "sessionId": "3e98a63a-5c88-4f1d-80bd-a1d636545c4b",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "egress": { "mode": "deny" },
+  "runtimeRules": ["* s3.example.com/**"],
+  "ttlSeconds": 30
+}
+```
+
+- **Notes:**
+  - `egress` is the agent's setting, or `{ "mode": "default" }` when it has none.
+  - `runtimeRules` lists runtime endpoints the sandbox reaches through the proxy (model gateway,
+    artifact store, the agent's model base URL); hosts on the sandbox's `NO_PROXY` list are left out.
+  - `401 invalid_lease` when the token was not issued for this session, `410 session_ended` once
+    the session is terminated, `404 agent_not_found` when the agent was deleted, `400` for a
+    malformed body.
 
 ### s. Scoped Access Keys (`/api/keys`)
 

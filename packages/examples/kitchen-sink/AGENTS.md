@@ -109,6 +109,9 @@ spec:
     policy: allow # all | allow | deny | none
     names: [Read, Write, Edit, Bash] # required only for allow or deny
   mode: interactive # interactive (chat only) | background (trigger/API runs only) | both
+  egress: # optional; omit for the server allowlist (docs/sandbox-egress.md)
+    mode: allow # default | deny | allow
+    rules: ["GET docs.example.com/**"] # <METHOD|*> <host>[:<port>][/<path>]
 ```
 
 ## TOOL DEFINITION PATTERN

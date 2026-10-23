@@ -73,7 +73,11 @@ them, but reports that show a practical way to exploit them are welcome.
   internal Docker network whose only route out is the `egress` service (a
   mitmproxy-based proxy in `packages/egress-proxy`). The allowlist is only as
   strong as that proxy and the network isolation around it; it is not enforced
-  by the host firewall or the kernel.
+  by the host firewall or the kernel. Per-agent egress settings are tied to each
+  sandbox's session credentials; while `STABLEHAND_EGRESS_UNLEASED=global` (the
+  default, for upgrades), a sandbox that drops its credentials gets the server
+  allowlist instead of its agent's setting. Kubernetes sandboxes are not routed
+  through the proxy yet.
 - **Approval for write actions is opt-in.** Human-in-the-loop approval applies to
   a tool only when you configure it. Out of the box, an agent can call write or
   side-effecting tools without asking anyone.
