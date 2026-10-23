@@ -1,0 +1,131 @@
+@import '@fontsource-variable/archivo/wdth.css';
+@import '@fontsource-variable/jetbrains-mono/index.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Night field (default) and day field. Tokens are RGB triplets so Tailwind
+ * can apply alpha. Status colors carry meaning only:
+ *   sprout = accepted / passed, ember = rejected / failed, pollen = published.
+ */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --ground: 12 22 18;
+  --well: 17 32 26;
+  --card: 23 42 34;
+  --raised: 31 54 44;
+  --line: 40 62 52;
+  --ink: 233 241 234;
+  --ink-2: 166 186 174;
+  --ink-3: 118 140 128;
+  --pollen: 242 193 78;
+  --sprout: 87 227 155;
+  --ember: 255 111 91;
+  --sky: 140 200 255;
+  /* Chart data color: validated for lightness, chroma and contrast on --well. */
+  --chart: 74 149 222;
+
+  --syn-kw: 196 167 255;
+  --syn-str: 233 200 139;
+  --syn-num: 245 169 127;
+  --syn-fn: 143 201 255;
+  --syn-com: 118 140 128;
+  --syn-bi: 127 216 208;
+  --diff-add: 87 227 155;
+  --diff-del: 255 111 91;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --ground: 237 242 236;
+  --well: 226 234 226;
+  --card: 255 255 255;
+  --raised: 246 249 245;
+  --line: 203 216 205;
+  --ink: 15 31 24;
+  --ink-2: 63 84 72;
+  --ink-3: 99 119 108;
+  --pollen: 196 138 0;
+  --sprout: 10 150 84;
+  --ember: 214 64 42;
+  --sky: 11 101 184;
+  --chart: 11 101 184;
+
+  --syn-kw: 107 63 208;
+  --syn-str: 138 90 0;
+  --syn-num: 180 71 26;
+  --syn-fn: 11 101 184;
+  --syn-com: 99 119 108;
+  --syn-bi: 15 127 120;
+  --diff-add: 10 150 84;
+  --diff-del: 214 64 42;
+}
+
+html {
+  font-size: 15px;
+  background: rgb(var(--ground));
+  -webkit-text-size-adjust: 100%;
+}
+
+@media (min-width: 1280px) {
+  html { font-size: 16px; }
+}
+
+/* Video capture at 1920×1080: everything scales up together. */
+@media (min-width: 1760px) {
+  html { font-size: 17.5px; }
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background: rgb(var(--ground));
+  color: rgb(var(--ink));
+  font-family: 'Archivo Variable', Archivo, system-ui, sans-serif;
+  font-variation-settings: 'wdth' 100;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: rgb(var(--pollen) / 0.35);
+}
+
+:focus-visible {
+  outline: 2px solid rgb(var(--pollen));
+  outline-offset: 2px;
+}
+
+@layer utilities {
+  .wdth-condensed { font-variation-settings: 'wdth' 78; }
+  .wdth-semi { font-variation-settings: 'wdth' 88; }
+  .wdth-wide { font-variation-settings: 'wdth' 112; }
+  .wdth-x-wide { font-variation-settings: 'wdth' 125; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: rgb(var(--line)) transparent; }
+  .scrollbar-none { scrollbar-width: none; }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+  .hatch {
+    background-image: repeating-linear-gradient(
+      135deg,
+      rgb(var(--ink-3) / 0.35) 0 2px,
+      transparent 2px 6px
+    );
+  }
+}
+
+/* Outcome columns carry a faint wash of their status color. */
+.well-accepted { background: linear-gradient(rgb(var(--sprout) / 0.07), rgb(var(--sprout) / 0.07)), rgb(var(--well)); }
+.well-rejected { background: linear-gradient(rgb(var(--ember) / 0.06), rgb(var(--ember) / 0.06)), rgb(var(--well)); }
+.well-published { background: linear-gradient(rgb(var(--pollen) / 0.07), rgb(var(--pollen) / 0.07)), rgb(var(--well)); }
+
+.syn-kw { color: rgb(var(--syn-kw)); }
+.syn-str { color: rgb(var(--syn-str)); }
+.syn-num { color: rgb(var(--syn-num)); }
+.syn-fn { color: rgb(var(--syn-fn)); }
+.syn-com { color: rgb(var(--syn-com)); font-style: italic; }
+.syn-bi { color: rgb(var(--syn-bi)); }
