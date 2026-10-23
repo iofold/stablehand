@@ -55,6 +55,16 @@ export function formatRelativeTime(timestamp: number | undefined): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+/** "in 5m", "in 3h", "in 2d" for a time ahead of now. */
+export function formatTimeUntil(timestamp: number, now = Date.now()): string {
+  const mins = Math.round((timestamp - now) / 60_000);
+  if (mins < 1) return 'in under a minute';
+  if (mins < 60) return `in ${mins}m`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `in ${hrs}h`;
+  return `in ${Math.round(hrs / 24)}d`;
+}
+
 export function formatCompactNumber(value: number): string {
   return new Intl.NumberFormat(undefined, {
     notation: 'compact',

@@ -77,6 +77,9 @@ import {
   type CatalogTool,
   type SystemSettings,
   type EventStatsResponse,
+  ScheduleListResponseSchema,
+  ScheduleSchema,
+  type Schedule,
   TriggerListResponseSchema,
   type Trigger,
   TriggerFiringFailureListResponseSchema,
@@ -560,6 +563,26 @@ export async function updateTrigger(id: string, data: Partial<{
 
 export async function deleteTrigger(id: string): Promise<void> {
   await apiFetch(`${API_BASE}/triggers/${id}`, { method: 'DELETE' });
+}
+
+// ── Schedule operations ─────────────────────────────────────────────
+
+export type { Schedule };
+
+export async function fetchSchedules(): Promise<Schedule[]> {
+  const response = await apiFetch<unknown>(`${API_BASE}/schedules`);
+  return ScheduleListResponseSchema.parse(response).schedules;
+}
+
+export async function setScheduleEnabled(id: string, enabled: boolean): Promise<Schedule> {
+  const response = await apiMutate<unknown>(`${API_BASE}/schedules/${encodeURIComponent(id)}`, 'PATCH', { enabled });
+  return ScheduleSchema.parse(response);
+}
+
+/** Send the schedule's event once now; returns the schedule with its new last run. */
+export async function fireSchedule(id: string): Promise<Schedule> {
+  const response = await apiMutate<unknown>(`${API_BASE}/schedules/${encodeURIComponent(id)}/fire`, 'POST');
+  return ScheduleSchema.parse(response);
 }
 
 // ── Catalog operations ──────────────────────────────────────────────

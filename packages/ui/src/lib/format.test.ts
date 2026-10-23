@@ -6,6 +6,7 @@ import {
   formatEventTime,
   formatRelativeTime,
   formatRunningDuration,
+  formatTimeUntil,
   formatTimestamp,
 } from './format';
 
@@ -31,5 +32,13 @@ describe('format helpers', () => {
   it('formats artifact bytes with the established units', () => {
     expect(formatBytes(0)).toBe('0 Bytes');
     expect(formatBytes(1536)).toBe('1.5 KB');
+  });
+
+  it('says how long until a future time', () => {
+    const now = Date.parse('2026-10-23T05:00:00Z');
+    expect(formatTimeUntil(now + 20_000, now)).toBe('in under a minute');
+    expect(formatTimeUntil(now + 5 * 60_000, now)).toBe('in 5m');
+    expect(formatTimeUntil(now + 3 * 3_600_000, now)).toBe('in 3h');
+    expect(formatTimeUntil(now + 50 * 3_600_000, now)).toBe('in 2d');
   });
 });
