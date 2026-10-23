@@ -21,7 +21,7 @@ function readText(path: string): string {
   try {
     return readFileSync(path, 'utf8');
   } catch (err) {
-    throw new Error(`cannot read ${path}: ${(err as Error).message}`);
+    throw new Error(`cannot read ${path}: ${(err as Error).message}`, { cause: err });
   }
 }
 

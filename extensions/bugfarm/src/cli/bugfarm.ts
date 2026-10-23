@@ -60,7 +60,7 @@ async function http(base: string, token: string, method: string, pathname: strin
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   const text = await res.text();
-  let json: unknown = null;
+  let json: unknown;
   try {
     json = text ? JSON.parse(text) : null;
   } catch {
@@ -184,10 +184,11 @@ async function seed(args: ReturnType<typeof parseArgs>): Promise<void> {
   for (const file of readdirSync(dir).filter((f) => f in ROLE_BY_FILE).sort()) {
     const role = ROLE_BY_FILE[file];
     const manifest = validateManifest(parseManifestString(readFileSync(path.join(dir, file), 'utf8')));
-    const { manifest: _snapshot, ...input } = manifestToAgentCreateInput(manifest);
+    // The manifest snapshot is left out: HTTP tools are not part of the manifest format.
+    const input = Object.fromEntries(Object.entries(manifestToAgentCreateInput(manifest)).filter(([key]) => key !== 'manifest'));
     const body = { ...input, httpTools: httpTools(role, toolsUrl) };
     const found = existing.find((agent) => agent.name === manifest.metadata.name);
-    const { name: _name, ...patch } = body;
+    const patch = Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'name'));
     const agent = found
       ? await api('PATCH', `/agents/${found.id}`, patch) as { id: string }
       : await api('POST', '/agents', body) as { id: string };
