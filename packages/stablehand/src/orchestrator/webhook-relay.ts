@@ -96,6 +96,8 @@ const WEBHOOK_PAYLOAD_FIELDS = {
     'conversationId',
     'interruptId',
     'action',
+    'resolvedBy',
+    'reason',
     'timestamp',
   ],
   'message.committed': [

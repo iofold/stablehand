@@ -12,7 +12,7 @@ import {
   TurnIdSchema,
 } from './ids.js';
 import { TurnUsageSchema } from './usage.js';
-import { ToolCallStateSchema } from './api.js';
+import { ApiCallerSchema, ToolCallStateSchema } from './api.js';
 import { TurnStopReasonSchema } from './budgets.js';
 
 const UnknownRecordSchema = z.record(z.string(), z.unknown());
@@ -197,6 +197,9 @@ export const InterruptResolvedEventSchema = z.strictObject({
   sandboxSessionId: SandboxSessionIdSchema.optional(),
   interruptId: InterruptIdSchema,
   action: z.enum(['approve', 'reject', 'suspend', 'timeout']),
+  // Who resolved it and why (ctx-lhr0); absent when Stablehand resolved it.
+  resolvedBy: ApiCallerSchema.optional(),
+  reason: z.string().optional(),
   timestamp: EpochMillisSchema,
 });
 

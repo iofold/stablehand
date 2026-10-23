@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import { pgTable, text, bigint, boolean, serial, integer, index, jsonb, uniqueIndex, doublePrecision, check } from 'drizzle-orm/pg-core';
 import { randomUUID } from 'node:crypto';
 import type { SandboxSessionStatus } from '@stablehand/shared';
-import type { TurnStopReason, TurnUsage } from '@stablehand/contracts';
+import type { ApiCaller, TurnStopReason, TurnUsage } from '@stablehand/contracts';
 
 export type TurnStatus = 'queued' | 'running' | 'completed' | 'error' | 'cancelled';
 export type ModelGatewayTurnMode = 'gateway_only' | 'mixed';
@@ -495,6 +495,9 @@ export const pendingInterrupts = pgTable('pending_interrupts', {
   resolvedAt: bigint('resolved_at', { mode: 'number' }),
   resolvedAction: text('resolved_action'),
   resolvedData: jsonb('resolved_data').$type<unknown>(),
+  // Who resolved it and why (ctx-lhr0); null for resolutions Stablehand made.
+  resolvedBy: jsonb('resolved_by').$type<ApiCaller | null>(),
+  resolvedReason: text('resolved_reason'),
   status: text('status').notNull().default('pending'),
 }, (table) => ({
   turnIdx: index('idx_interrupts_turn').on(table.turnId),

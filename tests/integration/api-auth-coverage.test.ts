@@ -48,6 +48,7 @@ const EXPECTED_ROUTE_ACCESS: Readonly<Record<string, ExpectedRouteAccess>> = {
   'GET /api/events/types': 'events:read',
 
   'GET /api/interrupts': 'interrupts:read',
+  'GET /api/interrupts/:id': 'interrupts:read',
   'GET /api/agents/:id/interrupts': 'interrupts:read',
   'POST /api/agents/:id/interrupt': 'interrupts:resolve',
   'POST /api/agents/:id/feedback': 'feedback:write',

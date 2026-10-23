@@ -15,6 +15,7 @@ import { TurnFinalizer } from '../../turn-finalizer.js';
 import { buildAgentDefinition } from '../../agent-definition.js';
 import { sendTurnStartError } from '../../turn-start-errors.js';
 import { parseTagsInput } from '../../turn-tags.js';
+import { apiCallerFor } from '../../auth.js';
 import { toApiMessage } from '../agent-helpers.js';
 import { getRequestAgent, safeError, toApiAgentTurn } from './helpers.js';
 import type { AgentSubRouteOptions } from './types.js';
@@ -449,17 +450,23 @@ export async function turnRoutes(
         });
       }
 
+      // ctx-lhr0: a pending approval is refused by whoever cancelled the turn.
+      const cancellationAudit = {
+        resolvedBy: apiCallerFor(request),
+        reason: TURN_CANCELLED_MESSAGE,
+      };
       const inMemoryInterruptResolved = await interrupts.resolveForTurn(
         turnId,
         'reject',
         TURN_CANCELLED_MESSAGE,
         id,
         turn.conversationId ?? undefined,
+        cancellationAudit,
       );
       if (!inMemoryInterruptResolved) {
         const dbInterrupt = await db.getPendingInterruptForTurn(turnId);
         if (dbInterrupt?.agentId === id && dbInterrupt.status === 'pending') {
-          await db.resolveInterrupt(dbInterrupt.id, 'reject', TURN_CANCELLED_MESSAGE);
+          await db.resolveInterrupt(dbInterrupt.id, 'reject', TURN_CANCELLED_MESSAGE, cancellationAudit);
         }
       }
 

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type { TurnSpendCapSource, TurnStopReason, TurnUsage } from '@stablehand/contracts';
+import type { ApiCaller, TurnSpendCapSource, TurnStopReason, TurnUsage } from '@stablehand/contracts';
 
 /**
  * Sandbox journal position of the event that produced a bus event (ADR 025).
@@ -78,6 +78,9 @@ export type EventMap = {
     conversationId: string;
     interruptId: string;
     action: 'approve' | 'reject' | 'suspend' | 'timeout';
+    /** Who resolved it and why (ctx-lhr0); absent when Stablehand resolved it. */
+    resolvedBy?: ApiCaller;
+    reason?: string;
     timestamp: number;
   };
   'turn.completed': {

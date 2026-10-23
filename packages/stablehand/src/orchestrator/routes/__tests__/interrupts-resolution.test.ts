@@ -1,6 +1,9 @@
+import { createHash } from 'node:crypto';
+
 import Fastify, { type FastifyRequest } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { registerApiAuth, type ApiKeyStore } from '../../auth.js';
 import { InterruptManager } from '../../interrupt.js';
 import { interruptRoutes } from '../agents/interrupts.js';
 import type { AgentSubRouteOptions, StoredAgent } from '../agents/types.js';
@@ -627,5 +630,111 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
       'failed-1',
     ]);
     expect(getActionableInterruptsForAgent).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('approval audit identity (ctx-lhr0)', () => {
+  const MASTER_TOKEN = 'master-token';
+  const KEY_TOKEN = `cmk_${'k'.repeat(43)}`;
+  const keyStore: ApiKeyStore = {
+    findLiveKeyByTokenHash: async (hash) => (
+      hash === createHash('sha256').update(KEY_TOKEN).digest('hex')
+        ? { keyId: 'key_phone', name: 'phone-approver', capabilities: ['interrupts:resolve'], agentId: null }
+        : null
+    ),
+    isLiveKey: async () => true,
+    touchLastUsed: async () => {},
+  };
+  const apps: Array<ReturnType<typeof Fastify>> = [];
+  afterEach(async () => {
+    await Promise.all(apps.splice(0).map((app) => app.close()));
+  });
+
+  it.each([
+    [KEY_TOKEN, { type: 'api_key', keyId: 'key_phone', keyName: 'phone-approver' }],
+    [MASTER_TOKEN, { type: 'master_token' }],
+  ])('records the caller that resolved the approval (%#)', async (token, expectedCaller) => {
+    const row = createInterruptRow();
+    const store = createManagerStore([row]);
+    const interrupts = new InterruptManager(undefined, store);
+    await interrupts.loadFromDb();
+    const resolvedRow = createInterruptRow({
+      status: 'resolved',
+      resolvedAction: 'approve',
+      resolvedAt: 5_000,
+      resolvedBy: expectedCaller,
+      resolvedReason: 'Receipts reconcile',
+    });
+    const db = createRouteDb({
+      getInterruptById: vi.fn().mockResolvedValue(row),
+      resolveInterruptWithResumeAttempt: vi.fn().mockResolvedValue({ kind: 'ready', interrupt: resolvedRow }),
+    });
+    const app = Fastify({ logger: false });
+    apps.push(app);
+    registerApiAuth(app, { mode: 'enforce', token: MASTER_TOKEN }, keyStore);
+    const loadAgent = async (request: FastifyRequest) => {
+      Object.assign(request, { agent });
+    };
+    await app.register(interruptRoutes, {
+      prefix: '/api/agents',
+      db,
+      interrupts,
+      loadAgent,
+    } as unknown as AgentSubRouteOptions);
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/interrupt',
+      headers: { Authorization: `Bearer ${token}` },
+      payload: { action: 'approve', interruptId: 'interrupt-1', reason: 'Receipts reconcile' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(db.resolveInterruptWithResumeAttempt).toHaveBeenCalledWith(
+      'interrupt-1',
+      'approve',
+      undefined,
+      { resolvedBy: expectedCaller, reason: 'Receipts reconcile' },
+    );
+    expect(response.json()).toEqual({
+      resolved: true,
+      action: 'approve',
+      note: 'Resolved in DB; session resume not available',
+      resolvedAt: 5_000,
+      resolvedBy: expectedCaller,
+      resolvedReason: 'Receipts reconcile',
+    });
+  });
+
+  it('reports the first resolution when the same decision is repeated', async () => {
+    const resolvedRow = createInterruptRow({
+      status: 'resolved',
+      resolvedAction: 'reject',
+      resolvedAt: 7_000,
+      resolvedBy: { type: 'api_key', keyId: 'key_first', keyName: 'first' },
+      resolvedReason: 'Leaks the fix',
+    });
+    const db = createRouteDb({
+      getInterruptById: vi.fn().mockResolvedValue(resolvedRow),
+      getInterruptResumeAttemptForInterrupt: vi.fn().mockResolvedValue({ id: 'attempt-1', status: 'completed' }),
+    });
+    const app = await buildApp({ db, interrupts: new InterruptManager(undefined, createManagerStore()) });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/interrupt',
+      payload: { action: 'reject', interruptId: 'interrupt-1', reason: 'second opinion' },
+    });
+
+    expect(response.json()).toEqual({
+      alreadyResolved: true,
+      action: 'reject',
+      resolvedAt: 7_000,
+      resolvedBy: { type: 'api_key', keyId: 'key_first', keyName: 'first' },
+      resolvedReason: 'Leaks the fix',
+    });
+    expect(db.resolveInterruptWithResumeAttempt).not.toHaveBeenCalled();
   });
 });

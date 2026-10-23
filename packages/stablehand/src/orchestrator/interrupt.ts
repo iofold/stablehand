@@ -14,6 +14,7 @@ import type {
 import type {
   DatabaseRepository,
   ExpectedSandboxCallbackDelivery,
+  InterruptResolutionAudit,
 } from '../database/repository.js';
 import { randomUUID } from 'node:crypto';
 
@@ -79,6 +80,7 @@ export class InterruptManager {
     conversationId?: string,
     sandboxSessionId?: string,
     persistenceContext?: EventPersistenceContext,
+    audit?: InterruptResolutionAudit,
   ): Promise<void> {
     if (!this.eventBus) {
       return;
@@ -91,6 +93,8 @@ export class InterruptManager {
       ...(sandboxSessionId ? { sandboxSessionId } : {}),
       interruptId,
       action,
+      ...(audit?.resolvedBy ? { resolvedBy: audit.resolvedBy } : {}),
+      ...(audit?.reason ? { reason: audit.reason } : {}),
       timestamp: Date.now(),
     } as unknown as EventMap['interrupt.resolved'], persistenceContext);
     if (!didEmit) {
@@ -474,12 +478,15 @@ export class InterruptManager {
     data?: unknown,
     agentId?: string,
     conversationId?: string,
+    audit?: InterruptResolutionAudit,
   ): Promise<boolean> {
     const entry = this.pending.get(turnId);
     if (!entry) return false;
 
     if (this.db) {
-      const persisted = await this.db.resolveInterrupt(entry.info.interruptId, action, data);
+      const persisted = audit
+        ? await this.db.resolveInterrupt(entry.info.interruptId, action, data, audit)
+        : await this.db.resolveInterrupt(entry.info.interruptId, action, data);
       if (!persisted) {
         return false;
       }
@@ -492,6 +499,7 @@ export class InterruptManager {
       data,
       agentId,
       conversationId,
+      audit,
     );
   }
 
@@ -507,6 +515,7 @@ export class InterruptManager {
     data?: unknown,
     agentId?: string,
     conversationId?: string,
+    audit?: InterruptResolutionAudit,
   ): Promise<boolean> {
     const entry = this.pending.get(turnId);
     if (!entry || entry.info.interruptId !== interruptId) {
@@ -521,6 +530,8 @@ export class InterruptManager {
       agentId ?? entry.agentId,
       conversationId ?? entry.info.conversationId,
       entry.info.sandboxSessionId,
+      undefined,
+      audit,
     );
     entry.resolve({ action, data });
     if (this.pending.get(turnId) === entry) {

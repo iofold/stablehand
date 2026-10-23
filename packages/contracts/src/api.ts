@@ -709,6 +709,35 @@ export const SandboxSessionActionResponseSchema = z.strictObject({
 export const InterruptStatusSchema = z.enum(['pending', 'resolved', 'resume_failed', 'timed_out']);
 export const InterruptActionSchema = z.enum(['approve', 'reject', 'suspend', 'timeout']);
 
+/**
+ * Who made an API call (ctx-lhr0): the master token, a scoped key (its id and
+ * its name at the time of the call), or nobody when authentication is off.
+ */
+export const ApiCallerSchema = z.discriminatedUnion('type', [
+  z.strictObject({ type: z.literal('master_token') }),
+  z.strictObject({
+    type: z.literal('api_key'),
+    keyId: z.string().trim().min(1),
+    keyName: z.string(),
+  }),
+  z.strictObject({ type: z.literal('unauthenticated') }),
+]);
+
+/** Longest accepted reason when resolving an approval, in characters. */
+export const INTERRUPT_REASON_MAX_LENGTH = 2000;
+
+/**
+ * Who resolved an interrupt, when, and why. `resolvedBy` and `resolvedReason`
+ * are null for resolutions Stablehand made itself (expiry, a newer request
+ * replacing an older one) and for interrupts resolved before this was recorded.
+ */
+const InterruptResolutionFields = {
+  resolvedAt: EpochMillisecondsSchema.nullable(),
+  resolvedAction: InterruptActionSchema.nullable(),
+  resolvedBy: ApiCallerSchema.nullable(),
+  resolvedReason: z.string().nullable(),
+};
+
 export const InterruptSchema = z.strictObject({
   // ctx-iqzy S2: entity PK is `id` like every other resource; event/webhook
   // payloads keep `interruptId` as the cross-reference name.
@@ -723,6 +752,11 @@ export const InterruptSchema = z.strictObject({
   createdAt: EpochMillisecondsSchema,
   status: InterruptStatusSchema,
   resumeError: z.string().optional(),
+  // Present once the interrupt has been resolved (resume_failed rows).
+  resolvedAt: InterruptResolutionFields.resolvedAt.optional(),
+  resolvedAction: InterruptResolutionFields.resolvedAction.optional(),
+  resolvedBy: InterruptResolutionFields.resolvedBy.optional(),
+  resolvedReason: InterruptResolutionFields.resolvedReason.optional(),
 });
 
 export const InterruptListResponseSchema = z.strictObject({
@@ -740,8 +774,15 @@ export const InterruptRecordSchema = z.strictObject({
   status: InterruptStatusSchema,
   createdAt: EpochMillisecondsSchema,
   expiresAt: EpochMillisecondsSchema,
-  resolvedAt: EpochMillisecondsSchema.nullable(),
-  resolvedAction: InterruptActionSchema.nullable(),
+  ...InterruptResolutionFields,
+});
+
+/**
+ * GET /api/interrupts/:id — one interrupt plus `resolvedData`, the `data`
+ * sent with the resolution (left out of lists because it can be large).
+ */
+export const InterruptRecordDetailSchema = InterruptRecordSchema.extend({
+  resolvedData: z.unknown().nullable(),
 });
 
 export const InterruptRecordListInputSchema = z.strictObject({
@@ -760,17 +801,32 @@ export const InterruptResolveInputSchema = z.strictObject({
   interruptId: z.string().trim().min(1),
   action: z.enum(['approve', 'reject']),
   data: z.unknown().optional(),
+  /** Why the approval was granted or refused; recorded with the resolution. */
+  reason: z.string().trim().min(1).max(INTERRUPT_REASON_MAX_LENGTH).optional(),
 });
+
+/**
+ * The recorded resolution, echoed on every resolve response. For an
+ * interrupt that was already resolved it describes the first resolution.
+ * Absent only when the interrupt was never stored (in-memory only).
+ */
+const InterruptResolveRecordFields = {
+  resolvedAt: EpochMillisecondsSchema.optional(),
+  resolvedBy: ApiCallerSchema.nullable().optional(),
+  resolvedReason: z.string().nullable().optional(),
+};
 
 export const InterruptResolveResponseSchema = z.union([
   z.strictObject({
     resolved: z.literal(true),
     action: z.enum(['approve', 'reject']),
     note: z.string().optional(),
+    ...InterruptResolveRecordFields,
   }),
   z.strictObject({
     alreadyResolved: z.literal(true),
     action: z.enum(['approve', 'reject']).nullable(),
+    ...InterruptResolveRecordFields,
   }),
   z.strictObject({
     accepted: z.literal(true),
@@ -778,6 +834,7 @@ export const InterruptResolveResponseSchema = z.union([
     action: z.enum(['approve', 'reject']),
     resumeAttemptId: z.string().trim().min(1),
     error: z.string().optional(),
+    ...InterruptResolveRecordFields,
   }),
 ]);
 
@@ -1044,6 +1101,8 @@ export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
 export type SandboxSession = z.infer<typeof SandboxSessionSchema>;
 export type Interrupt = z.infer<typeof InterruptSchema>;
 export type InterruptRecord = z.infer<typeof InterruptRecordSchema>;
+export type InterruptRecordDetail = z.infer<typeof InterruptRecordDetailSchema>;
+export type ApiCaller = z.infer<typeof ApiCallerSchema>;
 export type InterruptRecordListInput = z.input<typeof InterruptRecordListInputSchema>;
 export type PersistedEvent = z.infer<typeof PersistedEventSchema>;
 export type EventListInput = z.input<typeof EventListInputSchema>;

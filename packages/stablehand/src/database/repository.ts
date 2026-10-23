@@ -24,9 +24,16 @@ import {
 import type {
   AnalyticsActivityBucket,
   AnalyticsMetrics,
+  ApiCaller,
   TurnStopReason,
   TurnUsage,
 } from '@stablehand/contracts';
+
+/** Who resolved an interrupt and why (ctx-lhr0). */
+export interface InterruptResolutionAudit {
+  resolvedBy?: ApiCaller;
+  reason?: string;
+}
 import type {
   InvalidLiteLLMSpendRecord,
   LiteLLMCampaignSpendRecord,
@@ -5151,6 +5158,7 @@ export class DatabaseRepository {
     id: string,
     action: string,
     data?: unknown,
+    audit?: InterruptResolutionAudit,
   ): Promise<InterruptRow | undefined> {
     const sanitizedAction = sanitizeDbText(action, 'pendingInterrupts.resolvedAction');
     const sanitizedData = sanitizeTypedDbValue(data ?? null, 'pendingInterrupts.resolvedData');
@@ -5161,6 +5169,7 @@ export class DatabaseRepository {
         resolvedAt: Date.now(),
         resolvedAction: sanitizedAction,
         resolvedData: sanitizedData,
+        ...this.interruptAuditColumns(audit),
       })
       .where(
         and(
@@ -5181,6 +5190,7 @@ export class DatabaseRepository {
     id: string,
     action: string,
     data?: unknown,
+    audit?: InterruptResolutionAudit,
   ): Promise<ResolveInterruptWithResumeAttemptResult | undefined> {
     const sanitizedId = sanitizeDbText(id, 'pendingInterrupts.resumeResolution.id');
     const sanitizedAction = sanitizeDbText(action, 'pendingInterrupts.resolvedAction');
@@ -5209,6 +5219,7 @@ export class DatabaseRepository {
             resolvedAt: Date.now(),
             resolvedAction: sanitizedAction,
             resolvedData: sanitizedData,
+            ...this.interruptAuditColumns(audit),
           })
           .where(and(
             eq(this.schema.pendingInterrupts.id, sanitizedId),
@@ -5256,6 +5267,20 @@ export class DatabaseRepository {
       }
       return { kind: 'ready', interrupt, resumeAttempt };
     });
+  }
+
+  private interruptAuditColumns(audit: InterruptResolutionAudit | undefined): {
+    resolvedBy: ApiCaller | null;
+    resolvedReason: string | null;
+  } {
+    return {
+      resolvedBy: audit?.resolvedBy
+        ? sanitizeTypedDbValue(audit.resolvedBy, 'pendingInterrupts.resolvedBy')
+        : null,
+      resolvedReason: audit?.reason
+        ? sanitizeDbText(audit.reason, 'pendingInterrupts.resolvedReason')
+        : null,
+    };
   }
 
   async markInterruptTimedOut(id: string, data?: unknown): Promise<InterruptRow | undefined> {

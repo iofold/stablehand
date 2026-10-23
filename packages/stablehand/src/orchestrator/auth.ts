@@ -4,6 +4,7 @@ import {
   API_KEY_TOKEN_PREFIX,
   CAPABILITY_VERBS,
   capabilitySatisfies,
+  type ApiCaller,
   type CapabilityVerb,
 } from '@stablehand/contracts';
 
@@ -216,6 +217,23 @@ function recordRoute(routeTable: ApiRouteRecord[], route: RouteOptions): void {
       ...(capability ? { capability } : {}),
     });
   }
+}
+
+/**
+ * Who made this request, for audit records (ctx-lhr0): the scoped key that
+ * authenticated it, else the master token when authentication is enforced,
+ * else nobody. The dashboard signs in with one of these tokens, so its
+ * actions are recorded the same way.
+ */
+export function apiCallerFor(request: FastifyRequest): ApiCaller {
+  const principal = request.apiPrincipal;
+  if (principal) {
+    return { type: 'api_key', keyId: principal.keyId, keyName: principal.name };
+  }
+  const authConfig = (request.server as { apiAuth?: ApiAuthConfig }).apiAuth;
+  return authConfig?.mode === 'enforce'
+    ? { type: 'master_token' }
+    : { type: 'unauthenticated' };
 }
 
 export function resolveApiAuthConfig(

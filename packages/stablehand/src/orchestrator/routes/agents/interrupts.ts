@@ -1,11 +1,34 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { INTERRUPT_REASON_MAX_LENGTH } from '@stablehand/contracts';
 
-import type { InterruptResumeAttemptRow } from '../../../database/repository.js';
+import type {
+  InterruptResolutionAudit,
+  InterruptResumeAttemptRow,
+  InterruptRow,
+} from '../../../database/repository.js';
+import { apiCallerFor } from '../../auth.js';
 import {
   InterruptResumeAttemptWorker,
   createParkedTurnCloser,
 } from '../../interrupt-resume-attempt-worker.js';
 import type { AgentSubRouteOptions } from './types.js';
+
+/**
+ * The stored resolution (who, when, why) for a resolved interrupt row, echoed
+ * on resolve responses and read APIs (ctx-lhr0).
+ */
+export function interruptResolutionFields(row: InterruptRow | undefined): {
+  resolvedAt?: number;
+  resolvedBy?: InterruptRow['resolvedBy'];
+  resolvedReason?: string | null;
+} {
+  if (!row || row.status !== 'resolved' || row.resolvedAt == null) return {};
+  return {
+    resolvedAt: row.resolvedAt,
+    resolvedBy: row.resolvedBy ?? null,
+    resolvedReason: row.resolvedReason ?? null,
+  };
+}
 
 export async function interruptRoutes(
   app: FastifyInstance,
@@ -38,6 +61,7 @@ export async function interruptRoutes(
     reply: FastifyReply,
     attempt: InterruptResumeAttemptRow,
     action: 'approve' | 'reject',
+    resolution: ReturnType<typeof interruptResolutionFields> = {},
   ) => {
     if (resumeWorker) {
       resumeWorker.enqueue(attempt);
@@ -46,6 +70,7 @@ export async function interruptRoutes(
         resuming: true,
         action,
         resumeAttemptId: attempt.id,
+        ...resolution,
       });
     }
 
@@ -61,6 +86,7 @@ export async function interruptRoutes(
       action,
       resumeAttemptId: attempt.id,
       error: 'Session resume service is not available',
+      ...resolution,
     });
   };
 
@@ -90,6 +116,10 @@ export async function interruptRoutes(
         createdAt: number;
         status: string;
         resumeError?: string;
+        resolvedAt?: number;
+        resolvedAction?: string | null;
+        resolvedBy?: InterruptRow['resolvedBy'];
+        resolvedReason?: string | null;
       }> = inMemory.map((entry) => ({
         id: entry.info.interruptId,
         turnId: entry.turnId,
@@ -123,6 +153,12 @@ export async function interruptRoutes(
               createdAt: interrupt.createdAt,
               status: resumeAttempt?.status === 'failed' ? 'resume_failed' : interrupt.status as 'pending',
               ...(resumeAttempt?.lastError ? { resumeError: resumeAttempt.lastError } : {}),
+              ...(interrupt.status === 'resolved'
+                ? {
+                  ...interruptResolutionFields(interrupt),
+                  resolvedAction: interrupt.resolvedAction,
+                }
+                : {}),
             });
           }
         }
@@ -140,12 +176,17 @@ export async function interruptRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Body: { action: 'approve' | 'reject'; interruptId: string; data?: unknown };
+        Body: { action: 'approve' | 'reject'; interruptId: string; data?: unknown; reason?: string };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const body = request.body as { action?: string; interruptId?: string; data?: unknown } | undefined;
+      const body = request.body as {
+        action?: string;
+        interruptId?: string;
+        data?: unknown;
+        reason?: unknown;
+      } | undefined;
 
       if (
         !body ||
@@ -157,8 +198,22 @@ export async function interruptRoutes(
           error: 'action is required and must be "approve" or "reject", and interruptId is required',
         });
       }
+      const reason = typeof body.reason === 'string' ? body.reason.trim() : undefined;
+      if (
+        body.reason !== undefined
+        && (reason === undefined || reason.length === 0 || reason.length > INTERRUPT_REASON_MAX_LENGTH)
+      ) {
+        return reply.status(400).send({
+          error: `reason must be a non-empty string of at most ${INTERRUPT_REASON_MAX_LENGTH} characters`,
+        });
+      }
 
       const resolveAction: 'approve' | 'reject' = body.action as 'approve' | 'reject';
+      // ctx-lhr0: record who resolved the approval and why.
+      const audit: InterruptResolutionAudit = {
+        resolvedBy: apiCallerFor(request),
+        ...(reason ? { reason } : {}),
+      };
       const dbInterrupt = await db.getInterruptById(body.interruptId);
       const turnId = dbInterrupt?.turnId ?? interrupts.findTurnIdByInterruptId(body.interruptId);
 
@@ -178,20 +233,22 @@ export async function interruptRoutes(
 
       if (dbInterrupt && dbInterrupt.agentId === id) {
         if (dbInterrupt.status === 'resolved') {
+          const recorded = interruptResolutionFields(dbInterrupt);
           if (dbInterrupt.resolvedAction !== resolveAction) {
             return reply.status(409).send({
               error: 'Interrupt was already resolved with a different action',
               action: dbInterrupt.resolvedAction,
+              ...recorded,
             });
           }
           if (existingResumeAttempt?.status === 'completed') {
-            return reply.send({ alreadyResolved: true, action: dbInterrupt.resolvedAction });
+            return reply.send({ alreadyResolved: true, action: dbInterrupt.resolvedAction, ...recorded });
           }
           if (
             existingResumeAttempt?.status === 'pending'
             || existingResumeAttempt?.status === 'in_progress'
           ) {
-            return acceptResumeAttempt(reply, existingResumeAttempt, resolveAction);
+            return acceptResumeAttempt(reply, existingResumeAttempt, resolveAction, recorded);
           }
           if (existingResumeAttempt?.status === 'failed') {
             let attempt = await db.retryFailedInterruptResumeAttempt(
@@ -203,6 +260,7 @@ export async function interruptRoutes(
                 return reply.send({
                   alreadyResolved: true,
                   action: dbInterrupt.resolvedAction,
+                  ...recorded,
                 });
               }
               if (current?.status === 'pending' || current?.status === 'in_progress') {
@@ -214,7 +272,7 @@ export async function interruptRoutes(
                 error: 'Interrupt resume attempt is not retryable',
               });
             }
-            return acceptResumeAttempt(reply, attempt, resolveAction);
+            return acceptResumeAttempt(reply, attempt, resolveAction, recorded);
           }
 
           // Repair rows persisted by an older process that crashed after
@@ -228,12 +286,13 @@ export async function interruptRoutes(
             return reply.status(409).send({ error: 'Interrupt is not actionable' });
           }
           if (repaired.resumeAttempt) {
-            return acceptResumeAttempt(reply, repaired.resumeAttempt, resolveAction);
+            return acceptResumeAttempt(reply, repaired.resumeAttempt, resolveAction, recorded);
           }
           return reply.send({
             resolved: true,
             action: resolveAction,
             note: 'Resolved in DB; session resume not available',
+            ...recorded,
           });
         }
       }
@@ -243,7 +302,7 @@ export async function interruptRoutes(
       // durable continuation below instead of returning early (ctx-8nnu).
       const hadLiveWaiter = turnId ? interrupts.hasLiveWaiterForTurn(turnId) : false;
       const inMemoryResolved = hadLiveWaiter && turnId
-        ? await interrupts.resolveForTurn(turnId, resolveAction, body.data, id)
+        ? await interrupts.resolveForTurn(turnId, resolveAction, body.data, id, undefined, audit)
         : false;
 
       if (!dbInterrupt && !inMemoryResolved) {
@@ -251,7 +310,12 @@ export async function interruptRoutes(
       }
 
       if (inMemoryResolved && hadLiveWaiter) {
-        return reply.send({ resolved: true, action: resolveAction });
+        const stored = dbInterrupt ? await db.getInterruptById(dbInterrupt.id) : undefined;
+        return reply.send({
+          resolved: true,
+          action: resolveAction,
+          ...interruptResolutionFields(stored),
+        });
       }
 
       // Durable continuation for approve AND reject (ctx-qjnz): with no live
@@ -262,6 +326,7 @@ export async function interruptRoutes(
           dbInterrupt.id,
           resolveAction,
           body.data,
+          audit,
         );
         if (!durableResolution) {
           return reply.status(409).send({
@@ -273,6 +338,7 @@ export async function interruptRoutes(
           return reply.status(409).send({
             error: 'Interrupt was already resolved with a different action',
             action: durableResolution.interrupt.resolvedAction,
+            ...interruptResolutionFields(durableResolution.interrupt),
           });
         }
         if (turnId && interrupts.hasPendingForTurn(turnId)) {
@@ -282,15 +348,25 @@ export async function interruptRoutes(
             resolveAction,
             body.data,
             id,
+            undefined,
+            audit,
           );
         }
+        const recorded = interruptResolutionFields(durableResolution.interrupt);
         if (durableResolution.resumeAttempt) {
           return acceptResumeAttempt(
             reply,
             durableResolution.resumeAttempt,
             resolveAction,
+            recorded,
           );
         }
+        return reply.send({
+          resolved: true,
+          action: resolveAction,
+          note: 'Resolved in DB; session resume not available',
+          ...recorded,
+        });
       }
 
       return reply.send({ resolved: true, action: resolveAction, note: 'Resolved in DB; session resume not available' });

@@ -83,7 +83,15 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ resolved: true, action: 'approve' });
+    expect(res.json()).toEqual({
+      resolved: true,
+      action: 'approve',
+      // ctx-lhr0: the stored resolution is echoed back. The test server runs
+      // with authentication off, so the caller is unauthenticated.
+      resolvedAt: expect.any(Number),
+      resolvedBy: { type: 'unauthenticated' },
+      resolvedReason: null,
+    });
 
     // The pending promise should have resolved with the approve action
     const resolution = await pendingPromise;
@@ -139,7 +147,15 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ resolved: true, action: 'reject' });
+    expect(res.json()).toEqual({
+      resolved: true,
+      action: 'reject',
+      // ctx-lhr0: the stored resolution is echoed back. The test server runs
+      // with authentication off, so the caller is unauthenticated.
+      resolvedAt: expect.any(Number),
+      resolvedBy: { type: 'unauthenticated' },
+      resolvedReason: null,
+    });
 
     const resolution = await pendingPromise;
     expect(resolution.action).toBe('reject');
@@ -172,7 +188,15 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ resolved: true, action: 'approve' });
+    expect(res.json()).toEqual({
+      resolved: true,
+      action: 'approve',
+      // ctx-lhr0: the stored resolution is echoed back. The test server runs
+      // with authentication off, so the caller is unauthenticated.
+      resolvedAt: expect.any(Number),
+      resolvedBy: { type: 'unauthenticated' },
+      resolvedReason: null,
+    });
 
     const resolution = await pendingPromise;
     expect(resolution.action).toBe('approve');
@@ -267,5 +291,136 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/interruptId is required/);
+  });
+
+  describe('approval audit (ctx-lhr0)', () => {
+    it('records why an approval was granted and returns it from the read APIs', async () => {
+      const agentId = await createAgent('audit-approve-test');
+      const turn = await createTurn(agentId);
+      const resolvedEvents: Array<Record<string, unknown>> = [];
+      const onResolved = (payload: Record<string, unknown>) => {
+        resolvedEvents.push(payload);
+      };
+      container.eventBus.on('interrupt.resolved', onResolved);
+
+      try {
+        const pendingPromise = app.interrupts.waitForApproval(
+          turn.id, agentId, 'tc-audit', 'publish_dataset', { batch: 3 }, 0,
+        );
+        const interruptId = await waitForPendingInterrupt(turn.id);
+
+        const res = await app.inject({
+          method: 'POST',
+          url: `/api/agents/${agentId}/interrupt`,
+          payload: {
+            action: 'approve',
+            interruptId,
+            data: { note: 'ship it' },
+            reason: '  Checked the receipts; all 40 tasks pass their controls.  ',
+          },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({
+          resolved: true,
+          action: 'approve',
+          resolvedBy: { type: 'unauthenticated' },
+          resolvedReason: 'Checked the receipts; all 40 tasks pass their controls.',
+        });
+        await pendingPromise;
+
+        const detail = await app.inject({ method: 'GET', url: `/api/interrupts/${interruptId}` });
+        expect(detail.statusCode).toBe(200);
+        expect(detail.json()).toMatchObject({
+          id: interruptId,
+          agentId,
+          status: 'resolved',
+          resolvedAction: 'approve',
+          resolvedAt: expect.any(Number),
+          resolvedBy: { type: 'unauthenticated' },
+          resolvedReason: 'Checked the receipts; all 40 tasks pass their controls.',
+          resolvedData: { note: 'ship it' },
+        });
+
+        const listed = await app.inject({
+          method: 'GET',
+          url: `/api/interrupts?status=resolved&agentId=${agentId}`,
+        });
+        expect(listed.statusCode).toBe(200);
+        expect(listed.json().interrupts).toEqual([
+          expect.objectContaining({
+            id: interruptId,
+            resolvedBy: { type: 'unauthenticated' },
+            resolvedReason: 'Checked the receipts; all 40 tasks pass their controls.',
+          }),
+        ]);
+        expect(listed.json().interrupts[0]).not.toHaveProperty('resolvedData');
+
+        expect(resolvedEvents).toEqual([
+          expect.objectContaining({
+            interruptId,
+            action: 'approve',
+            resolvedBy: { type: 'unauthenticated' },
+            reason: 'Checked the receipts; all 40 tasks pass their controls.',
+          }),
+        ]);
+      } finally {
+        container.eventBus.off('interrupt.resolved', onResolved);
+      }
+    });
+
+    it('rejects an empty or overlong reason without resolving anything', async () => {
+      const agentId = await createAgent('audit-reason-test');
+      const turn = await createTurn(agentId);
+      const pendingPromise = app.interrupts.waitForApproval(
+        turn.id, agentId, 'tc-reason', 'tool', {}, 0,
+      );
+      const interruptId = await waitForPendingInterrupt(turn.id);
+
+      for (const reason of ['   ', 'x'.repeat(2001), 42]) {
+        const res = await app.inject({
+          method: 'POST',
+          url: `/api/agents/${agentId}/interrupt`,
+          payload: { action: 'reject', interruptId, reason },
+        });
+        expect(res.statusCode).toBe(400);
+      }
+      expect((await container.db.getInterruptById(interruptId))?.status).toBe('pending');
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/agents/${agentId}/interrupt`,
+        payload: { action: 'reject', interruptId },
+      });
+      await pendingPromise;
+    });
+
+    it('records whoever cancelled the turn as refusing its pending approval', async () => {
+      const agentId = await createAgent('audit-cancel-test');
+      const turn = await createTurn(agentId);
+      const pendingPromise = app.interrupts.waitForApproval(
+        turn.id, agentId, 'tc-cancel', 'tool', {}, 0,
+      );
+      const interruptId = await waitForPendingInterrupt(turn.id);
+
+      const cancelled = await app.inject({
+        method: 'POST',
+        url: `/api/agents/${agentId}/turns/${turn.id}/cancel`,
+      });
+      expect(cancelled.statusCode).toBe(200);
+      await pendingPromise;
+
+      const detail = await app.inject({ method: 'GET', url: `/api/interrupts/${interruptId}` });
+      expect(detail.json()).toMatchObject({
+        status: 'resolved',
+        resolvedAction: 'reject',
+        resolvedBy: { type: 'unauthenticated' },
+        resolvedReason: 'Turn cancelled',
+      });
+    });
+
+    it('returns 404 for an unknown interrupt id', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/interrupts/does-not-exist' });
+      expect(res.statusCode).toBe(404);
+    });
   });
 });

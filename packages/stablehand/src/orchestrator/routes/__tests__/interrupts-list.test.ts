@@ -1,6 +1,9 @@
+import { createHash } from 'node:crypto';
+
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { registerApiAuth, type ApiKeyStore } from '../../auth.js';
 import { interruptRoutes } from '../interrupts.js';
 
 function createInterruptRow(overrides: Record<string, unknown> = {}) {
@@ -18,6 +21,8 @@ function createInterruptRow(overrides: Record<string, unknown> = {}) {
     resolvedAt: null,
     resolvedAction: null,
     resolvedData: { must: 'not leak' },
+    resolvedBy: null,
+    resolvedReason: null,
     status: 'pending',
     ...overrides,
   };
@@ -110,5 +115,80 @@ describe('global interrupt listing route', () => {
     expect(invalidStatus.statusCode).toBe(400);
     expect(invalidCursor.statusCode).toBe(400);
     expect(db.listInterrupts).not.toHaveBeenCalled();
+  });
+});
+
+describe('single interrupt read (ctx-lhr0)', () => {
+  const MASTER_TOKEN = 'master-token';
+  const BOUND_TOKEN = `cmk_${'b'.repeat(43)}`;
+  const keyStore: ApiKeyStore = {
+    findLiveKeyByTokenHash: async (hash) => (
+      hash === createHash('sha256').update(BOUND_TOKEN).digest('hex')
+        ? { keyId: 'key_bound', name: 'bound', capabilities: ['interrupts:read'], agentId: 'agent-2' }
+        : null
+    ),
+    isLiveKey: async () => true,
+    touchLastUsed: async () => {},
+  };
+  const apps: Array<ReturnType<typeof Fastify>> = [];
+  afterEach(async () => {
+    await Promise.all(apps.splice(0).map((app) => app.close()));
+  });
+
+  async function buildDetailApp() {
+    const resolved = createInterruptRow({
+      status: 'resolved',
+      resolvedAt: 300,
+      resolvedAction: 'approve',
+      resolvedBy: { type: 'api_key', keyId: 'key_phone', keyName: 'phone-approver' },
+      resolvedReason: 'Receipts reconcile',
+      resolvedData: { publishTo: 'hub' },
+    });
+    const db = {
+      getInterruptById: vi.fn(async (id: string) => (id === 'interrupt-1' ? resolved : undefined)),
+    };
+    const app = Fastify({ logger: false });
+    apps.push(app);
+    registerApiAuth(app, { mode: 'enforce', token: MASTER_TOKEN }, keyStore);
+    await app.register(interruptRoutes, { prefix: '/api/interrupts', db: db as never });
+    await app.ready();
+    return app;
+  }
+
+  it('returns who resolved it, why, and the data sent with the resolution', async () => {
+    const app = await buildDetailApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/interrupts/interrupt-1',
+      headers: { Authorization: `Bearer ${MASTER_TOKEN}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      id: 'interrupt-1',
+      status: 'resolved',
+      resolvedAt: 300,
+      resolvedAction: 'approve',
+      resolvedBy: { type: 'api_key', keyId: 'key_phone', keyName: 'phone-approver' },
+      resolvedReason: 'Receipts reconcile',
+      resolvedData: { publishTo: 'hub' },
+    });
+  });
+
+  it('hides other agents\' approvals from a key bound to one agent', async () => {
+    const app = await buildDetailApp();
+    const hidden = await app.inject({
+      method: 'GET',
+      url: '/api/interrupts/interrupt-1',
+      headers: { Authorization: `Bearer ${BOUND_TOKEN}` },
+    });
+    expect(hidden.statusCode).toBe(404);
+
+    const missing = await app.inject({
+      method: 'GET',
+      url: '/api/interrupts/interrupt-9',
+      headers: { Authorization: `Bearer ${MASTER_TOKEN}` },
+    });
+    expect(missing.statusCode).toBe(404);
   });
 });

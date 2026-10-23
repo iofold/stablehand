@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { EpochMillisSchema } from './time.js';
 
 import {
+  ApiCallerSchema,
   ArtifactKindSchema,
   ArtifactSha256Schema,
   CustomEventNameSchema,
@@ -113,6 +114,8 @@ export const InterruptResolvedWebhookPayloadSchema = z.strictObject({
   sandboxSessionId: SandboxSessionIdSchema.optional(),
   interruptId: InterruptIdSchema,
   action: z.enum(['approve', 'reject', 'suspend', 'timeout']),
+  resolvedBy: ApiCallerSchema.optional(),
+  reason: z.string().optional(),
   timestamp: TimestampSchema,
 });
 

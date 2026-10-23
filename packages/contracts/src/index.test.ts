@@ -324,6 +324,8 @@ describe('@stablehand/contracts', () => {
         expiresAt: 2,
         resolvedAt: null,
         resolvedAction: 'timeout',
+        resolvedBy: null,
+        resolvedReason: null,
       }],
       nextBefore: 1,
     });
@@ -335,6 +337,53 @@ describe('@stablehand/contracts', () => {
         resolvedData: { secret: 'must-not-be-listed' },
       }],
     })).toThrow();
+  });
+
+  it('records who resolved an approval and why (ctx-lhr0)', () => {
+    const record = {
+      id: 'interrupt-1',
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      sandboxSessionId: null,
+      toolCallId: 'tool-call-1',
+      toolName: 'request-approval',
+      args: {},
+      status: 'resolved',
+      createdAt: 1,
+      expiresAt: 2,
+      resolvedAt: 3,
+      resolvedAction: 'approve',
+      resolvedBy: { type: 'api_key', keyId: 'key_1', keyName: 'phone-approver' },
+      resolvedReason: 'Receipts reconcile',
+    };
+    expect(contracts.InterruptRecordSchema.parse(record).resolvedBy).toEqual({
+      type: 'api_key',
+      keyId: 'key_1',
+      keyName: 'phone-approver',
+    });
+    expect(contracts.InterruptRecordDetailSchema.parse({ ...record, resolvedData: { ok: true } }).resolvedData)
+      .toEqual({ ok: true });
+    expect(contracts.ApiCallerSchema.parse({ type: 'master_token' })).toEqual({ type: 'master_token' });
+    expect(() => contracts.ApiCallerSchema.parse({ type: 'api_key' })).toThrow();
+    expect(() => contracts.ApiCallerSchema.parse({ type: 'session' })).toThrow();
+
+    expect(contracts.InterruptResolveInputSchema.parse({
+      interruptId: 'interrupt-1',
+      action: 'reject',
+      reason: '  Leaks the fix  ',
+    }).reason).toBe('Leaks the fix');
+    expect(() => contracts.InterruptResolveInputSchema.parse({
+      interruptId: 'interrupt-1',
+      action: 'reject',
+      reason: 'x'.repeat(contracts.INTERRUPT_REASON_MAX_LENGTH + 1),
+    })).toThrow();
+    expect(contracts.InterruptResolveResponseSchema.parse({
+      alreadyResolved: true,
+      action: 'reject',
+      resolvedAt: 3,
+      resolvedBy: { type: 'unauthenticated' },
+      resolvedReason: null,
+    })).toMatchObject({ resolvedBy: { type: 'unauthenticated' } });
   });
 
   it('validates artifact kind, metadata size, and canonical records', () => {

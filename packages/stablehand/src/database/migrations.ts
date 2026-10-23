@@ -1025,6 +1025,9 @@ async function applySchema(sql: postgres.Sql): Promise<void> {
   `;
   await renameColumn(sql, 'pending_interrupts', 'agent_session_id', 'turn_id');
   await renameColumn(sql, 'pending_interrupts', 'session_id', 'sandbox_session_id');
+  // Approval audit (ctx-lhr0): who resolved an interrupt and why.
+  await sql`ALTER TABLE pending_interrupts ADD COLUMN IF NOT EXISTS resolved_by JSONB`;
+  await sql`ALTER TABLE pending_interrupts ADD COLUMN IF NOT EXISTS resolved_reason TEXT`;
 
   // ── 13. interrupt_resume_attempts (→ pending_interrupts, turns, agents) ──
   await sql`
