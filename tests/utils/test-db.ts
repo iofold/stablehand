@@ -99,6 +99,7 @@ const ALL_TABLES = [
   'webhooks',
   'callback_outbox',
   'system_settings',
+  'project_agent_seeds',
   'agent_workspace_state',
   'agents',
 ];

@@ -575,6 +575,36 @@ export class DatabaseRepository {
     );
   }
 
+  /**
+   * Seed-once registration of an agent declared in the project's agents/
+   * directory. In one transaction: record the name in project_agent_seeds,
+   * then create the agent unless one with that name already exists. A name
+   * recorded by an earlier start is left alone, even when its agent has since
+   * been deleted. Concurrent starts serialize on the ledger's primary key.
+   */
+  async seedProjectAgentOnce(data: AgentInsert): Promise<'created' | 'adopted' | 'already-seeded'> {
+    const sanitizedData = sanitizeTypedDbValue(data, 'agents.insert');
+    return this.db.transaction(async (tx) => {
+      const [recorded] = await tx
+        .insert(this.schema.projectAgentSeeds)
+        .values({ name: sanitizedData.name, seededAt: Date.now() })
+        .onConflictDoNothing({ target: this.schema.projectAgentSeeds.name })
+        .returning({ name: this.schema.projectAgentSeeds.name });
+      if (!recorded) {
+        return 'already-seeded';
+      }
+      const [existing] = await tx
+        .select({ id: this.schema.agents.id })
+        .from(this.schema.agents)
+        .where(eq(this.schema.agents.name, sanitizedData.name));
+      if (existing) {
+        return 'adopted';
+      }
+      await tx.insert(this.schema.agents).values(sanitizedData);
+      return 'created';
+    });
+  }
+
   async getAgent(id: string): Promise<AgentSelect | undefined> {
     return this.db.query.agents.findFirst({
       where: eq(this.schema.agents.id, id),

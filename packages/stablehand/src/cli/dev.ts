@@ -6,11 +6,9 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import type { FastifyInstance } from 'fastify';
 import { createContainer, type AppContainer } from '../config/container.js';
 import { createServer } from '../orchestrator/server.js';
-import { discoverAgents, discoverManifestProjects, discoverTools } from '../agent/discovery.js';
-import type { AgentCreateInput } from '@stablehand/contracts';
-import type { LoadedManifestProject } from '@stablehand/manifest/node';
+import { discoverTools } from '../agent/discovery.js';
+import { seedProjectAgents } from '../agent/project-seed.js';
 import type { StablehandConfig } from '../config/types.js';
-import type { AgentDefinition } from '@stablehand/sandbox-daemon';
 import type { ToolDefinition } from '@stablehand/sandbox-daemon';
 
 import { ensureAgentWorkspace, seedAgentWorkspace } from '../workspace/ensure.js';
@@ -23,36 +21,6 @@ import {
 import { createToolApprovalGate } from '../orchestrator/tool-approval-gate.js';
 import { startRuntimeApi } from './runtime-startup.js';
 import { StartupTimeline } from '../util/startup-timeline.js';
-
-function agentInputToDefinition(
-  input: AgentCreateInput,
-  projectDir: string,
-): AgentDefinition {
-  return {
-    name: input.name,
-    harness: input.harness,
-    harnessConfig: input.harnessConfig,
-    tools: input.tools,
-    systemPrompt: input.systemPrompt,
-    ...(input.nativeToolPolicy ? { nativeToolPolicy: input.nativeToolPolicy } : {}),
-    ...(input.description !== undefined ? { description: input.description } : {}),
-    ...(input.metadata !== undefined || input.mcpServers !== undefined
-      ? {
-        metadata: {
-          ...(input.metadata ?? {}),
-          // Stored where the agent API keeps them, so boot registers them.
-          ...(input.mcpServers !== undefined ? { mcpServers: input.mcpServers } : {}),
-        },
-      }
-      : {}),
-    ...(input.mode !== undefined ? { mode: input.mode } : {}),
-    ...(input.workspaceContent !== undefined
-      ? { workspaceContent: input.workspaceContent }
-      : {}),
-    ...(input.resourceLimits ? { resourceLimits: input.resourceLimits } : {}),
-    projectDir,
-  };
-}
 
 export async function startDev() {
   // ctx-new8: one log line with per-phase boot durations. The first phase is
@@ -146,45 +114,16 @@ export async function startDev() {
   console.log('  \x1b[32m✓\x1b[0m Database initialized');
   console.log('  \x1b[1mExecution:\x1b[0m sandbox (Docker containers)');
 
-  // ── Discover agents & tools from project directories ─
-  let agentDefs: AgentDefinition[] = [];
-  let manifestProjects: LoadedManifestProject[] = [];
-
-  if (existsSync(agentsDir)) {
-    agentDefs = await discoverAgents(agentsDir);
-    manifestProjects = await discoverManifestProjects(agentsDir);
-    const manifestDefs = manifestProjects.map((project) =>
-      agentInputToDefinition(project.agentCreateInput, project.projectDir),
-    );
-    agentDefs = [...agentDefs, ...manifestDefs];
-  }
-
   // Register discovered tools with the executor
   for (const tool of toolDefs) {
     container.toolExecutor.register(tool);
   }
 
-  // Register discovered agents in the database
-  const manifestProjectsByName = new Map(
-    manifestProjects.map((project) => [project.agentCreateInput.name, project]),
-  );
-  for (const def of agentDefs) {
-    const existing = await container.db.listAgents();
-    const alreadyRegistered = existing.find((a) => a.name === def.name);
-    if (!alreadyRegistered) {
-      const manifestProject = manifestProjectsByName.get(def.name);
-      await container.db.createAgent({
-        name: def.name,
-        harness: def.harness,
-        harnessConfig: JSON.stringify(def.harnessConfig),
-        systemPrompt: def.systemPrompt,
-        tools: def.tools,
-        description: def.description ?? null,
-        metadata: def.metadata ?? null,
-        manifest: manifestProject?.agentCreateInput.manifest,
-      });
-    }
-  }
+  // Register the project's agents. Seed-once: an agent deleted in the UI or
+  // API is not re-created on the next start (see agent/project-seed.ts).
+  const projectAgents = existsSync(agentsDir)
+    ? await seedProjectAgents(container.db, agentsDir)
+    : undefined;
 
   // Ensure workspace directories for all registered agents
   const allDbAgents = await container.db.listAgents();
@@ -196,7 +135,7 @@ export async function startDev() {
     }
   }
 
-  console.log(`  \x1b[32m✓\x1b[0m Registered ${agentDefs.length} agent(s), ${toolDefs.length} tool(s)`);
+  console.log(`  \x1b[32m✓\x1b[0m Registered ${toolDefs.length} tool(s), ${projectAgents?.created.length ?? 0} new agent(s) from agents/`);
   timeline.mark('agents');
 
   const makeToolContext = (ctx: ToolHandlerContext) => ({

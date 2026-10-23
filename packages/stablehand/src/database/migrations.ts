@@ -1182,6 +1182,15 @@ async function applySchema(sql: postgres.Sql): Promise<void> {
   // Drop retired keys (idempotent).
   await sql`DELETE FROM system_settings WHERE key = 'maxCheckpointBytes'`;
 
+  // ── 18a. project_agent_seeds (seed-once ledger for agents/ manifests) ─
+  // No foreign key: a row must outlive the agent it seeded (ctx-dxxa).
+  await sql`
+    CREATE TABLE IF NOT EXISTS project_agent_seeds (
+      name TEXT PRIMARY KEY NOT NULL,
+      seeded_at BIGINT NOT NULL
+    )
+  `;
+
   // ── 18a2. api_keys (WO-5 scoped extension keys; sha256-only storage) ─
   await sql`
     CREATE TABLE IF NOT EXISTS api_keys (

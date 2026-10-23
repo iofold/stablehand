@@ -619,6 +619,18 @@ export const systemSettings = pgTable('system_settings', {
 });
 
 /**
+ * Seed-once ledger for agents declared in the project's agents/ directory
+ * (agent/project-seed.ts). A row means boot seeding already created or adopted
+ * an agent under this name and never creates it again, so deleting the agent
+ * sticks across restarts. Deliberately not tied to the agents table: rows
+ * outlive the agent they describe.
+ */
+export const projectAgentSeeds = pgTable('project_agent_seeds', {
+  name: text('name').primaryKey(),
+  seededAt: bigint('seeded_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+});
+
+/**
  * Declarative tag-based budget policies (2026-07-15 proposal). `doc` holds
  * the validated policy document: selector, groupBy, window, limits, actions.
  */

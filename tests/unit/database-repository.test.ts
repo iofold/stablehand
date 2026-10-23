@@ -120,6 +120,7 @@ describe('DatabaseRepository', () => {
         'model_gateway_reconciliation_state',
         'model_gateway_spend_quarantine',
         'pending_interrupts',
+        'project_agent_seeds',
         'sandbox_session_lifecycle_operations',
         'sandbox_sessions',
         'schedules',
