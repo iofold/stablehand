@@ -19,6 +19,8 @@ package-lock.json
 
 # Artifacts
 *.png
+# README screenshots are part of the docs.
+!docs/media/*.png
 console-errors.txt
 chat-current.md
 *-page-loaded.md

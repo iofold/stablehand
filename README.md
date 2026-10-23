@@ -102,25 +102,16 @@ grep '^STABLEHAND_API_TOKEN=' .env
 
 Open http://localhost:3200, paste the token, and open Overnight Analyst to see the run, its receipt and its files. Pass `-e ANALYST_TZ=<IANA zone>` to the seed for a schedule in your own timezone.
 
-<!--
-  SCREENSHOT STRIP SLOT
-  Four 1440 px PNGs from a clean demo stack (no test agents, no client names), as a 2x2 table:
-    approval-card.png   approval card under an agent-drawn chart, human tool names, Approve / Reject
-    synced-tabs.png     three browser tabs on the same run, mid-stream, showing identical output
-    turn-inspector.png  turn details with model, tokens, cost, duration, budget and approvals
-    finished-brief.png  the Overnight Analyst brief as published to the gallery
-  Markup to uncomment once the files exist:
-  <table>
-    <tr>
-      <td><img src="docs/media/approval-card.png" alt="Approval card under a chart"></td>
-      <td><img src="docs/media/synced-tabs.png" alt="Three tabs on one run"></td>
-    </tr>
-    <tr>
-      <td><img src="docs/media/turn-inspector.png" alt="Turn inspector with cost"></td>
-      <td><img src="docs/media/finished-brief.png" alt="Finished brief"></td>
-    </tr>
-  </table>
--->
+<table>
+  <tr>
+    <td><img src="docs/media/approval-card.png" alt="The Overnight Analyst's approval card before it publishes its brief, with the headline, sources and file name, and Approve and Reject buttons"></td>
+    <td><img src="docs/media/synced-tabs.png" alt="The same run open in two laptop tabs and on a phone, all showing the same approval card"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/turn-inspector.png" alt="Turn inspector with the model, tokens, cost, the approval and the files the run produced"></td>
+    <td><img src="docs/media/finished-brief.png" alt="The finished brief as the artifact gallery serves it"></td>
+  </tr>
+</table>
 
 ## Built with Stablehand
 
