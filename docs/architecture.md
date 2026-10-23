@@ -283,6 +283,16 @@ PostgreSQL is the current system of record for:
 - Model-gateway spend ledger tables — per-call spend attribution, reconciliation watermarks, and quarantine (see [docs/specs/cost-control-and-model-gateway.md](specs/cost-control-and-model-gateway.md))
 - `systemSettings` — Runtime configuration overrides
 
+Schema migrations are one idempotent pass (`runMigrations`) under an advisory
+lock. After a pass completes, the orchestrator records a fingerprint of the
+migration source in `stablehand_schema_version` (row `schema-fingerprint`).
+Later starts of the same build find it and skip the pass. A new build, a new
+database, or a pass that failed part-way runs it again. One-time data
+migrations (contract rewrites, adoption of pre-revision message history)
+carry their own version rows, so they run once per database even when the
+pass runs again. To force a pass on an unchanged build, delete the
+`schema-fingerprint` row.
+
 Relevant code:
 
 - [schema-pg.ts](../packages/stablehand/src/database/schema-pg.ts)

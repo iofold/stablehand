@@ -172,10 +172,22 @@ The interrupt resolution path is DB-first. If the original in-memory owner is go
 
 On orchestrator startup, reconciliation repairs state that may have been left behind by a crash:
 
-1. Stranded running turns are finalized as errors unless they are parked on a durable HITL interrupt.
+1. Running turns whose sandbox is still executing them are handed to crash takeover ([ADR 025](adr/025-crash-takeover-of-running-turns.md)). Other stranded running turns are finalized as errors, unless they are parked on a durable HITL interrupt.
 2. Queued turns with a persisted user-message link are re-dispatched.
 3. `turn.started` emission is idempotent for redispatched queued turns.
 4. `RESTORING` sandbox rows with checkpoint data roll back to `CHECKPOINTED` so manual restore can retry.
+
+Boot order is: migrations (skipped when the database is current), services,
+agent and tool registration, slot accounting, sandbox reconciliation, turn
+reconciliation, schedules, then listen. The server does not accept requests
+before this recovery has run, so `/api/health` answering 200 means it has
+completed. Takeovers it starts finish in the background, and
+`[TurnReconciler] crash takeover finished` reports their outcome. Once listening, the
+orchestrator logs one line with each phase's duration from process start:
+
+```text
+[startup] ready 1675 ms after process start: modules 1292 ms, project 67 ms, migrations 54 ms (schema current), services 73 ms, agents 53 ms, http-server 82 ms, slot-accounting 8 ms, sandbox-reconciliation 5 ms, turn-reconciliation 9 ms, schedules 24 ms, listen 6 ms
+```
 
 ## Troubleshooting
 

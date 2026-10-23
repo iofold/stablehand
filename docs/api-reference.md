@@ -293,7 +293,10 @@ Per-agent sandbox resource limits:
 - **Notes:** `/api/health` returns the same payload. `timestamp` is epoch
   milliseconds. The `sandbox` arm is present only when sandbox container
   management is enabled; the `modelGateway` arm only when the model gateway
-  is configured.
+  is configured. The server starts answering only after startup recovery has
+  run: migrations, sandbox and turn reconciliation, and schedule activation.
+  Crash takeover of running turns that recovery started can still be
+  finishing in the background.
 
 #### `GET /api/health`
 
