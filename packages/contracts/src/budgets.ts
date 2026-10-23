@@ -33,29 +33,46 @@ export const BudgetActionSchema = z.strictObject({
   action: z.enum(['warn', 'block']),
 });
 
+/** Warn thresholds a policy may carry, e.g. alerts at 50% and 85% of its limit. */
+export const MAX_BUDGET_WARN_ACTIONS = 4;
+
 export const BudgetPolicyDocSchema = z.strictObject({
   selector: z.record(z.string(), z.string()),
   groupBy: z.string().trim().min(1).optional(),
   window: BudgetWindowSchema,
   limits: BudgetLimitsSchema,
-  actions: z.array(BudgetActionSchema).min(1).max(2),
+  actions: z.array(BudgetActionSchema).min(1).max(MAX_BUDGET_WARN_ACTIONS + 1),
 }).superRefine((doc, ctx) => {
-  const byAction = new Map(doc.actions.map((action) => [action.action, action]));
-  if (byAction.size !== doc.actions.length) {
+  const warns = doc.actions.filter((action) => action.action === 'warn');
+  const blocks = doc.actions.filter((action) => action.action === 'block');
+  if (blocks.length > 1) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['actions'],
-      message: 'At most one warn and one block action are allowed',
+      message: 'At most one block action is allowed',
+    });
+  }
+  if (warns.length > MAX_BUDGET_WARN_ACTIONS) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['actions'],
+      message: `At most ${MAX_BUDGET_WARN_ACTIONS} warn actions are allowed`,
+    });
+  }
+  if (new Set(warns.map((action) => action.threshold)).size !== warns.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['actions'],
+      message: 'Each warn action needs its own threshold',
     });
   }
 
-  const warn = byAction.get('warn');
-  const block = byAction.get('block');
-  if (warn && block && warn.threshold >= block.threshold) {
+  const block = blocks[0];
+  if (block && warns.some((warn) => warn.threshold >= block.threshold)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['actions'],
-      message: 'The warn threshold must be lower than the block threshold',
+      message: 'Every warn threshold must be lower than the block threshold',
     });
   }
 }).transform((doc) => ({

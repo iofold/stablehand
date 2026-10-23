@@ -50,10 +50,18 @@ describe('parseBudgetPolicyDoc', () => {
     expect(parseBudgetPolicyDoc({
       ...VALID_DOC,
       actions: [
-        { threshold: 0.5, action: 'warn' },
+        { threshold: 0.7, action: 'warn' },
         { threshold: 0.7, action: 'warn' },
       ],
     })).toHaveProperty('error');
+    // Several distinct warn thresholds are fine (e.g. 50% and 85% alerts).
+    expect(parseBudgetPolicyDoc({
+      ...VALID_DOC,
+      actions: [
+        { threshold: 0.5, action: 'warn' },
+        { threshold: 0.7, action: 'warn' },
+      ],
+    })).toHaveProperty('doc');
     expect(parseBudgetPolicyDoc({
       ...VALID_DOC,
       actions: [

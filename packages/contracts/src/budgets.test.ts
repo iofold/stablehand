@@ -60,12 +60,46 @@ describe('BudgetPolicyDocSchema', () => {
     })).toThrow();
   });
 
-  it('rejects duplicate actions and warn thresholds at or above block', () => {
+  it('accepts several warn thresholds below the block threshold, sorted', () => {
+    expect(BudgetPolicyDocSchema.parse({
+      ...VALID_DOC,
+      actions: [
+        { threshold: 1, action: 'block' },
+        { threshold: 0.85, action: 'warn' },
+        { threshold: 0.5, action: 'warn' },
+      ],
+    }).actions).toEqual([
+      { threshold: 0.5, action: 'warn' },
+      { threshold: 0.85, action: 'warn' },
+      { threshold: 1, action: 'block' },
+    ]);
+  });
+
+  it('rejects duplicate thresholds, two blocks, too many warns, and warns at or above block', () => {
     expect(() => BudgetPolicyDocSchema.parse({
       ...VALID_DOC,
       actions: [
         { threshold: 0.5, action: 'warn' },
-        { threshold: 0.8, action: 'warn' },
+        { threshold: 0.5, action: 'warn' },
+      ],
+    })).toThrow();
+    expect(() => BudgetPolicyDocSchema.parse({
+      ...VALID_DOC,
+      actions: [
+        { threshold: 0.9, action: 'block' },
+        { threshold: 1, action: 'block' },
+      ],
+    })).toThrow();
+    expect(() => BudgetPolicyDocSchema.parse({
+      ...VALID_DOC,
+      actions: [0.1, 0.2, 0.3, 0.4, 0.5].map((threshold) => ({ threshold, action: 'warn' })),
+    })).toThrow();
+    expect(() => BudgetPolicyDocSchema.parse({
+      ...VALID_DOC,
+      actions: [
+        { threshold: 0.5, action: 'warn' },
+        { threshold: 0.9, action: 'warn' },
+        { threshold: 0.8, action: 'block' },
       ],
     })).toThrow();
     expect(() => BudgetPolicyDocSchema.parse({
