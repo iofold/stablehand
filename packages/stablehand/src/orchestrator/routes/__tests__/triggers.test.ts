@@ -147,6 +147,51 @@ describe('trigger update route selector contract', () => {
   });
 });
 
+describe('trigger update route conversation key contract', () => {
+  const saved = {
+    id: 'trigger-1',
+    agentId: 'agent-1',
+    eventType: 'custom.inbox.email',
+    taskTemplate: 'Reply to {{payload.subject}}',
+    enabled: true,
+    createdAt: 1_755_000_000_000,
+  };
+
+  it('sets a thread key and returns it', async () => {
+    const update = vi.fn().mockResolvedValue({ ...saved, conversationKey: '{{payload.threadId}}' });
+    const handler = await registerUpdateHandler(update);
+
+    const response = await invoke(handler, { conversationKey: ' {{payload.threadId}} ' });
+
+    expect(response.statusCode).toBe(200);
+    expect(update).toHaveBeenCalledWith('trigger-1', { conversationKey: '{{payload.threadId}}' });
+    expect(response.result).toMatchObject({ conversationKey: '{{payload.threadId}}' });
+  });
+
+  it.each([null, ''])('clears the thread key with %j', async (conversationKey) => {
+    const update = vi.fn().mockResolvedValue(saved);
+    const handler = await registerUpdateHandler(update);
+
+    const response = await invoke(handler, { conversationKey });
+
+    expect(response.statusCode).toBe(200);
+    expect(update).toHaveBeenCalledWith('trigger-1', { conversationKey: undefined });
+  });
+
+  it.each([
+    ['number', 42, 'conversationKey must be a string'],
+    ['long string', 'k'.repeat(513), 'conversationKey must be at most 512 characters'],
+  ])('rejects a %s', async (_label, conversationKey, error) => {
+    const update = vi.fn();
+    const handler = await registerUpdateHandler(update);
+
+    const response = await invoke(handler, { conversationKey });
+
+    expect(response).toMatchObject({ statusCode: 400, responseBody: { error } });
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
 describe('trigger emit scoped-key namespace enforcement', () => {
   it('rejects an event outside a parameterized grant before emitting it', async () => {
     const emitCustomEventAsync = vi.fn();

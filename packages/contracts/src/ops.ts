@@ -118,6 +118,8 @@ export const TriggerSchema = z.strictObject({
   eventType: z.string(),
   selector: z.record(z.string(), z.unknown()).optional(),
   taskTemplate: z.string(),
+  /** Thread key template: firings that render the same key share a conversation. */
+  conversationKey: z.string().optional(),
   enabled: z.boolean(),
   createdAt: EpochMillisSchema,
 });

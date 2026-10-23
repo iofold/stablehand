@@ -1640,6 +1640,12 @@ The redirect target the provider sends the browser to. Public: the single-use `s
   - Strings render as-is, numbers and booleans as text, objects and arrays as
     compact JSON.
   - A missing or `null` field leaves its placeholder unchanged.
+- **Conversation key (optional):** `conversationKey` is a template like
+  `{{payload.threadId}}`. Firings that render the same key for this agent add a
+  run to one conversation, so the agent sees the earlier messages of that thread;
+  runs in one conversation take turns. When the event lacks a field the key
+  names, or the key renders empty, the firing starts a new conversation. Without
+  a key every firing starts a new conversation. At most 512 characters.
 - **Notes:** Returns `404` if `agentId` does not exist. A matching event starts a
   **background** run on the agent, so its `mode` must be `background` or `both`.
   When the run cannot start, the firing is recorded as failed (see
@@ -1724,7 +1730,8 @@ The redirect target the provider sends the browser to. Public: the single-use `s
 
 - **Query params:** None.
 - **Response:** updated trigger object.
-- **Notes:** Returns `404` if not found.
+- **Notes:** Returns `404` if not found. `selector: null` clears the selector;
+  `conversationKey: null` (or `""`) clears the conversation key.
 
 #### `DELETE /api/triggers/:id`
 

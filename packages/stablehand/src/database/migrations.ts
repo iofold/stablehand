@@ -892,6 +892,7 @@ async function applySchema(sql: postgres.Sql): Promise<void> {
       selector JSONB,
       selector_hash TEXT NOT NULL,
       task_template TEXT NOT NULL,
+      conversation_key TEXT,
       enabled BOOLEAN NOT NULL DEFAULT true,
       created_at BIGINT NOT NULL
     )
@@ -1380,6 +1381,7 @@ async function applySchema(sql: postgres.Sql): Promise<void> {
   await sql`ALTER TABLE event_triggers ADD COLUMN IF NOT EXISTS selector_hash TEXT`;
   await sql`UPDATE event_triggers SET selector_hash = md5(COALESCE(selector::text, 'null')) WHERE selector_hash IS NULL`;
   await sql`ALTER TABLE event_triggers ALTER COLUMN selector_hash SET NOT NULL`;
+  await sql`ALTER TABLE event_triggers ADD COLUMN IF NOT EXISTS conversation_key TEXT`;
   await sql`CREATE INDEX IF NOT EXISTS idx_event_triggers_agent ON event_triggers(agent_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_event_triggers_event_type ON event_triggers(event_type)`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_event_triggers_signature ON event_triggers(agent_id, event_type, selector_hash)`;

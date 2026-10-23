@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { interpolateTemplate } from '../triggers.js';
+import { interpolateTemplate, renderConversationKey } from '../triggers.js';
 
 describe('interpolateTemplate', () => {
   const payload = {
@@ -54,5 +54,21 @@ describe('interpolateTemplate', () => {
   it('does not re-interpolate placeholders that arrive inside payload values', () => {
     expect(interpolateTemplate('{{payload.note}}', { note: '{{payload.secret}}', secret: 's3cret' }))
       .toBe('{{payload.secret}}');
+  });
+});
+
+describe('renderConversationKey', () => {
+  it('renders the thread key from the event payload', () => {
+    expect(renderConversationKey('{{payload.threadId}}', { threadId: '<msg-1@example.com>' })).toBe('<msg-1@example.com>');
+    expect(renderConversationKey('inbox:{{payload.thread.id}}', { thread: { id: 7 } })).toBe('inbox:7');
+  });
+
+  it('gives no key when the template is unset or the event lacks a field', () => {
+    expect(renderConversationKey(undefined, { threadId: 'a' })).toBeUndefined();
+    expect(renderConversationKey('  ', { threadId: 'a' })).toBeUndefined();
+    expect(renderConversationKey('{{payload.threadId}}', {})).toBeUndefined();
+    expect(renderConversationKey('{{payload.threadId}}', { threadId: null })).toBeUndefined();
+    expect(renderConversationKey('{{payload.threadId}}', { threadId: '   ' })).toBeUndefined();
+    expect(renderConversationKey('a-{{payload.x}}-{{payload.y}}', { x: 1 })).toBeUndefined();
   });
 });

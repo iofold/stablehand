@@ -9,7 +9,7 @@ import type { DatabaseRepository } from '../database/repository.js';
 import type { TriggerSelect } from '../database/types.js';
 import { isUniqueConstraintViolation } from '../database/errors.js';
 import type { EventTrigger } from './triggers.js';
-import { interpolateTemplate } from './triggers.js';
+import { interpolateTemplate, renderConversationKey } from './triggers.js';
 import { matchesSelector } from './wait-condition.js';
 import type { SpineConsumer, SpineRawEvent } from './spine-consumer-runner.js';
 import {
@@ -67,9 +67,16 @@ function hydrateTrigger(row: TriggerSelect | undefined): EventTrigger | undefine
     eventType: row.eventType,
     selector: row.selector ?? undefined,
     taskTemplate: row.taskTemplate,
+    ...(row.conversationKey ? { conversationKey: row.conversationKey } : {}),
     enabled: row.enabled,
     createdAt: row.createdAt,
   };
+}
+
+/** Per-firing options a trigger passes to its run callback. */
+export interface TriggerFireOptions {
+  /** Rendered thread key: runs with the same key continue one conversation. */
+  conversationKey?: string;
 }
 
 /** Callback invoked when a trigger fires to start a background run. */
@@ -79,6 +86,7 @@ export type TriggerRunCallback = (
   triggerId: string,
   triggerDepth?: number,
   eventSeq?: number,
+  options?: TriggerFireOptions,
 ) => Promise<void>;
 
 export function createTriggerSpineConsumer(manager: EventTriggerManager): SpineConsumer {
@@ -158,6 +166,7 @@ export class EventTriggerManager {
       eventType: input.eventType,
       selector: input.selector,
       taskTemplate: input.taskTemplate,
+      ...(input.conversationKey ? { conversationKey: input.conversationKey } : {}),
       enabled: input.enabled ?? true,
       createdAt: input.createdAt ?? Date.now(),
     };
@@ -170,6 +179,7 @@ export class EventTriggerManager {
         eventType: trigger.eventType,
         selector: trigger.selector ?? null,
         taskTemplate: trigger.taskTemplate,
+        conversationKey: trigger.conversationKey ?? null,
         enabled: trigger.enabled,
         createdAt: trigger.createdAt,
       });
@@ -212,12 +222,13 @@ export class EventTriggerManager {
    */
   async update(
     triggerId: string,
-    updates: Partial<Pick<EventTrigger, 'enabled' | 'taskTemplate' | 'selector' | 'eventType'>>,
+    updates: Partial<Pick<EventTrigger, 'enabled' | 'taskTemplate' | 'selector' | 'eventType' | 'conversationKey'>>,
   ): Promise<EventTrigger | undefined> {
     const existing = this.triggers.get(triggerId);
     if (!existing) return undefined;
 
     const updated: EventTrigger = { ...existing, ...updates };
+    if (!updated.conversationKey) delete updated.conversationKey;
     const duplicate = this.findBySignature(updated.agentId, updated.eventType, updated.selector);
     if (duplicate && duplicate.id !== triggerId) {
       throw new TriggerConflictError(
@@ -233,6 +244,7 @@ export class EventTriggerManager {
         eventType: updated.eventType,
         selector: updated.selector ?? null,
         taskTemplate: updated.taskTemplate,
+        conversationKey: updated.conversationKey ?? null,
         enabled: updated.enabled,
         createdAt: updated.createdAt,
       });
@@ -398,10 +410,11 @@ export class EventTriggerManager {
       if (this.retiredAgentIds.has(trigger.agentId)) continue;
 
       const task = interpolateTemplate(trigger.taskTemplate, flatPayload);
+      const conversationKey = renderConversationKey(trigger.conversationKey, flatPayload);
 
       // Fire the run — errors are isolated per trigger within this event.
       try {
-        await this.fireTrigger(trigger, task, currentDepth, eventSeq);
+        await this.fireTrigger(trigger, task, currentDepth, eventSeq, conversationKey);
         firedAgents.add(trigger.agentId);
         console.log(`[EventTriggerManager] trigger ${trigger.id} fired for agent ${trigger.agentId}`);
       } catch (err) {
@@ -552,15 +565,14 @@ export class EventTriggerManager {
     task: string,
     currentDepth: number,
     eventSeq: number | undefined,
+    conversationKey?: string,
   ): Promise<void> {
     if (this.retiredAgentIds.has(trigger.agentId)) return;
-    await this.onFire(
-      trigger.agentId,
-      task,
-      trigger.id,
-      currentDepth + 1,
-      eventSeq,
-    );
+    if (conversationKey) {
+      await this.onFire(trigger.agentId, task, trigger.id, currentDepth + 1, eventSeq, { conversationKey });
+    } else {
+      await this.onFire(trigger.agentId, task, trigger.id, currentDepth + 1, eventSeq);
+    }
     if (eventSeq !== undefined) {
       await this.db.recordTriggerFiring(trigger.id, eventSeq);
     }

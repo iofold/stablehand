@@ -15,6 +15,12 @@ export interface EventTrigger {
   selector?: Record<string, unknown>;
   /** Task/prompt template — supports {{payload}} and {{payload.path}} placeholders. */
   taskTemplate: string;
+  /**
+   * Optional thread key template, e.g. `{{payload.threadId}}`. Firings that
+   * render the same key for this agent continue one conversation instead of
+   * starting a new one each time.
+   */
+  conversationKey?: string;
   /** Whether this trigger is active. */
   enabled: boolean;
   /** Creation time, epoch milliseconds (ctx-iqzy T5). */
@@ -62,4 +68,25 @@ export function interpolateTemplate(
     const segments = path ? path.slice(1).split('.') : [];
     return renderValue(segments.length === 0 ? payload : lookupPath(payload, segments)) ?? placeholder;
   });
+}
+
+/**
+ * Render a trigger's conversation key for one event. Returns undefined when
+ * the template is unset, renders empty, or names a field the event lacks, so
+ * that firing starts a new conversation instead of folding every keyless
+ * event into one thread.
+ */
+export function renderConversationKey(
+  template: string | undefined,
+  payload: Record<string, unknown>,
+): string | undefined {
+  if (!template || template.trim() === '') return undefined;
+  let missing = false;
+  const rendered = template.replace(PAYLOAD_PLACEHOLDER, (_placeholder, path: string) => {
+    const segments = path ? path.slice(1).split('.') : [];
+    const value = renderValue(segments.length === 0 ? payload : lookupPath(payload, segments));
+    if (value === undefined) missing = true;
+    return value ?? '';
+  }).trim();
+  return missing || rendered === '' ? undefined : rendered;
 }

@@ -526,6 +526,14 @@ export function TriggersPage() {
                   </p>
                 </div>
 
+                {trigger.conversationKey && (
+                  <p data-testid="trigger-conversation-key" className="text-[11px] text-surface-400">
+                    Events with the same{' '}
+                    <span className="font-mono text-surface-300">{trigger.conversationKey}</span>
+                    {' '}continue one conversation.
+                  </p>
+                )}
+
                 <TriggerFailureSummary failures={failuresByTrigger[trigger.id] ?? []} />
 
                 {/* Status badge */}

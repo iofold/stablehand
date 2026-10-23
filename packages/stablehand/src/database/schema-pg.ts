@@ -362,6 +362,8 @@ export const eventTriggers = pgTable('event_triggers', {
   selector: jsonb('selector').$type<Record<string, unknown> | null>(),
   selectorHash: text('selector_hash').notNull(),
   taskTemplate: text('task_template').notNull(),
+  /** Thread key template: firings with the same rendered key share a conversation. */
+  conversationKey: text('conversation_key'),
   enabled: boolean('enabled').notNull().default(true),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 }, (table) => ({

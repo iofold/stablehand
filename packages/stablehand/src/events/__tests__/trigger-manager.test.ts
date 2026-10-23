@@ -175,6 +175,35 @@ describe('EventTriggerManager durable mutations', () => {
     expect(db.recordTriggerFiring).toHaveBeenCalledWith(trigger.id, 42);
   });
 
+  it('passes the rendered thread key so one thread continues one conversation', async () => {
+    const { manager, db, onFire } = createManager();
+    const keyed = await manager.register({
+      agentId: 'agent-1',
+      eventType: 'custom.ready',
+      taskTemplate: 'process {{payload.value}}',
+      conversationKey: 'thread:{{payload.value}}',
+      enabled: true,
+    });
+    expect(keyed.conversationKey).toBe('thread:{{payload.value}}');
+    expect(db.saveTrigger).toHaveBeenCalledWith(expect.objectContaining({ conversationKey: 'thread:{{payload.value}}' }));
+
+    await manager.handleRawEvent(rawEvent());
+    expect(onFire).toHaveBeenCalledWith('agent-1', 'process abc', keyed.id, 1, 42, { conversationKey: 'thread:abc' });
+
+    // An event without the field starts a new conversation instead.
+    onFire.mockClear();
+    await manager.handleRawEvent(rawEvent({
+      seq: 43,
+      payload: { type: 'custom.ready', agentId: 'agent-0', payload: {}, timestamp: 1_000 },
+    }));
+    expect(onFire).toHaveBeenCalledWith('agent-1', 'process {{payload.value}}', keyed.id, 1, 43);
+
+    // Clearing the key goes back to a new conversation per firing.
+    const cleared = await manager.update(keyed.id, { conversationKey: undefined });
+    expect(cleared?.conversationKey).toBeUndefined();
+    expect(db.saveTrigger).toHaveBeenLastCalledWith(expect.objectContaining({ conversationKey: null }));
+  });
+
   it('skips raw spine events that already have a trigger firing row', async () => {
     const { manager, db, onFire } = createManager();
     db.hasTriggerFiring.mockResolvedValue(true);

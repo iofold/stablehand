@@ -29,6 +29,17 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+const CONVERSATION_KEY_MAX_LENGTH = 512;
+
+/** A usable thread key template, or an error message. Blank means "no key". */
+function checkConversationKey(value: unknown): string | null {
+  if (typeof value !== 'string') return 'conversationKey must be a string';
+  if (value.length > CONVERSATION_KEY_MAX_LENGTH) {
+    return `conversationKey must be at most ${CONVERSATION_KEY_MAX_LENGTH} characters`;
+  }
+  return null;
+}
+
 /**
  * REST API routes for event triggers and custom event emission.
  */
@@ -48,6 +59,7 @@ export async function triggerRoutes(
           eventType: string;
           selector?: unknown;
           taskTemplate: string;
+          conversationKey?: string;
           enabled?: boolean;
         };
       }>,
@@ -58,6 +70,7 @@ export async function triggerRoutes(
         eventType?: string;
         selector?: unknown;
         taskTemplate?: string;
+        conversationKey?: unknown;
         enabled?: boolean;
       } | undefined;
 
@@ -70,6 +83,13 @@ export async function triggerRoutes(
       if (body.selector !== undefined && !isJsonObject(body.selector)) {
         return reply.status(400).send({ error: 'selector must be a JSON object' });
       }
+      if (body.conversationKey !== undefined && body.conversationKey !== null) {
+        const keyError = checkConversationKey(body.conversationKey);
+        if (keyError) return reply.status(400).send({ error: keyError });
+      }
+      const conversationKey = typeof body.conversationKey === 'string' && body.conversationKey.trim() !== ''
+        ? body.conversationKey.trim()
+        : undefined;
 
       // Verify agent exists
       const agent = await db.getAgent(body.agentId);
@@ -84,6 +104,7 @@ export async function triggerRoutes(
           eventType: body.eventType,
           selector: body.selector,
           taskTemplate: body.taskTemplate,
+          ...(conversationKey ? { conversationKey } : {}),
           enabled: body.enabled ?? true,
         });
       } catch (err) {
@@ -166,6 +187,7 @@ export async function triggerRoutes(
           taskTemplate?: string;
           selector?: unknown;
           eventType?: string;
+          conversationKey?: string | null;
         };
       }>,
       reply: FastifyReply,
@@ -176,6 +198,7 @@ export async function triggerRoutes(
         taskTemplate?: string;
         selector?: unknown;
         eventType?: string;
+        conversationKey?: unknown;
       } | undefined;
 
       if (!body) {
@@ -189,6 +212,10 @@ export async function triggerRoutes(
       ) {
         return reply.status(400).send({ error: 'selector must be a JSON object or null' });
       }
+      if (body.conversationKey !== undefined && body.conversationKey !== null) {
+        const keyError = checkConversationKey(body.conversationKey);
+        if (keyError) return reply.status(400).send({ error: keyError });
+      }
 
       const updates = {
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
@@ -196,6 +223,12 @@ export async function triggerRoutes(
         ...(body.eventType !== undefined ? { eventType: body.eventType } : {}),
         ...(body.selector !== undefined ? {
           selector: body.selector === null ? undefined : body.selector,
+        } : {}),
+        // null or a blank string clears the key: later firings start new conversations.
+        ...(body.conversationKey !== undefined ? {
+          conversationKey: typeof body.conversationKey === 'string' && body.conversationKey.trim() !== ''
+            ? body.conversationKey.trim()
+            : undefined,
         } : {}),
       };
 

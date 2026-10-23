@@ -4407,6 +4407,7 @@ export class DatabaseRepository {
           selector: row.selector,
           selectorHash: row.selectorHash,
           taskTemplate: row.taskTemplate,
+          conversationKey: row.conversationKey ?? null,
           enabled: row.enabled,
         },
       })

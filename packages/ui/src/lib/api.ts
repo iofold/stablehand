@@ -542,6 +542,7 @@ export async function createTrigger(data: {
   eventType: string;
   selector?: Record<string, unknown>;
   taskTemplate: string;
+  conversationKey?: string;
   enabled?: boolean;
 }): Promise<Trigger> {
   return apiMutate<Trigger>(`${API_BASE}/triggers`, 'POST', data);
@@ -551,6 +552,7 @@ export async function updateTrigger(id: string, data: Partial<{
   eventType: string;
   selector: Record<string, unknown> | null;
   taskTemplate: string;
+  conversationKey: string | null;
   enabled: boolean;
 }>): Promise<Trigger> {
   return apiMutate<Trigger>(`${API_BASE}/triggers/${id}`, 'PUT', data);

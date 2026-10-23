@@ -153,12 +153,21 @@ interface TriggerRunCallbackDeps {
   eventBus: Pick<TypedEventBus, 'emit'>;
 }
 
+/**
+ * The conversation a keyed trigger firing continues. Derived from the agent
+ * and the rendered key, so the same thread always lands in the same
+ * conversation and two agents never share one.
+ */
+export function triggerConversationId(agentId: string, conversationKey: string): string {
+  return `thread-${createHash('sha256').update(`${agentId}\n${conversationKey}`).digest('hex').slice(0, 32)}`;
+}
+
 export function createTriggerRunCallback({
   db,
   turnStartupService,
   eventBus,
 }: TriggerRunCallbackDeps): TriggerRunCallback {
-  return async (agentId, task, triggerId, triggerDepth, eventSeq) => {
+  return async (agentId, task, triggerId, triggerDepth, eventSeq, options) => {
     const agent = await db.getAgent(agentId);
     // ctx-v6ef: these used to log and return, which recorded the firing as a
     // success. They are permanent until someone fixes the agent, so the
@@ -178,6 +187,9 @@ export function createTriggerRunCallback({
     const requestedTurnId = eventSeq === undefined
       ? undefined
       : `trigger-${createHash('sha256').update(`${triggerId}:${eventSeq}`).digest('hex').slice(0, 24)}`;
+    const conversationId = options?.conversationKey
+      ? triggerConversationId(agentId, options.conversationKey)
+      : undefined;
     let start: Awaited<ReturnType<TurnStartupService['prepareTurnStart']>>;
     try {
       start = await turnStartupService.prepareTurnStart({
@@ -187,6 +199,7 @@ export function createTriggerRunCallback({
         mode: 'background',
         emitUserMessageEvent: false,
         ...(requestedTurnId ? { requestedTurnId } : {}),
+        ...(conversationId ? { conversationId, createMissingConversationWithRequestedId: true } : {}),
       });
     } catch (err) {
       if (requestedTurnId && err instanceof Error && err.message.includes(`Turn already exists for id ${requestedTurnId}`)) {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createTriggerRunCallback } from '../container.js';
+import { createTriggerRunCallback, triggerConversationId } from '../container.js';
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { TurnStartupService } from '../../orchestrator/turn-startup-service.js';
 import type { TypedEventBus } from '../../events/bus.js';
@@ -68,6 +68,36 @@ describe('createTriggerRunCallback', () => {
 
     expect(eventBus.emit).toHaveBeenCalledWith('trigger.fired', expect.not.objectContaining({
       _triggerDepth: expect.anything(),
+    }));
+  });
+
+  it('continues the derived conversation when the firing carries a thread key', async () => {
+    const agent = { id: 'agent-1', harness: 'langgraph' } as NonNullable<Awaited<ReturnType<DatabaseRepository['getAgent']>>>;
+    const preparedRun = { turnId: 'turn-1' } as Awaited<ReturnType<TurnStartupService['prepareTurnStart']>>;
+    const db: Pick<DatabaseRepository, 'getAgent'> = {
+      getAgent: vi.fn().mockResolvedValue(agent),
+    };
+    const turnStartupService: Pick<TurnStartupService, 'prepareTurnStart' | 'requestDispatch'> = {
+      prepareTurnStart: vi.fn().mockResolvedValue(preparedRun),
+      requestDispatch: vi.fn(),
+    };
+    const eventBus: Pick<TypedEventBus, 'emit'> = { emit: vi.fn() };
+
+    const callback = createTriggerRunCallback({ db, turnStartupService, eventBus });
+    await callback('agent-1', 'reply to this', 'trigger-1', 1, 7, { conversationKey: '<root@example.com>' });
+    await callback('agent-1', 'no thread', 'trigger-1', 1, 8);
+
+    const conversationId = triggerConversationId('agent-1', '<root@example.com>');
+    expect(conversationId).toMatch(/^thread-[0-9a-f]{32}$/);
+    expect(triggerConversationId('agent-2', '<root@example.com>')).not.toBe(conversationId);
+    expect(triggerConversationId('agent-1', '<root@example.com>')).toBe(conversationId);
+    expect(turnStartupService.prepareTurnStart).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      content: 'reply to this',
+      conversationId,
+      createMissingConversationWithRequestedId: true,
+    }));
+    expect(turnStartupService.prepareTurnStart).toHaveBeenNthCalledWith(2, expect.not.objectContaining({
+      conversationId: expect.anything(),
     }));
   });
 });

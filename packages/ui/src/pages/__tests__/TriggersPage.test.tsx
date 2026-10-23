@@ -136,6 +136,26 @@ describe('TriggersPage', () => {
     expect(container.textContent).not.toContain('Failed to load triggers.');
   });
 
+  it('says when a trigger keeps one conversation per thread', async () => {
+    fetchTriggersMock.mockResolvedValueOnce([{
+      id: 'trigger-1',
+      agentId: 'agent-1',
+      eventType: 'custom.inbox.email',
+      taskTemplate: 'Reply to {{payload.subject}}',
+      conversationKey: '{{payload.threadId}}',
+      enabled: true,
+      createdAt: 1_755_000_000_000,
+    }]);
+
+    act(() => {
+      root.render(<TriggersPage />);
+    });
+    await flushEffects();
+
+    expect(container.querySelector('[data-testid="trigger-conversation-key"]')?.textContent)
+      .toBe('Events with the same {{payload.threadId}} continue one conversation.');
+  });
+
   it('shows a blocking retryable error on trigger load failures', async () => {
     fetchTriggersMock.mockRejectedValueOnce(new Error('triggers down'));
 
