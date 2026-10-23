@@ -584,10 +584,19 @@ export class InterruptResumeAttemptWorker {
       );
       return;
     }
-    this.deps.logger.error(
-      `${TAG} giving up resume attempt ${attempt.id} for turn ${attempt.turnId} `
-      + `after ${exhausted.attempts} attempt(s): ${error}`,
-    );
+    const alreadyGivenUp = attempt.status === 'failed'
+      && attempt.attempts >= MAX_INTERRUPT_RESUME_ATTEMPTS
+      && attempt.lastError === error;
+    if (alreadyGivenUp) {
+      this.deps.logger.info(
+        `${TAG} closing turn ${attempt.turnId} of given-up resume attempt ${attempt.id}`,
+      );
+    } else {
+      this.deps.logger.error(
+        `${TAG} giving up resume attempt ${attempt.id} for turn ${attempt.turnId} `
+        + `after ${exhausted.attempts} attempt(s): ${error}`,
+      );
+    }
 
     const closer = this.deps.turnCloser;
     if (!closer) {
