@@ -37,6 +37,11 @@ and the instruction text (`placeholderInstruction`).
    | buggy | HEAD with the fix's source diff reverse-applied. Tests stay at HEAD, so the fix's tests are present. |
    | agent | buggy with the fix's test diff also reverse-applied. This is what the solver sees: the new tests are hidden. |
 
+   Reverting tries an exact `git apply -R` first. If that fails because later commits moved the
+   context lines, it falls back to a per-file 3-way merge with `git merge-file` (HEAD, the fix, the
+   fix's parent), which is what `git revert` does. The solution patch is then regenerated as
+   `diff(buggy → HEAD)`, so `solve.sh` always applies.
+
    - Run the test modules the fix touched, 3 times on buggy and 3 times on fixed. Fail-to-pass
      tests are those that fail in every buggy run and pass in every fixed run. Anything that changes
      outcome between runs is `flaky`.
@@ -92,6 +97,12 @@ Outputs, all under `.work/` (gitignored):
 
 ## Gotchas hit in the spike
 
+- **Reverting at HEAD loses fixes in churned files.** On fastapi, 11 of 26 candidates conflict even
+  with the 3-way fallback, mostly in `fastapi/dependencies/utils.py` and `routing.py`, because later
+  commits rewrote the same lines. The 3-way fallback rescued only 1 extra candidate. The next step
+  is a per-candidate fallback: buggy = the fix's parent tree, fixed = the fix tree, run on the HEAD
+  env. That costs one extra suite run per candidate and risks dependency drift; whether it pays
+  needs measuring.
 - **Merge-based repos (rich, textual).** With `--no-merges` over all history, most "fix" commits
   are work in progress on PR branches, and their diffs were superseded before the merge. 5 of 6 rich
   candidates hit `reverse_patch_conflict`. Mining PR-level units (`--first-parent
