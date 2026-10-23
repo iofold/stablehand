@@ -15,8 +15,10 @@ import { sanitizeDbJsonValue, sanitizeDbText, sanitizeDbValue } from '../util/sa
 import { isForeignKeyViolation, isUniqueConstraintViolation } from './errors.js';
 import {
   SANDBOX_SESSION_STATUSES,
+  TURN_CANCELLED_MESSAGE,
   projectConversationStatus,
   type ApiSandboxSessionStatusCounts,
+  type ApiTurnStatus,
   type SandboxSessionStatus,
 } from '@stablehand/shared';
 import type {
@@ -3631,6 +3633,74 @@ export class DatabaseRepository {
     return this.db.query.turns.findFirst({
       where: eq(this.schema.turns.id, id),
     });
+  }
+
+  /**
+   * Cross-agent turn list (ctx-89id), newest first by queue-admission time.
+   * `tags` must all match (jsonb containment, served by the GIN index);
+   * `statuses` match the projected API status (see projectTurnStatus);
+   * `after` is the (queuedAt, id) of the last row of the previous page.
+   */
+  async searchTurns(options: {
+    tags?: Record<string, string>;
+    statuses?: readonly ApiTurnStatus[];
+    agentId?: string;
+    limit: number;
+    after?: { queuedAt: number; id: string };
+  }): Promise<{ turns: TurnSelect[]; hasMore: boolean }> {
+    const turns = this.schema.turns;
+    const limit = Math.max(1, Math.min(Math.trunc(options.limit), 200));
+    const filters: SQL[] = [];
+
+    if (options.tags && Object.keys(options.tags).length > 0) {
+      const containment = sanitizeDbJsonValue(options.tags, 'turns.search.tags');
+      filters.push(sql`${turns.tags} @> ${JSON.stringify(containment)}::jsonb`);
+    }
+    if (options.agentId) {
+      filters.push(eq(turns.agentId, sanitizeDbText(options.agentId, 'turns.search.agentId')));
+    }
+    if (options.statuses && options.statuses.length > 0) {
+      // Mirrors projectTurnStatus in @stablehand/shared.
+      const projectedStatus = sql`CASE
+        WHEN ${turns.error} = ${TURN_CANCELLED_MESSAGE} THEN 'CANCELLED'
+        WHEN ${turns.error} IS NOT NULL OR ${turns.status} = 'failed' THEN 'ERROR'
+        WHEN ${turns.completedAt} IS NOT NULL OR ${turns.status} = 'completed' THEN 'COMPLETED'
+        WHEN ${turns.status} = 'queued' THEN 'QUEUED'
+        ELSE 'RUNNING'
+      END`;
+      filters.push(sql`${projectedStatus} IN (${sql.join(
+        options.statuses.map((status) => sql`${status}`),
+        sql`, `,
+      )})`);
+    }
+    if (options.after) {
+      filters.push(or(
+        lt(turns.queuedAt, options.after.queuedAt),
+        and(
+          eq(turns.queuedAt, options.after.queuedAt),
+          lt(turns.id, sanitizeDbText(options.after.id, 'turns.search.cursor')),
+        ),
+      )!);
+    }
+
+    const rows = await this.db
+      .select()
+      .from(turns)
+      .where(filters.length > 0 ? and(...filters) : undefined)
+      .orderBy(desc(turns.queuedAt), desc(turns.id))
+      .limit(limit + 1);
+    return {
+      turns: rows.slice(0, limit),
+      hasMore: rows.length > limit,
+    };
+  }
+
+  async getSandboxSessionsByIds(ids: readonly string[]): Promise<SandboxSessionRow[]> {
+    if (ids.length === 0) return [];
+    return this.db
+      .select()
+      .from(this.schema.sandboxSessions)
+      .where(inArray(this.schema.sandboxSessions.id, [...ids]));
   }
 
   /**

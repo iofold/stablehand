@@ -537,6 +537,33 @@ export const TurnListResponseSchema = z.strictObject({
   turns: z.array(TurnSchema),
 });
 
+/**
+ * GET /api/turns (ctx-89id): turns across agents, newest first. Every tag must
+ * match; `status` matches any of the listed values. Tag keys used as filters
+ * cannot contain ':' because the query form is `tag=key:value`.
+ */
+export const TurnSearchInputSchema = z.strictObject({
+  tags: z.record(
+    z.string().trim().min(1).regex(/^[^:]+$/, 'Tag keys used as filters cannot contain ":"'),
+    z.string().min(1).max(256),
+  ).optional(),
+  status: z.union([TurnStatusSchema, z.array(TurnStatusSchema).min(1)]).optional(),
+  agentId: AgentIdSchema.optional(),
+  limit: z.number().int().positive().max(200).optional(),
+  cursor: z.string().trim().min(1).optional(),
+});
+
+export const TurnSearchResponseSchema = z.strictObject({
+  turns: z.array(TurnSchema),
+  /** Opaque; pass back as `cursor` for the next page. Absent on the last page. */
+  nextCursor: z.string().optional(),
+});
+
+/** GET /api/turns/:turnId — one turn by id, without its agent. */
+export const TurnLookupResponseSchema = z.strictObject({
+  turn: TurnSchema,
+});
+
 export const ToolCallStateSchema = z.strictObject({
   id: ToolCallIdSchema,
   name: z.string(),
@@ -1007,6 +1034,9 @@ export type AgentPatchInput = z.input<typeof AgentPatchInputSchema>;
 export type Agent = z.infer<typeof AgentSchema>;
 export type Turn = z.infer<typeof TurnSchema>;
 export type TurnDetailResponse = z.infer<typeof TurnDetailResponseSchema>;
+export type TurnStatus = z.infer<typeof TurnStatusSchema>;
+export type TurnSearchInput = z.input<typeof TurnSearchInputSchema>;
+export type TurnSearchResponse = z.infer<typeof TurnSearchResponseSchema>;
 export type Message = z.infer<typeof MessageSchema>;
 export type ConversationSnapshot = z.infer<typeof ConversationSnapshotResponseSchema>;
 export type Conversation = z.infer<typeof ConversationSchema>;

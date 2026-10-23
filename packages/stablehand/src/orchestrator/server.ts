@@ -12,6 +12,7 @@ import { artifactRoutes } from './routes/artifacts.js';
 import { catalogRoutes } from './routes/catalogs.js';
 import { eventRoutes } from './routes/events.js';
 import { interruptRoutes } from './routes/interrupts.js';
+import { turnRoutes } from './routes/turns.js';
 import { settingsRoutes } from './routes/settings.js';
 import { budgetRoutes } from './routes/budgets.js';
 import { apiKeyRoutes } from './routes/keys.js';
@@ -350,6 +351,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   await app.register(catalogRoutes, { prefix: '/api/catalogs' });
   await app.register(eventRoutes, { prefix: '/api/events', db });
   await app.register(interruptRoutes, { prefix: '/api/interrupts', db });
+  await app.register(turnRoutes, { prefix: '/api/turns', db });
   await app.register(budgetRoutes, { prefix: '/api/budgets', db });
   await app.register(apiKeyRoutes, { prefix: '/api/keys', db });
   await app.register(queueRoutes, { prefix: '/api/queue', db, ...(opts.turnDispatcher ? { dispatcher: opts.turnDispatcher } : {}) });

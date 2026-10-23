@@ -1372,6 +1372,8 @@ async function applySchema(sql: postgres.Sql): Promise<void> {
   await sql`DROP INDEX IF EXISTS idx_turns_session`;
   await sql`CREATE INDEX IF NOT EXISTS idx_turns_sandbox_session ON turns(sandbox_session_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_turns_status_open ON turns(status) WHERE completed_at IS NULL`;
+  // Newest-first keyset paging for the cross-agent turn list (ctx-89id).
+  await sql`CREATE INDEX IF NOT EXISTS idx_turns_queued_id ON turns(queued_at DESC, id DESC)`;
   // Admission leaves losers queued. The partial unique index is the final
   // cross-replica guard even when two replicas race on different turn rows.
   await sql`

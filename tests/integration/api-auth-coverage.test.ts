@@ -27,6 +27,8 @@ const EXPECTED_ROUTE_ACCESS: Readonly<Record<string, ExpectedRouteAccess>> = {
   'GET /api/agents/:id/turns/:turnId': 'agents:read',
   'GET /api/agents/:id/stream': 'agents:read',
   'GET /api/agents/:id/mcp-servers': 'agents:read',
+  'GET /api/turns': 'agents:read',
+  'GET /api/turns/:turnId': 'agents:read',
   'GET /api/conversations': 'agents:read',
   'GET /api/conversations/recent': 'agents:read',
   'GET /api/sandbox-sessions': 'agents:read',
@@ -194,7 +196,7 @@ describe('API auth route coverage', () => {
         : ((route as typeof route & { capability?: CapabilityVerb }).capability ?? 'master'),
     ]));
 
-    expect(routes).toHaveLength(94);
+    expect(routes).toHaveLength(96);
     expect(Object.keys(actual)).toHaveLength(routes.length);
     expect(actual).toEqual(EXPECTED_ROUTE_ACCESS);
   });

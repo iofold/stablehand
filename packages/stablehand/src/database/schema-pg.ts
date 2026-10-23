@@ -132,6 +132,7 @@ export const turns = pgTable('turns', {
   agentStartedIdx: index('idx_turns_agent_started').on(table.agentId, table.startedAt),
   sandboxSessionIdx: index('idx_turns_sandbox_session').on(table.sandboxSessionId),
   statusOpenIdx: index('idx_turns_status_open').on(table.status).where(sql`${table.completedAt} IS NULL`),
+  queuedIdIdx: index('idx_turns_queued_id').on(table.queuedAt.desc(), table.id.desc()),
   conversationRunningIdx: uniqueIndex('idx_turns_conversation_running')
     .on(table.conversationId)
     .where(sql`
