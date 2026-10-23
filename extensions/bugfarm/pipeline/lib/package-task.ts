@@ -5,7 +5,7 @@
 //   task.toml                 [metadata.bugfarm] provenance, separate verifier, no network
 //   environment/Dockerfile    FROM the env image, buggy tree at /app, no .git
 //   environment/docker-compose.yaml   forces network_mode: none (Harbor's no-network leaks DNS/ICMP)
-//   environment/repo/         the agent-visible buggy tree (fix source + fix tests reverted)
+//   environment/bugfarm-repo/ the agent-visible buggy tree (fix source + fix tests reverted)
 //   tests/test.sh             hidden tests overlay -> pytest -> grade.py -> /logs/verifier/reward.txt
 //   tests/grade.py, tests/expected.json, tests/hidden/, tests/deleted_tests.txt
 //   solution/solve.sh         applies solution/fix.patch (executable)
@@ -108,13 +108,13 @@ export async function packageTask(check: CheckResult, cand: Candidate, base: Hea
   const message = await commitMessage(cloneDir(check.repo), check.sha);
 
   // environment/
-  cpSync(join(check.workdir, 'agent'), join(dir, 'environment', 'repo'), { recursive: true });
+  cpSync(join(check.workdir, 'agent'), join(dir, 'environment', 'bugfarm-repo'), { recursive: true });
   writeText(join(dir, 'environment', 'Dockerfile'), [
     `FROM ${check.env_image}`,
     'LABEL bugfarm=1',
     '# The env image was built at HEAD; replace its tree with the buggy one and drop any VCS metadata.',
     'RUN rm -rf /app',
-    'COPY repo/ /app/',
+    'COPY bugfarm-repo/ /app/', // unique step name so pruneOwnBuildCache can find its cache records
     'RUN rm -rf /app/.git && mkdir -p /logs/verifier /logs/agent /logs/artifacts',
     'WORKDIR /app',
     '',

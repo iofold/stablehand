@@ -71,6 +71,54 @@ export async function runInTree(opts: {
   });
 }
 
+export interface CacheRecord {
+  id: string;
+  description: string;
+  sizeBytes: number;
+  inUse: boolean;
+  createdAt: string;
+}
+
+function parseSize(s: string): number {
+  const m = /([\d.]+)\s*([kKMGT]?B)/.exec(s);
+  if (!m) return 0;
+  const mult: Record<string, number> = { B: 1, kB: 1e3, KB: 1e3, MB: 1e6, GB: 1e9, TB: 1e12 };
+  return Math.round(Number(m[1]) * (mult[m[2]] ?? 1));
+}
+
+export async function buildCacheRecords(): Promise<CacheRecord[]> {
+  const out = await runOk('docker', ['buildx', 'du', '--verbose'], { timeoutMs: 5 * 60_000 });
+  const records: CacheRecord[] = [];
+  for (const block of out.split(/\n\s*\n/)) {
+    const field = (k: string) => new RegExp(`^${k}:\\s*(.*)$`, 'm').exec(block)?.[1]?.trim() ?? '';
+    const id = field('ID');
+    if (!id) continue;
+    records.push({ id, description: field('Description'), sizeBytes: parseSize(field('Size')), inUse: field('In use') === 'true', createdAt: field('Created at') });
+  }
+  return records;
+}
+
+/**
+ * Harbor's `compose down --rmi local` removes task images but leaves their build-cache records
+ * (one tree-sized COPY layer per task). Remove only unused records whose description matches a
+ * step that exists solely in this pipeline's Dockerfiles (`ownSteps`), never anyone else's cache.
+ */
+export async function pruneOwnBuildCache(ownSteps: string[], opts: { dryRun?: boolean } = {}): Promise<{ records: number; bytes: number }> {
+  const mine = (await buildCacheRecords()).filter((r) => !r.inUse && ownSteps.some((s) => r.description.includes(s)));
+  let bytes = 0;
+  let records = 0;
+  for (const r of mine) {
+    if (!opts.dryRun) {
+      const res = await run('docker', ['buildx', 'prune', '-f', '--filter', `id=${r.id}`]);
+      if (res.code !== 0) continue;
+    }
+    bytes += r.sizeBytes;
+    records++;
+  }
+  log('docker', `${opts.dryRun ? 'would prune' : 'pruned'} ${records} bugfarm build-cache records (${(bytes / 1e9).toFixed(2)} GB)`);
+  return { records, bytes };
+}
+
 /** Remove any container we labelled (a crashed or killed run can leave some behind). */
 export async function removeLabelledContainers(): Promise<number> {
   const ids = (await runOk('docker', ['ps', '-aq', '--filter', `label=${LABEL_KEY}=1`])).split('\n').filter(Boolean);

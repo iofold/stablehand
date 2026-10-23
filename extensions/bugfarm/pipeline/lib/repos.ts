@@ -116,6 +116,18 @@ export const PROFILES: Record<string, RepoProfile> = {
   },
 };
 
+/** Build steps that only this pipeline's task Dockerfiles contain (see package-task.ts). */
+export const TASK_BUILD_STEPS = ['COPY bugfarm-repo/ /app/', 'rm -rf /app/.git && mkdir -p /logs/verifier /logs/agent /logs/artifacts'];
+
+/** Build steps that only this pipeline's env Dockerfiles contain: every RUN line of every profile. */
+export function envBuildSteps(): string[] {
+  const steps = new Set<string>();
+  for (const p of Object.values(PROFILES)) {
+    for (const line of p.dockerfile.split('\n')) if (line.startsWith('RUN ')) steps.add(line.slice(4));
+  }
+  return [...steps];
+}
+
 export function profileFor(repo: string): RepoProfile {
   const p = PROFILES[repo];
   if (!p) throw new Error(`no profile for ${repo}; known: ${Object.keys(PROFILES).join(', ')}`);

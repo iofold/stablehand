@@ -21,6 +21,9 @@ const USAGE = `usage: cli.ts <command> [options]
   run       <owner/repo> [--limit N] [--concurrency 3]
             All of the above for N candidates, then print the funnel -> results/<slug>/funnel.json
   clean     Remove containers labelled bugfarm=1
+  prune-cache [--all] [--dry-run]
+            Remove build-cache records left by task builds (--all: env builds too); only steps
+            unique to this pipeline's Dockerfiles are matched
 `;
 
 async function main(): Promise<void> {
@@ -78,6 +81,14 @@ async function main(): Promise<void> {
     case 'clean': {
       const { removeLabelledContainers } = await import('./lib/docker.ts');
       console.log(`removed ${await removeLabelledContainers()} containers`);
+      break;
+    }
+    case 'prune-cache': {
+      const { pruneOwnBuildCache } = await import('./lib/docker.ts');
+      const { TASK_BUILD_STEPS, envBuildSteps } = await import('./lib/repos.ts');
+      const steps = args.all ? [...TASK_BUILD_STEPS, ...envBuildSteps()] : TASK_BUILD_STEPS;
+      const r = await pruneOwnBuildCache(steps, { dryRun: Boolean(args['dry-run']) });
+      console.log(`${args['dry-run'] ? 'would prune' : 'pruned'} ${r.records} records, ${(r.bytes / 1e9).toFixed(2)} GB`);
       break;
     }
     default:

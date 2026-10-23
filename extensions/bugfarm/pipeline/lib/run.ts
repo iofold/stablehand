@@ -8,10 +8,10 @@ import { checkCandidate, headBaseline } from './check-candidate.ts';
 import type { CheckResult, HeadBaseline } from './check-candidate.ts';
 import { judgeControls, runHarborAgent } from './controls.ts';
 import type { ControlTrial, ControlsVerdict } from './controls.ts';
-import { imageSize, removeLabelledContainers } from './docker.ts';
+import { imageSize, pruneOwnBuildCache, removeLabelledContainers } from './docker.ts';
 import { packageTask } from './package-task.ts';
 import type { PackagedTask } from './package-task.ts';
-import { profileFor } from './repos.ts';
+import { TASK_BUILD_STEPS, profileFor } from './repos.ts';
 import { mineCandidates } from './scout.ts';
 import type { Candidate } from './scout.ts';
 import { StageTimer, duBytes, ensureDir, fileExists, isDir, log, mapLimit, readJson, run, writeJson } from './util.ts';
@@ -101,6 +101,8 @@ export async function runControlsForRepo(repo: string, opts: { tasks?: string[];
   const filter = opts.tasks ? tasks : undefined;
   const oracle = await timer.time('controls_oracle', () => runHarborAgent(datasetDir, 'oracle', { jobName: `${slug}-oracle-${stamp}`, tasks: filter }));
   const nop = await timer.time('controls_nop', () => runHarborAgent(datasetDir, 'nop', { jobName: `${slug}-nop-${stamp}`, tasks: filter }));
+  // Task images are gone (harbor --delete) but their tree-sized COPY layers stay in the build cache.
+  await pruneOwnBuildCache(TASK_BUILD_STEPS);
   const verdicts = judgeControls(oracle.trials, nop.trials, tasks);
   const report: ControlsReport = {
     oracle: oracle.trials,
