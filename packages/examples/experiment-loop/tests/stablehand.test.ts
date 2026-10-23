@@ -150,14 +150,39 @@ describe('Stablehand adapter', () => {
     expect((saved.result as CampaignResult).winner.instructions).toBe('Use only functions that exist in Excel 2016.');
     expect(fake.events.at(-1)).toMatchObject({ type: 'custom.experiment.finished', payload: { winnerIteration: 1 } });
 
-    // The decision comes from the interrupt.resolved event, then promotion patches production's own manifest.
-    fake.events.push({ type: 'interrupt.resolved', turnId: published.reviewTurnId!, payload: { action: 'approve' } });
-    expect(await awaitReview(api, reviewer.id, published.reviewTurnId!, { timeoutMs: 1000, pollMs: 1 })).toBe('approve');
+    // The answer comes from what Stablehand records on the reviewer's turn. A timeout only parks
+    // the run; when the person answers later, the orchestrator writes APPROVED as the tool result.
+    const turnId = published.reviewTurnId!;
+    const card = (name: string, extra: Record<string, unknown>) => ({ type: 'CUSTOM', turnId, payload: { name, turnId, interruptId: 'i-1', ...extra } });
+    fake.events.push(
+      card('stablehand.interrupt.requested', { toolName: 'request-approval', toolCallId: 'rpc-1' }),
+      card('stablehand.interrupt.resolved', { action: 'timeout' }),
+    );
+    const lines: string[] = [];
+    expect(await awaitReview(api, reviewer.id, turnId, { timeoutMs: 20, pollMs: 2, log: (line) => lines.push(line) })).toBe('pending');
+    expect(lines).toEqual(['The approval card is waiting on the reviewer agent. Open it in the dashboard to approve or reject.']);
+    fake.setMessages(turnId, [{ role: 'assistant', content: 'Rejected' }, { role: 'tool', toolCallId: 'rpc-1', content: 'APPROVED' }]);
+    expect(await awaitReview(api, reviewer.id, turnId, { timeoutMs: 1000, pollMs: 1 })).toBe('approve');
     await promote(api, { productionAgentId: productionAgent!.id, winner: result.winner, fallbackManifest: production });
     const promoted = fake.calls('PATCH', new RegExp(`/api/agents/${productionAgent!.id}$`)).at(-1)?.json as { name: string; systemPrompt: string; metadata?: unknown };
     expect(promoted.name).toBe('ops-assistant');
     expect(promoted.systemPrompt).toBe('Use only functions that exist in Excel 2016.');
     expect(promoted.metadata).not.toMatchObject({ defaultTags: { campaign: 'experiment-loop' } });
+  });
+
+  it('reads an answer given while the run was still waiting, and ignores the reviewer model\'s own words', async () => {
+    fake.turnScripts.push({ statuses: ['RUNNING'], answer: '' }, { statuses: ['RUNNING'], answer: '' });
+    const first = await api.post<{ turnId: string }>('/api/agents/r/turns', { task: 'x' });
+    fake.events.push({ type: 'CUSTOM', turnId: first.turnId, payload: { name: 'stablehand.interrupt.resolved', action: 'approve' } });
+    expect(await awaitReview(api, 'r', first.turnId, { timeoutMs: 1000, pollMs: 1 })).toBe('approve');
+
+    const second = await api.post<{ turnId: string }>('/api/agents/r/turns', { task: 'x' });
+    fake.events.push({ type: 'CUSTOM', turnId: second.turnId, payload: { name: 'stablehand.interrupt.requested', toolName: 'request-approval', toolCallId: 'rpc-2' } });
+    fake.setMessages(second.turnId, [
+      { role: 'tool', toolCallId: 'rpc-2', content: '{"approved":false,"action":"reject","reason":"reject"}' },
+      { role: 'assistant', content: 'Approved' },
+    ]);
+    expect(await awaitReview(api, 'r', second.turnId, { timeoutMs: 1000, pollMs: 1 })).toBe('reject');
   });
 
   it('reports no decision when the review run ends without the card being resolved, and pending on timeout', async () => {

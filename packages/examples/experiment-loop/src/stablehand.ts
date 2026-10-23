@@ -3,7 +3,7 @@ import { manifestToAgentPatchInput, validateManifest } from '@stablehand/manifes
 
 import { ApiError, mapLimit, sleep, type StablehandApi } from './api.js';
 import { applyConfig, candidateManifest } from './config.js';
-import { gradeAnswer } from './grader.js';
+import { extractJsonObject, gradeAnswer } from './grader.js';
 import { iterationMarkdown, resultsPage, reviewerTask } from './report.js';
 import { renderTaskPrompt } from './tasks.js';
 import type {
@@ -39,6 +39,7 @@ interface ApiTurn {
 interface ApiMessage {
   role: string;
   content: unknown;
+  toolCallId?: string;
 }
 
 const ZERO_USAGE: Usage = { costUsd: 0, costComplete: true, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
@@ -392,10 +393,57 @@ interface ApiEvent {
   payload: string;
 }
 
+interface InterruptEvent {
+  name?: string;
+  toolName?: string;
+  toolCallId?: string;
+  action?: string;
+}
+
+type Answer = 'approve' | 'reject' | null;
+
 /**
- * Wait for the person's answer on the approval card. The decision is read
- * from the `interrupt.resolved` event Stablehand writes when the card is
- * resolved, not from the reviewer model's reply.
+ * The orchestrator writes the card's answer as the request-approval tool
+ * result: {"approved": true, "action": "approve"} when the run was still
+ * waiting, or APPROVED / REJECTED when it resumed a parked run.
+ */
+function answerFromToolResult(text: string): Answer {
+  const trimmed = text.trim();
+  if (/^APPROVED\b/.test(trimmed)) return 'approve';
+  if (/^REJECTED\b/.test(trimmed)) return 'reject';
+  const object = trimmed.startsWith('{') ? extractJsonObject(trimmed) : null;
+  return object?.action === 'approve' || object?.action === 'reject' ? object.action : null;
+}
+
+/** The approval card's state, from the reviewer turn's event log and the tool result. */
+async function readCard(api: StablehandApi, reviewerAgentId: string, turnId: string): Promise<{
+  requested: boolean;
+  answer: Answer;
+  running: boolean;
+}> {
+  const { events } = await api.get<{ events: ApiEvent[] }>(`/api/events?turnId=${turnId}&type=CUSTOM&limit=200`);
+  let toolCallId: string | null = null;
+  let answer: Answer = null;
+  for (const event of events) {
+    const payload = JSON.parse(event.payload) as InterruptEvent;
+    if (payload.name === 'stablehand.interrupt.requested' && payload.toolName === 'request-approval') toolCallId = payload.toolCallId ?? '';
+    // A "timeout" or "suspend" resolution only parks the run; the card stays open.
+    if (payload.name === 'stablehand.interrupt.resolved' && (payload.action === 'approve' || payload.action === 'reject')) {
+      answer = payload.action;
+    }
+  }
+  const detail = await api.get<{ turn: ApiTurn; messages: ApiMessage[] }>(`/api/agents/${reviewerAgentId}/turns/${turnId}`);
+  if (!answer && toolCallId) {
+    const result = detail.messages.find((message) => message.role === 'tool' && message.toolCallId === toolCallId);
+    answer = result ? answerFromToolResult(messageText(result.content)) : null;
+  }
+  return { requested: toolCallId !== null, answer, running: detail.turn.status === 'QUEUED' || detail.turn.status === 'RUNNING' };
+}
+
+/**
+ * Wait for the person's answer on the approval card. The answer is read from
+ * what Stablehand records when the card is answered (the resolved-interrupt
+ * event, or the tool result it writes), never from the reviewer model's reply.
  */
 export async function awaitReview(
   api: StablehandApi,
@@ -406,26 +454,13 @@ export async function awaitReview(
   const deadline = Date.now() + options.timeoutMs;
   let announced = false;
   for (;;) {
-    const resolved = await api.get<{ events: ApiEvent[] }>(`/api/events?type=interrupt.resolved&turnId=${turnId}&limit=20`);
-    for (const event of resolved.events) {
-      const payload = JSON.parse(event.payload) as { action?: string };
-      if (payload.action === 'approve' || payload.action === 'reject') return payload.action;
+    const card = await readCard(api, reviewerAgentId, turnId);
+    if (card.answer) return card.answer;
+    if (card.requested && !announced) {
+      announced = true;
+      options.log?.('The approval card is waiting on the reviewer agent. Open it in the dashboard to approve or reject.');
     }
-    if (!announced) {
-      const requested = await api.get<{ events: ApiEvent[] }>(`/api/events?type=interrupt.requested&turnId=${turnId}&limit=5`);
-      if (requested.events.length > 0) {
-        announced = true;
-        options.log?.('The approval card is waiting on the reviewer agent. Open it in the dashboard to approve or reject.');
-      }
-    }
-    const detail = await api.get<{ turn: ApiTurn }>(`/api/agents/${reviewerAgentId}/turns/${turnId}`);
-    if (detail.turn.status !== 'QUEUED' && detail.turn.status !== 'RUNNING') {
-      const last = await api.get<{ events: ApiEvent[] }>(`/api/events?type=interrupt.resolved&turnId=${turnId}&limit=20`);
-      const action = last.events
-        .map((event) => (JSON.parse(event.payload) as { action?: string }).action)
-        .find((value) => value === 'approve' || value === 'reject');
-      return action === 'approve' || action === 'reject' ? action : 'no-decision';
-    }
+    if (!card.running) return 'no-decision';
     if (Date.now() > deadline) return 'pending';
     await sleep(options.pollMs ?? 5000);
   }

@@ -30,7 +30,14 @@ export class FakeApi {
   turnStartError: { status: number; body: unknown } | null = null;
   /** Errors returned once each, in order, before turn starts succeed. */
   turnStartRefusals: Array<{ status: number; body: unknown; headers?: Record<string, string> }> = [];
-  private turns = new Map<string, { script: FakeTurnScript; polls: number; agentId: string }>();
+  private turns = new Map<string, { script: FakeTurnScript; polls: number; agentId: string; messages?: unknown[] }>();
+
+  /** Replace what the turn detail returns as messages (e.g. a tool result the orchestrator wrote). */
+  setMessages(turnId: string, messages: Array<{ role: string; content: string; toolCallId?: string }>): void {
+    const turn = this.turns.get(turnId);
+    if (!turn) throw new Error(`no fake turn ${turnId}`);
+    turn.messages = messages;
+  }
   private nextId = 1;
   private readonly extra: Handler[] = [];
 
@@ -115,11 +122,11 @@ export class FakeApi {
               cost: { totalUsd: coverage === 'complete' ? turn.script.costUsd ?? 0.002 : null, knownUsd: 0, coverage },
             } : null,
           },
-          messages: done ? [
+          messages: turn.messages ?? (done ? [
             { role: 'user', content: 'task' },
             { role: 'assistant', content: turn.script.answer },
             { role: 'assistant', content: '' },
-          ] : [],
+          ] : []),
         },
       };
     }
