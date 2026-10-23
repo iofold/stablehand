@@ -66,7 +66,7 @@ describe('BudgetStopBanner', () => {
     const banner = container.querySelector('[data-testid="budget-stop-banner"]');
     expect(banner?.getAttribute('role')).toBe('status');
     expect(banner?.textContent).toContain('Stopped: this run reached its $0.05 spend cap');
-    expect(banner?.textContent).toContain('It had spent $0.05.');
+    expect(banner?.textContent).toContain('It had spent $0.0512.');
     expect(banner?.textContent).toContain('per-run spend limit');
     // Consequence, not mechanism.
     expect(banner?.textContent).not.toMatch(/LiteLLM|virtual key|max_budget|429/);

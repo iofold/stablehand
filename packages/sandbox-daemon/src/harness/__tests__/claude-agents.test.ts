@@ -1412,7 +1412,7 @@ describe('Claude Agents spend-cap stop', () => {
       const errors = events.filter((event) => event.type === 'error');
       expect(errors).toEqual([{
         type: 'error',
-        error: expect.stringContaining('reached its spend cap ($0.05 spent of $0.05)'),
+        error: expect.stringContaining('reached its spend cap ($0.0512 spent of $0.05)'),
         code: 'model_gateway_budget_exceeded',
         details: { spentUsd: 0.0512, capUsd: 0.05 },
       }]);

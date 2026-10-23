@@ -242,6 +242,9 @@ export function formatSpendUsd(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '$0';
   if (value < 0.000001) return '<$0.000001';
   if (value < 0.01) return `$${Number(value.toPrecision(2))}`;
+  // Under a dollar, keep up to four decimals so a run that stopped one call
+  // past a $0.05 cap reads $0.0512, not a rounded-up $0.05 or $0.06.
+  if (value < 1) return `$${value.toFixed(4).replace(/(\.\d\d\d*?)0+$/, '$1')}`;
   return `$${value.toFixed(2)}`;
 }
 

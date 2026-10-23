@@ -151,6 +151,10 @@ describe('turn stop reasons', () => {
     expect(formatSpendUsd(0.05)).toBe('$0.05');
     expect(formatSpendUsd(12.5)).toBe('$12.50');
     expect(formatSpendUsd(0.0012)).toBe('$0.0012');
+    expect(formatSpendUsd(0.5)).toBe('$0.50');
+    expect(formatSpendUsd(0.0567103)).toBe('$0.0567');
+    expect(formatSpendUsd(0.1)).toBe('$0.10');
+    expect(formatSpendUsd(0.125)).toBe('$0.125');
     expect(formatSpendUsd(0.000053)).toBe('$0.000053');
     expect(formatSpendUsd(0.00000004)).toBe('<$0.000001');
     expect(formatSpendUsd(0)).toBe('$0');
@@ -164,7 +168,7 @@ describe('turn stop reasons', () => {
       spentUsd: 0.0512,
     })).toEqual({
       summary: 'Stopped: this run reached its $0.05 spend cap',
-      detail: 'It had spent $0.05. The cap is this agent\'s per-run spend limit.',
+      detail: 'It had spent $0.0512. The cap is this agent\'s per-run spend limit.',
     });
   });
 

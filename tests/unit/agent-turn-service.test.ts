@@ -2142,7 +2142,7 @@ describe('AgentTurnService spend-cap stops (ctx-ycek)', () => {
       'run-1',
       expect.objectContaining({
         status: 'error',
-        error: 'Stopped: this run reached its $0.05 spend cap. It had spent $0.05. The cap is this agent\'s per-run spend limit.',
+        error: 'Stopped: this run reached its $0.05 spend cap. It had spent $0.0512. The cap is this agent\'s per-run spend limit.',
         stopReason: expectedStop,
       }),
       expectedDeliveryFence(),
