@@ -71,7 +71,14 @@ export function deriveView(rows: Map<string, BoardRow>, firstSeen: Map<string, n
   const campaigns = ofKind(all, 'campaign').sort((a, b) => b.id - a.id);
   const campaignRow = campaigns[0] ?? null;
 
-  const items: Item[] = ofKind(all, 'item').map((row) => {
+  // Cards and batches written by the foreman name their campaign; show the current campaign's only.
+  const currentKey = campaignRow?.key;
+  const inCampaign = (payload: object) => {
+    const campaign = (payload as { campaign?: unknown }).campaign;
+    return typeof campaign !== 'string' || campaign === currentKey;
+  };
+
+  const items: Item[] = ofKind(all, 'item').filter((row) => inCampaign(row.payload)).map((row) => {
     const cached = itemCache.get(row);
     if (cached) return cached;
     const item: Item = {
@@ -102,6 +109,7 @@ export function deriveView(rows: Map<string, BoardRow>, firstSeen: Map<string, n
   }
 
   const batches: Batch[] = ofKind(all, 'batch')
+    .filter((row) => inCampaign(row.payload))
     .map((row) => {
       const share = batchShare(row.payload);
       const accepted = row.payload.accepted ?? 0;

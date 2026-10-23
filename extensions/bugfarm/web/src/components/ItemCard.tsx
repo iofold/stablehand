@@ -116,6 +116,16 @@ function ItemCardBase({ item, shown, isNew, onOpen }: ItemCardProps) {
           {item.title ?? item.key}
         </span>
 
+        {item.activity && stage !== 'rejected' && stage !== 'accepted' && stage !== 'published' && (
+          <span className="relative mt-1.5 flex min-w-0 items-center gap-1.5 text-[0.8rem] leading-snug text-ink-2" aria-live="polite">
+            <span className="relative flex h-1.5 w-1.5 shrink-0" aria-hidden>
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-pollen opacity-60 motion-reduce:hidden" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-pollen" />
+            </span>
+            <span className="truncate">{item.activity}</span>
+          </span>
+        )}
+
         {stage === 'rejected' ? (
           <span className="relative mt-2 flex min-w-0">
             <motion.span

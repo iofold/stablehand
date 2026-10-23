@@ -182,6 +182,11 @@ export function ReceiptDrawer({ item, attempts, onClose }: ReceiptDrawerProps) {
                 >
                   {item.diff ? <DiffView diff={item.diff} /> : <p className="text-ink-3">No diff was recorded for this candidate.</p>}
                 </Section>
+                {item.instruction && (
+                  <Section title="The task, as the solver sees it" aside="written by the Writer, checked for leaks">
+                    <pre className="whitespace-pre-wrap break-words rounded-well bg-well px-4 py-3 font-sans text-[0.95rem] leading-relaxed text-ink">{item.instruction}</pre>
+                  </Section>
+                )}
               </div>
               <div className="min-w-0 space-y-7 border-line px-5 py-5 sm:px-7 xl:overflow-y-auto xl:border-l xl:px-6 xl:scrollbar-thin">
                 <Section title="Failing test">
