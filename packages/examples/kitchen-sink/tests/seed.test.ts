@@ -30,6 +30,7 @@ interface MockApiOptions {
   existingTriggers?: MockTrigger[];
   failAgentName?: string;
   triggerStatus?: number;
+  env?: Record<string, string>;
 }
 
 function readBody(request: IncomingMessage): Promise<Buffer> {
@@ -169,6 +170,8 @@ async function runSeeder(options: MockApiOptions = {}): Promise<{
           ...process.env,
           API_URL: `http://127.0.0.1:${address.port}`,
           STABLEHAND_API_TOKEN: 'seed-test-token',
+          KITCHEN_SINK_TEST_AGENTS: '',
+          ...options.env,
         },
         timeout: 30_000,
       },
@@ -191,9 +194,30 @@ async function expectSeederFailure(options: MockApiOptions): Promise<void> {
   expect(failure).toMatchObject({ code: 1 });
 }
 
+function createdAgentNames(requests: RecordedRequest[]): string[] {
+  return requests
+    .filter((request) => request.method === 'POST' && request.path === '/api/agents')
+    .map((request) => (JSON.parse(request.body.toString('utf8')) as { name: string }).name)
+    .sort();
+}
+
 describe('kitchen-sink seeder', () => {
-  it('uploads declared manifest workspaces through authenticated API calls', async () => {
+  it('seeds the example chain and leaves the feature-test agents out by default', async () => {
     const { requests, stdout } = await runSeeder();
+
+    expect(stdout).toContain('Seed complete');
+    expect(createdAgentNames(requests)).toEqual(['claude-writer', 'langgraph-analyst', 'pi-auditor']);
+  });
+
+  it('uploads declared manifest workspaces through authenticated API calls', async () => {
+    const { requests, stdout } = await runSeeder({ env: { KITCHEN_SINK_TEST_AGENTS: '1' } });
+    expect(createdAgentNames(requests)).toEqual([
+      'claude-writer',
+      'langgraph-analyst',
+      'pi-auditor',
+      'test-claude-features',
+      'test-lg-features',
+    ]);
 
     expect(stdout).toContain('Seed complete');
     const workspaceUpload = requests.find(
@@ -219,7 +243,7 @@ describe('kitchen-sink seeder', () => {
   });
 
   it('exits nonzero when any agent cannot be seeded', async () => {
-    await expectSeederFailure({ failAgentName: 'test-claude-features' });
+    await expectSeederFailure({ failAgentName: 'langgraph-analyst' });
   });
 
   it('exits nonzero when a trigger cannot be seeded', async () => {

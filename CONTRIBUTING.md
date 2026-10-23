@@ -98,7 +98,8 @@ GitHub Actions (`.github/workflows/ci.yml`) runs these jobs on every push and PR
 
 - The repo is Docker-first today.
 - Agent harnesses execute inside Docker containers via the sandbox subsystem (`packages/stablehand/src/sandbox/`). The orchestrator creates a container per agent session, communicates via gRPC, and supports checkpoint/resume, timeout enforcement, and orphan cleanup.
-- `packages/examples/kitchen-sink` is the default project baked into the orchestrator image; `packages/examples/overnight-analyst` is the scheduled-agent example the README quickstart runs.
+- The orchestrator image's default project is the `packages/examples/kitchen-sink` tools and no agents, so a fresh install lists only seeded agents. `packages/examples/overnight-analyst` is the scheduled-agent example the README quickstart and `install.sh` seed; seed the kitchen-sink chain with its `seed.ts` (add `KITCHEN_SINK_TEST_AGENTS=1` for the `test-*` feature agents).
+- Agents in a project's `agents/` directory are registered once per database: deleting one keeps it deleted across restarts (`packages/stablehand/src/agent/project-seed.ts`).
 
 ## Pull Request Guidelines
 

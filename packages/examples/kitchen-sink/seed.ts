@@ -29,6 +29,9 @@ type TriggerResult = {
 const API_BASE = process.env.API_URL ?? 'http://localhost:3002';
 const API_TOKEN = process.env.STABLEHAND_API_TOKEN;
 const AGENTS_DIR = new URL('./agents/', import.meta.url);
+// agents/test-* exercise skills and subagents for Stablehand's own testing.
+// They are not part of the example and are seeded only on request.
+const INCLUDE_TEST_AGENTS = process.env.KITCHEN_SINK_TEST_AGENTS === '1';
 
 function authHeaders(): Record<string, string> {
   return API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {};
@@ -171,6 +174,7 @@ async function seed(): Promise<void> {
   const agentDirs = (await readdir(AGENTS_DIR, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
+    .filter((name) => INCLUDE_TEST_AGENTS || !name.startsWith('test-'))
     .sort();
   const importedAgents: Record<string, string> = {};
   const existingAgents = await fetchAgents();

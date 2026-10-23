@@ -11,6 +11,7 @@ agents/
   langgraph-agent/agent.yaml    Chain starter — analyst role (LangGraph, gpt-5.4-mini)
   claude-agent/agent.yaml       Chain middle — writer role (Claude, claude-sonnet-4-6)
   pi-agent/agent.yaml           Chain end — auditor role (PI Agent, gpt-5.4-mini)
+  test-*/agent.yaml             Feature-test agents (skills, subagents); seeded only with KITCHEN_SINK_TEST_AGENTS=1
 tools/
   index.ts                      Barrel export (11 tools)
   calculator.ts                 Arithmetic (no approval)
@@ -78,7 +79,7 @@ Cascade protection: `MAX_TRIGGER_DEPTH=5` prevents infinite loops.
 | Add an agent | `agents/{name}/agent.yaml` | Copy existing, change harness/model/tools |
 | Add a tool | `tools/{name}.ts` + `tools/index.ts` | `defineTool({ name, input: z.object(...), handler })` |
 | Add a trigger | `seed.ts` | POST to `/api/triggers` with eventType + taskTemplate |
-| Run the example | `docker compose up --build -d && npx tsx seed.ts` | Seeds agents + registers triggers |
+| Run the example | `docker compose up --build -d && npx tsx seed.ts` | Seeds the three chain agents + registers triggers; the orchestrator image does not seed them on its own |
 | Run tests | `pnpm test` | Validates manifests and cross-harness compat |
 
 ## AGENT MANIFEST PATTERN

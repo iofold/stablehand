@@ -91,10 +91,13 @@ COPY --from=build /app/packages/sandbox-daemon/dist/ packages/sandbox-daemon/dis
 COPY --from=build /app/packages/proto/dist/ packages/proto/dist/
 COPY --from=build /app/packages/proto/gen/ packages/proto/gen/
 
-# The kitchen-sink example is the default project. Its tools run in this (root) process;
-# exec-command, a host shell, stays unregistered unless STABLEHAND_ENABLE_EXEC_COMMAND=1.
+# The default project is the kitchen-sink tools and no agents, so a fresh install lists
+# only the agents someone seeds (install.sh seeds the Overnight Analyst; the kitchen-sink
+# agents come from packages/examples/kitchen-sink/seed.ts). Mount a project's own agents/
+# at /app/project/agents to have them registered at start (create-stablehand does).
+# The tools run in this (root) process; exec-command, a host shell, stays unregistered
+# unless STABLEHAND_ENABLE_EXEC_COMMAND=1.
 COPY packages/examples/kitchen-sink/tools/ /app/project/tools/
-COPY packages/examples/kitchen-sink/agents/ /app/project/agents/
 
 EXPOSE 3001
 
