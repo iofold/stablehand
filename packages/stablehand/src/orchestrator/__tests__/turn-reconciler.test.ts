@@ -32,12 +32,14 @@ function createTurn(overrides: Record<string, unknown> = {}) {
 function createDeps(options: {
   openTurns?: ReturnType<typeof createTurn>[];
   interrupt?: Record<string, unknown> | undefined;
+  resumeAttempt?: Record<string, unknown> | undefined;
   messages?: Array<Record<string, unknown>>;
 } = {}) {
   const eventBus = { emit: vi.fn(), emitAsync: vi.fn().mockResolvedValue(undefined) };
   const db = {
     getOpenTurnsStartedBefore: vi.fn().mockResolvedValue(options.openTurns ?? []),
     getPendingInterruptForTurn: vi.fn().mockResolvedValue(options.interrupt),
+    getOpenInterruptResumeAttemptForTurn: vi.fn().mockResolvedValue(options.resumeAttempt),
     getMessages: vi.fn().mockResolvedValue(options.messages ?? []),
     getTurnFrames: vi.fn().mockResolvedValue([]),
     getSandboxSession: vi.fn().mockResolvedValue({
@@ -326,6 +328,36 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
 });
 
 describe('crash takeover of running turns (ADR 025)', () => {
+  it('leaves an approved turn whose resume is still open to the resume worker (ctx-2jp0)', async () => {
+    const deps = createDeps({
+      openTurns: [createTurn()],
+      resumeAttempt: { id: 'attempt-1', turnId: 'turn-1', status: 'pending', attempts: 0 },
+    });
+    const adoptRunningTurn = vi.fn(async (): Promise<TurnTakeoverResult> => ({
+      outcome: 'unavailable',
+      reason: 'the sandbox no longer had the turn running',
+    }));
+    const resetStrandedSession = vi.fn().mockResolvedValue(undefined);
+
+    const result = await reconcileStrandedTurnsOnStartup({
+      ...deps,
+      adoptRunningTurn,
+      resetStrandedSession,
+    }, BOOT_TIME);
+
+    expect(result).toEqual(expect.objectContaining({
+      failed: 0,
+      adopting: 0,
+      skippedHitlParked: 1,
+    }));
+    await expect(result.adoptionComplete).resolves.toEqual({ adopted: 0, failed: 0, skipped: 0 });
+    expect(adoptRunningTurn).not.toHaveBeenCalled();
+    expect(deps.db.claimTurnDeliveryLease).not.toHaveBeenCalled();
+    expect(deps.db.finalizeTurnIfOpen).not.toHaveBeenCalled();
+    expect(deps.db.finalizeTurnAndMarkLifecycleDraining).not.toHaveBeenCalled();
+    expect(resetStrandedSession).not.toHaveBeenCalled();
+  });
+
   it('hands a running turn with a sandbox to takeover instead of failing it', async () => {
     const deps = createDeps({ openTurns: [createTurn()] });
     const adoptRunningTurn = vi.fn(async (): Promise<TurnTakeoverResult> => ({ outcome: 'adopted' }));

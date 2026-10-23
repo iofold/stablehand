@@ -37,6 +37,7 @@ interface TurnReconcilerDeps {
     | 'getOpenTurnsStartedBefore'
     | 'getTurn'
     | 'getPendingInterruptForTurn'
+    | 'getOpenInterruptResumeAttemptForTurn'
     | 'getMessages'
     | 'stageAssistantMessageUpdate'
     | 'claimTurnDeliveryLease'
@@ -160,8 +161,8 @@ export function repairRunningEntries(entries: unknown[] | null | undefined, part
 /**
  * Startup turn reconciliation (ADR-014, ctx-nm3o, ADR 025). Any turn open at
  * boot that started before boot lost its in-process owner — unless it is
- * parked on a durable HITL interrupt (pending/timed_out row), which the
- * durable resume path (WS-B) owns.
+ * parked on a durable HITL interrupt (pending/timed_out row) or approved with
+ * a resume attempt still open, which the durable resume path (WS-B) owns.
  *
  * Running turns whose sandbox may still be executing them are handed to
  * crash takeover (`adoptRunningTurn`): the successor claims the delivery
@@ -206,6 +207,20 @@ export async function reconcileStrandedTurnsOnStartup(
       if (interrupt && (interrupt.status === 'pending' || interrupt.status === 'timed_out')) {
         skippedHitlParked++;
         deps.logger.info(`${TAG} turn ${turn.id} is parked on a durable HITL interrupt; leaving open for resume`);
+        continue;
+      }
+      // ctx-2jp0: an approved turn whose resume is still pending, running, or
+      // being retried belongs to the interrupt resume worker, which also closes
+      // it if the resume is given up. The delivery-lease claim refuses such a
+      // turn, so handing it to takeover only spun the claim-wait loop for 90 s
+      // and logged it as leased by another orchestrator.
+      const resumeAttempt = await deps.db.getOpenInterruptResumeAttemptForTurn(turn.id);
+      if (resumeAttempt) {
+        skippedHitlParked++;
+        deps.logger.info(
+          `${TAG} turn ${turn.id} was approved and its resume (attempt ${resumeAttempt.id}, `
+          + `${resumeAttempt.status}) belongs to the resume worker; leaving it open`,
+        );
         continue;
       }
 
