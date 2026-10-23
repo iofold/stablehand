@@ -140,7 +140,8 @@ export async function packageTask(check: CheckResult, cand: Candidate, base: Hea
   chmodSync(join(dir, 'tests', 'test.sh'), 0o755);
 
   // solution/
-  const fixPatch = readFileSync(join(check.workdir, 'src.patch'), 'utf8');
+  // buggy -> HEAD over the source files: the commit's diff, re-based when the 3-way revert was needed.
+  const fixPatch = readFileSync(join(check.workdir, 'fix.patch'), 'utf8');
   writeText(join(dir, 'solution', 'fix.patch'), fixPatch);
   writeText(join(dir, 'solution', 'solve.sh'), SOLVE_SH);
   chmodSync(join(dir, 'solution', 'solve.sh'), 0o755);
@@ -172,7 +173,8 @@ export async function packageTask(check: CheckResult, cand: Candidate, base: Hea
     `fix_date = ${q(cand.date)}`,
     `fix_subject = ${q(cand.subject)}`,
     `buggy_base = ${q(check.head)}`,
-    'buggy_recipe = "buggy_base with the fix source diff reverse-applied; the agent view also has the fix test diff reverse-applied"',
+    'buggy_recipe = "buggy_base with the fix source diff reverted; the agent view also has the fix test diff reverted"',
+    `revert_method = ${q(check.revert_method ? `source:${check.revert_method.source},tests:${check.revert_method.tests}` : 'unknown')}`,
     `env_image = ${q(check.env_image)}`,
     `source_files = ${qArr(cand.source_files)}`,
     `test_files = ${qArr(cand.test_files)}`,
@@ -198,7 +200,7 @@ export async function packageTask(check: CheckResult, cand: Candidate, base: Hea
   ].join('\n');
   writeText(join(dir, 'task.toml'), toml);
 
-  const testPatch = readFileSync(join(check.workdir, 'test.patch'), 'utf8');
+  const testPatch = readFileSync(join(check.workdir, 'hidden_tests.patch'), 'utf8');
   const swebench: Record<string, unknown> = {
     instance_id: `${check.repo.replace('/', '__')}-${check.sha.slice(0, 12)}`,
     repo: check.repo,

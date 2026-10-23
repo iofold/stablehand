@@ -4,12 +4,12 @@
 //   fixed = HEAD
 //   buggy = HEAD with the fix's source diff reverse-applied (tests stay at HEAD, i.e. include the fix's tests)
 //   agent = buggy with the fix's test diff reverse-applied too (what the solver sees; the new tests are hidden)
-import { cpSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { F2P_REPEATS, HEAD_SUITE_REPEATS, RESULTS_DIR, TREES_DIR } from './config.ts';
 import type { EnvBuildResult } from './build-env.ts';
 import { headTreeDir } from './build-env.ts';
-import { applyPatch, cloneDir, diffPaths } from './git.ts';
+import { applyPatch, cloneDir, diffPaths, diffTrees, revertFile3Way } from './git.ts';
 import { runPytest } from './pytest.ts';
 import type { Outcome, PytestRun } from './pytest.ts';
 import { isTestModule, profileFor } from './repos.ts';
@@ -44,6 +44,8 @@ export interface CheckResult {
   /** Fix test files absent at HEAD that the agent tree still has; the verifier deletes them. */
   deleted_test_files: string[];
   buggy_suite?: { seconds: number; passed: number; failed: number; timed_out: boolean };
+  /** `apply` = exact `git apply -R`; `3way` = per-file 3-way revert because context moved since the fix. */
+  revert_method?: { source: 'apply' | '3way'; tests: 'apply' | '3way' };
   timings: Record<string, number>;
   workdir: string;
 }
@@ -133,6 +135,33 @@ function outcomeIn(run: PytestRun, id: string): Outcome {
   return 'failed';
 }
 
+/**
+ * Revert the fix's share of `files` in `tree`: exact `git apply -R` first, then a per-file 3-way
+ * merge (what `git revert` does) when later commits moved the context lines.
+ */
+async function revertInto(tree: string, patchFile: string, sha: string, files: string[], clone: string, scratch: string): Promise<{ ok: true; method: 'apply' | '3way' } | { ok: false; message: string }> {
+  const exact = await applyPatch(tree, patchFile, { reverse: true });
+  if (exact.ok) return { ok: true, method: 'apply' };
+  const updates: Array<{ path: string; content: string | null }> = [];
+  for (const f of files) {
+    const p = join(tree, f);
+    const current = fileExists(p) ? readFileSync(p, 'utf8') : null;
+    const r = await revertFile3Way(clone, sha, f, current, scratch);
+    if (!r.ok) return { ok: false, message: `git apply -R: ${exact.message.split('\n')[0]}; 3-way: ${r.message}` };
+    updates.push({ path: f, content: r.content });
+  }
+  for (const u of updates) {
+    const p = join(tree, u.path);
+    if (u.content === null) rmSync(p, { force: true });
+    else {
+      ensureDir(dirname(p));
+      writeFileSync(p, u.content);
+    }
+  }
+  rmSync(scratch, { recursive: true, force: true });
+  return { ok: true, method: '3way' };
+}
+
 export function candidateDir(slug: string, sha: string): string {
   return join(TREES_DIR, slug, sha.slice(0, 12));
 }
@@ -181,12 +210,16 @@ export async function checkCandidate(cand: Candidate, env: EnvBuildResult, base:
     const head = headTreeDir(profile.slug);
     const buggy = join(dir, 'buggy');
     cpSync(head, buggy, { recursive: true });
-    const rs = await applyPatch(buggy, join(dir, 'src.patch'), { reverse: true });
-    if (!rs.ok) return reject('reverse_patch_conflict', `source diff does not reverse-apply at HEAD: ${rs.message}`);
+    const rs = await revertInto(buggy, join(dir, 'src.patch'), cand.sha, cand.source_files, clone, join(dir, '.merge'));
+    if (!rs.ok) return reject('reverse_patch_conflict', `source diff does not revert at HEAD: ${rs.message}`);
     const agent = join(dir, 'agent');
     cpSync(buggy, agent, { recursive: true });
-    const rt = await applyPatch(agent, join(dir, 'test.patch'), { reverse: true });
-    if (!rt.ok) return reject('reverse_patch_conflict', `test diff does not reverse-apply at HEAD: ${rt.message}`);
+    const rt = await revertInto(agent, join(dir, 'test.patch'), cand.sha, cand.test_files, clone, join(dir, '.merge'));
+    if (!rt.ok) return reject('reverse_patch_conflict', `test diff does not revert at HEAD: ${rt.message}`);
+    result.revert_method = { source: rs.method, tests: rt.method };
+    // Patches relative to the states we actually built (identical to the commit's diff on the fast path).
+    writeFileSync(join(dir, 'fix.patch'), await diffTrees(buggy, head, cand.source_files, join(dir, '.diff')));
+    writeFileSync(join(dir, 'hidden_tests.patch'), await diffTrees(agent, head, cand.test_files, join(dir, '.diff')));
     result.hidden_test_files = cand.test_files.filter((f) => fileExists(join(head, f)));
     result.deleted_test_files = cand.test_files.filter((f) => !fileExists(join(head, f)) && fileExists(join(agent, f)));
     timings.prepare_seconds = secs(Date.now() - ts);

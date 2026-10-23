@@ -1,7 +1,7 @@
 // Git plumbing over blobless clones. Tree-only queries (name-status) never fetch blobs;
 // numstat and diffs fetch blobs on demand, so they run only on the filtered candidates.
 import { dirname, join } from 'node:path';
-import { rmSync } from 'node:fs';
+import { cpSync, rmSync, writeFileSync } from 'node:fs';
 import { CLONES_DIR } from './config.ts';
 import { ensureDir, fileExists, log, run, runOk } from './util.ts';
 
@@ -131,6 +131,62 @@ export async function exportTree(dir: string, rev: string, outDir: string): Prom
   } finally {
     rmSync(tar, { force: true });
   }
+}
+
+/** Text content of `path` at `rev`, or null when the path does not exist there. */
+export async function fileAt(dir: string, rev: string, path: string): Promise<string | null> {
+  const r = await run('git', ['-C', dir, 'cat-file', '-p', `${rev}:${path}`], { timeoutMs: 5 * 60_000 });
+  return r.code === 0 ? r.stdout : null;
+}
+
+export type RevertOutcome = { ok: true; content: string | null } | { ok: false; message: string };
+
+/**
+ * Revert one file's share of commit `sha` on top of `current` (the file in the tree, null if absent)
+ * with a 3-way merge: current = HEAD, base = the fix, other = the fix's parent. This is what
+ * `git revert` does per file; unlike `git apply -R` it tolerates context lines that changed since.
+ * Returns the new content (null = delete) or the reason it conflicts.
+ */
+export async function revertFile3Way(cloneDirPath: string, sha: string, path: string, current: string | null, scratchDir: string): Promise<RevertOutcome> {
+  const base = await fileAt(cloneDirPath, sha, path);
+  const other = await fileAt(cloneDirPath, `${sha}^`, path);
+  if (base !== null && other === null) {
+    // The fix added this file: drop it if nobody changed it since.
+    if (current === null) return { ok: true, content: null };
+    return current === base ? { ok: true, content: null } : { ok: false, message: `${path}: added by the fix and changed since` };
+  }
+  if (base === null && other !== null) {
+    // The fix deleted this file: bring it back unless it reappeared since.
+    return current === null ? { ok: true, content: other } : { ok: false, message: `${path}: deleted by the fix and re-created since` };
+  }
+  if (base === null || other === null) return { ok: true, content: current };
+  if (current === null) return { ok: false, message: `${path}: deleted since the fix` };
+  ensureDir(scratchDir);
+  const [cur, bas, oth] = ['current', 'base', 'other'].map((n) => join(scratchDir, n));
+  writeFileSync(cur, current);
+  writeFileSync(bas, base);
+  writeFileSync(oth, other);
+  const r = await run('git', ['merge-file', '-p', '-L', 'HEAD', '-L', 'fix', '-L', 'before-fix', cur, bas, oth]);
+  if (r.code === 0) return { ok: true, content: r.stdout };
+  return { ok: false, message: `${path}: ${r.code !== null && r.code > 0 ? `${r.code} conflicting hunk(s)` : `merge-file failed: ${r.stderr.trim()}`}` };
+}
+
+/**
+ * A -p1 patch from `fromRoot` to `toRoot` restricted to `paths`, built with `git diff --no-index`
+ * over `a/` and `b/` copies so the headers read `a/<path>` / `b/<path>`.
+ */
+export async function diffTrees(fromRoot: string, toRoot: string, paths: string[], scratchDir: string): Promise<string> {
+  rmSync(scratchDir, { recursive: true, force: true });
+  for (const [side, root] of [['a', fromRoot], ['b', toRoot]] as const) {
+    ensureDir(join(scratchDir, side));
+    for (const p of paths) {
+      if (fileExists(join(root, p))) cpSync(join(root, p), join(scratchDir, side, p));
+    }
+  }
+  const r = await run('git', ['diff', '--no-index', '--no-prefix', '--binary', 'a', 'b'], { cwd: scratchDir, env: { GIT_CEILING_DIRECTORIES: dirname(scratchDir) } });
+  rmSync(scratchDir, { recursive: true, force: true });
+  if (r.code !== 0 && r.code !== 1) throw new Error(`git diff --no-index failed: ${r.stderr.trim()}`);
+  return r.stdout;
 }
 
 /**
