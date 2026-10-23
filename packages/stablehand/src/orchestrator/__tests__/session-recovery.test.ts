@@ -20,6 +20,7 @@ import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import type { AgentDefinition, Message } from '@stablehand/sandbox-daemon';
 import { SessionStateStore } from '../session-manager/session-state-store.js';
 import { SessionStatusCoordinator } from '../session-manager/session-status-coordinator.js';
+import { TURN_ERROR_SANDBOX_ALREADY_ENDED_TURN } from '../turn-finalizer.js';
 import {
   CALLBACK_AGENT_ENV,
   CALLBACK_SESSION_ENV,
@@ -690,9 +691,29 @@ describe('SandboxSessionManager session recovery', () => {
       );
     });
 
-    it('zero-event sandbox completion emits turn_failed instead of false success', async () => {
+    it('a bare TurnCompleted acknowledgement emits turn_failed naming the duplicate, not false success (ctx-2jp0)', async () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
       grpcClient.deliverTurn.mockImplementationOnce(() => streamProtoEvents(protoTurnCompletedEvent('turn-empty')));
+
+      const events = await collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-empty'));
+
+      expect(events).toEqual([
+        expect.objectContaining({
+          type: 'turn_failed',
+          errorMessage: TURN_ERROR_SANDBOX_ALREADY_ENDED_TURN,
+        }),
+      ]);
+      expect(lifecyclePolicy.scheduleIdleTimeout).toHaveBeenCalledWith(
+        session.sessionId,
+        expect.any(String),
+        expect.any(Object),
+        undefined,
+      );
+    });
+
+    it('a stream with no frames at all emits turn_failed instead of false success', async () => {
+      const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
+      grpcClient.deliverTurn.mockImplementationOnce(() => streamProtoEvents());
 
       const events = await collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-empty'));
 

@@ -40,6 +40,34 @@ export function turnErrorSandboxStreamEndedWithoutCompletion(eventCount: number)
     + 'The turn was closed as interrupted to avoid recording a false success. Please retry.';
 }
 
+/**
+ * The sandbox answered a delivery with a bare TurnCompleted frame: it had
+ * already finished this turn on its own and acknowledged the delivery as a
+ * duplicate without running anything (ctx-2jp0).
+ */
+export const TURN_ERROR_SANDBOX_ALREADY_ENDED_TURN =
+  'The sandbox had already ended this run on its own, so it could not be continued there.';
+
+const APPROVAL_NOT_RESUMED_PREFIX = 'The approval was recorded, but this run could not continue: ';
+
+/**
+ * A run parked on an approval could not be resumed after the decision was
+ * recorded (ctx-2jp0). `reason` says why, in plain words.
+ */
+export function turnErrorApprovalNotResumed(reason: string): string {
+  return `${APPROVAL_NOT_RESUMED_PREFIX}${reason}. `
+    + 'Messages saved before then are kept; start the run again to continue.';
+}
+
+/** True for copy produced by turnErrorApprovalNotResumed. */
+export function isApprovalNotResumedError(message: string | null | undefined): boolean {
+  return message?.startsWith(APPROVAL_NOT_RESUMED_PREFIX) ?? false;
+}
+
+/** Why a continuation failed when the sandbox had already ended the run. */
+export const APPROVAL_RESUME_SANDBOX_ENDED_RUN =
+  'its sandbox ended the run while it was waiting for the approval (the server restarted during the wait)';
+
 /** A turn reached stream end while at least one tool call was still running. */
 export const TURN_ERROR_RUNNING_TOOL_CALLS_AT_END =
   'Turn ended with running tool call(s); the turn was closed as interrupted instead of completed.';

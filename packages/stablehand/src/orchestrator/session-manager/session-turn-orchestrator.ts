@@ -31,6 +31,7 @@ import {
 import { ConcurrencyLimitError } from './concurrency-limit-error.js';
 import { SessionStatusCoordinator } from './session-status-coordinator.js';
 import {
+  TURN_ERROR_SANDBOX_ALREADY_ENDED_TURN,
   turnErrorSandboxConnectionLost,
   turnErrorSandboxStreamEndedWithoutCompletion,
 } from '../turn-finalizer.js';
@@ -783,8 +784,17 @@ export class SessionTurnOrchestrator {
     }
 
     if (eventCount === 0) {
-      const errorMessage = `Sandbox turn ${turnId} completed without emitting any events for session ${sessionId}`;
-      this.deps.logger.warn(`${TAG} ${errorMessage}`);
+      // A bare TurnCompleted frame is the sandbox acknowledging a duplicate
+      // delivery: it already ended this turn on its own and ran nothing now
+      // (ctx-2jp0). Say so instead of reporting an empty stream.
+      const errorMessage = sawTerminalFrame
+        ? TURN_ERROR_SANDBOX_ALREADY_ENDED_TURN
+        : `Sandbox turn ${turnId} completed without emitting any events for session ${sessionId}`;
+      this.deps.logger.warn(
+        sawTerminalFrame
+          ? `${TAG} sandbox session ${sessionId} acknowledged turn ${turnId} as already completed without running it`
+          : `${TAG} ${errorMessage}`,
+      );
       await this.settleTurnActive(sessionId, record);
       yield {
         type: 'turn_failed' as const,

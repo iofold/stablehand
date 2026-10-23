@@ -18,6 +18,11 @@ import {
 import type { AgentDefinition, AgentEvent, Message, SessionEvent } from '@stablehand/sandbox-daemon';
 import type { AgentSessionEvent, MessageCommittedEvent } from '../../packages/shared/src/events.js';
 import { TURN_CANCELLED_MESSAGE } from '../../packages/stablehand/src/orchestrator/turn-cancellation.js';
+import { InterruptContinuationUnrecoverableError } from '../../packages/stablehand/src/orchestrator/interrupt-continuation-error.js';
+import {
+  APPROVAL_RESUME_SANDBOX_ENDED_RUN,
+  TURN_ERROR_SANDBOX_ALREADY_ENDED_TURN,
+} from '../../packages/stablehand/src/orchestrator/turn-finalizer.js';
 import { CanonicalLog } from '../../packages/stablehand/src/orchestrator/canonical/canonical-log.js';
 import {
   TestTurnRegistry,
@@ -579,6 +584,34 @@ describe('AgentTurnService', () => {
       'sandbox-1',
       'run-1',
     );
+  });
+
+  it('marks a continuation the sandbox acknowledged as a duplicate as unrecoverable (ctx-2jp0)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fence = { ownerId: 'resume-worker', fenceToken: 8 };
+    const ctx = createDeps();
+    ctx.sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([
+      {
+        type: 'RUN_ERROR',
+        timestamp: 1,
+        runId: 'run-1',
+        error: TURN_ERROR_SANDBOX_ALREADY_ENDED_TURN,
+      },
+    ]));
+
+    const execution = new AgentTurnService(ctx.deps).executeTurn(makeParams({
+      sandboxSessionId: 'sandbox-1',
+      continuationAttemptId: 'attempt-1',
+      deliveryContext: { fence },
+    }));
+
+    await expect(execution).rejects.toBeInstanceOf(InterruptContinuationUnrecoverableError);
+    await expect(execution).rejects.toMatchObject({
+      turnId: 'run-1',
+      reason: APPROVAL_RESUME_SANDBOX_ENDED_RUN,
+    });
+    // The turn stays open here; the resume worker closes it with that reason.
+    expect(ctx.db.finalizeTurnIfOpen).not.toHaveBeenCalled();
   });
 
   it('atomically drains a reserved session reset with the owned terminal turn', async () => {

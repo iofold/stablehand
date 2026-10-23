@@ -22,11 +22,14 @@ import { isA2UIRenderTool } from '../a2ui/extract.js';
 import type { TurnSecrets } from './session-manager/turn-secrets.js';
 import { TURN_CANCELLED_MESSAGE, isTurnCancelled } from './turn-cancellation.js';
 import {
+  APPROVAL_RESUME_SANDBOX_ENDED_RUN,
   TOOL_CALL_INTERRUPTED_ERROR,
   TURN_ERROR_EMPTY_MODEL_OUTPUT,
   TURN_ERROR_RUNNING_TOOL_CALLS_AT_END,
+  TURN_ERROR_SANDBOX_ALREADY_ENDED_TURN,
   TurnFinalizer,
 } from './turn-finalizer.js';
+import { InterruptContinuationUnrecoverableError } from './interrupt-continuation-error.js';
 import { repairConversationRunningToolCalls } from './turn-reconciler.js';
 import { publishMessageCanonicalState } from './message-publisher.js';
 import type { TurnDeliveryContext } from './turn-delivery-fence.js';
@@ -782,11 +785,18 @@ export class AgentTurnService {
 
       if (isInterruptContinuation && finalStatus !== 'completed') {
         // A failed continuation stays retryable: only a successful continuation
-        // may terminalize the original HITL turn.
-        continuationExecutionError = new Error(
-          finalError
-            ?? `Interrupt continuation ${params.continuationAttemptId} failed`,
-        );
+        // may terminalize the original HITL turn. The exception is a sandbox
+        // that already ended the run on its own (ctx-2jp0): every retry would
+        // be acknowledged as a duplicate, so the resume worker closes the turn.
+        const message = finalError
+          ?? `Interrupt continuation ${params.continuationAttemptId} failed`;
+        continuationExecutionError = turnError?.message === TURN_ERROR_SANDBOX_ALREADY_ENDED_TURN
+          ? new InterruptContinuationUnrecoverableError(
+            turnId,
+            APPROVAL_RESUME_SANDBOX_ENDED_RUN,
+            message,
+          )
+          : new Error(message);
         if (sandboxSessionId) {
           await this.sessionManager.abandonTurnDelivery(
             sandboxSessionId,
