@@ -7,13 +7,17 @@
   "scripts": {
     "build": "pnpm run build:web && pnpm run build:server",
     "build:web": "vite build --config web/vite.config.ts",
-    "build:server": "esbuild src/main.ts src/sim/cli.ts --bundle --platform=node --format=esm --target=node22 --outdir=dist/server --entry-names=[name] --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "build:server": "esbuild src/main.ts src/sim/cli.ts src/cli/bugfarm.ts --bundle --platform=node --format=esm --target=node22 --outdir=dist/server --entry-names=[name] --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" && node -e \"require('node:fs').cpSync('pipeline/templates','dist/templates',{recursive:true})\"",
     "dev:web": "vite --config web/vite.config.ts",
     "start": "node dist/server/main.js",
     "sim": "node dist/server/cli.js",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
+    "bugfarm": "node dist/server/bugfarm.js"
   },
   "dependencies": {
+    "@stablehand/client": "workspace:*",
+    "@stablehand/contracts": "workspace:*",
+    "@stablehand/manifest": "workspace:*",
     "postgres": "^3.4.8",
     "zod": "^4.3.6"
   },

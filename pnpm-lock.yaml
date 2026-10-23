@@ -85,6 +85,15 @@ importers:
 
   extensions/bugfarm:
     dependencies:
+      '@stablehand/client':
+        specifier: workspace:*
+        version: link:../../packages/client
+      '@stablehand/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@stablehand/manifest':
+        specifier: workspace:*
+        version: link:../../packages/manifest
       postgres:
         specifier: ^3.4.8
         version: 3.4.8

@@ -19,6 +19,15 @@ export interface BugfarmConfig {
   sim: boolean;
   simSpeed: number;
   webDir: string | null;
+  /** Bearer secret for the floor agents' HTTP tools. Empty turns the tools off. */
+  toolsToken: string;
+  /** Floor agents by role; the foreman finds them by name. */
+  agentNames: { scout: string; env_builder: string; writer: string };
+  /** Concurrent pipeline jobs per kind. */
+  checkConcurrency: number;
+  controlsConcurrency: number;
+  /** Set to 0 to run the board and tools without driving campaigns. */
+  foreman: boolean;
 }
 
 function intFrom(value: string | undefined, fallback: number): number {
@@ -45,5 +54,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     sim: env.BUGFARM_SIM === '1' || env.BUGFARM_SIM === 'true',
     simSpeed: Number.isFinite(speed) && speed > 0 ? speed : 1,
     webDir: env.BUGFARM_WEB_DIR ?? null,
+    toolsToken: env.BUGFARM_TOOLS_TOKEN ?? '',
+    agentNames: {
+      scout: env.BUGFARM_SCOUT_AGENT ?? 'bugfarm-scout',
+      env_builder: env.BUGFARM_ENV_BUILDER_AGENT ?? 'bugfarm-env-builder',
+      writer: env.BUGFARM_WRITER_AGENT ?? 'bugfarm-writer',
+    },
+    checkConcurrency: intFrom(env.BUGFARM_CHECK_CONCURRENCY, 3),
+    controlsConcurrency: intFrom(env.BUGFARM_CONTROLS_CONCURRENCY, 2),
+    foreman: env.BUGFARM_FOREMAN !== '0' && env.BUGFARM_FOREMAN !== 'false',
   };
 }
