@@ -1,0 +1,78 @@
+# Throwaway stack for tests/integration/run.sh: the egress proxy image built from this repo, a
+# stub orchestrator that answers lease checks, a stub upstream behind it, and a sandbox-side
+# client (a harness image) that checks curl, git, Node, Python and Chromium per lease.
+# Its own networks and volumes only; run.sh always tears it down.
+services:
+  egress:
+    build:
+      context: ../..
+    image: ${STABLEHAND_EGRESS_IT_IMAGE:-stablehand/egress:integration-test}
+    # The stub upstream's certificate is self-signed; the proxy's own CA is what is under test.
+    command: ["--set", "ssl_insecure=true"]
+    environment:
+      STABLEHAND_EGRESS_LEASE_URL: http://orchestrator:3001/api/egress/lease
+      STABLEHAND_EGRESS_UNLEASED: global
+      STABLEHAND_EGRESS_LOG_ALLOWED: "1"
+      # The stub hosts resolve to private addresses, so the operator's rules mark them !internal.
+      STABLEHAND_EGRESS_RUNTIME_ALLOW: "* model.example.test/** !internal"
+      STABLEHAND_EGRESS_EXTRA_ALLOW: "* git.example.test/** !internal"
+    volumes:
+      - ca-public:/srv/egress-ca
+    networks: [sandbox, outside]
+
+  orchestrator:
+    image: ${STABLEHAND_EGRESS_IT_IMAGE:-stablehand/egress:integration-test}
+    entrypoint: ["python3", "/it/orchestrator.py"]
+    volumes:
+      - ./orchestrator.py:/it/orchestrator.py:ro
+    networks: [sandbox]
+
+  upstream:
+    image: ${STABLEHAND_EGRESS_IT_IMAGE:-stablehand/egress:integration-test}
+    entrypoint: ["python3", "/it/upstream.py"]
+    volumes:
+      - ./upstream.py:/it/upstream.py:ro
+      - www:/srv/www:ro
+    networks:
+      outside:
+        aliases: [model.example.test, git.example.test, other.example.test]
+
+  client:
+    image: ${STABLEHAND_EGRESS_IT_CLIENT_IMAGE:-ghcr.io/iofold/stablehand-harness-pi-agent:latest}
+    user: "0"
+    entrypoint: ["sh", "/it/client.sh"]
+    environment:
+      NO_PROXY: localhost,127.0.0.1,::1,orchestrator
+      no_proxy: localhost,127.0.0.1,::1,orchestrator
+      STABLEHAND_EGRESS_CA: /etc/stablehand/egress-ca/egress-ca.pem
+      NODE_EXTRA_CA_CERTS: /etc/stablehand/egress-ca/egress-ca.pem
+      SSL_CERT_FILE: /etc/stablehand/egress-ca/egress-ca.pem
+      REQUESTS_CA_BUNDLE: /etc/stablehand/egress-ca/egress-ca.pem
+      CURL_CA_BUNDLE: /etc/stablehand/egress-ca/egress-ca.pem
+      GIT_SSL_CAINFO: /etc/stablehand/egress-ca/egress-ca.pem
+      PYTHONPATH: /it/pylib
+    volumes:
+      - ./client.sh:/it/client.sh:ro
+      - ./client_browser.mjs:/app/client_browser.mjs:ro
+      - ./client_python.py:/it/client_python.py:ro
+      - ${STABLEHAND_EGRESS_IT_PYLIB:?run this stack through run.sh}:/it/pylib:ro
+      - ca-public:/etc/stablehand/egress-ca:ro
+      - www:/srv/www
+    depends_on:
+      egress:
+        condition: service_healthy
+      orchestrator:
+        condition: service_started
+      upstream:
+        condition: service_started
+    networks: [sandbox]
+
+volumes:
+  ca-public:
+  www:
+
+networks:
+  # Like stablehand-agents: no route out except through the egress service.
+  sandbox:
+    internal: true
+  outside: {}
