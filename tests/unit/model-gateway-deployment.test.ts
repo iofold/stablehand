@@ -12,6 +12,7 @@ interface ModelGatewayConfig {
       allowed_openai_params?: string[];
       chat_template_kwargs?: Record<string, unknown>;
     };
+    model_info?: Record<string, unknown>;
   }>;
 }
 
@@ -169,11 +170,30 @@ describe('model gateway deployment', () => {
       expect(params.output_cost_per_token as number).toBeGreaterThan(0);
       expect(params.extra_headers).toEqual({ 'cf-aig-skip-cache': 'true' });
     }
+    // LiteLLM's together_ai adapter strips tools and tool_choice for any model
+    // missing from its model map, and drop_params hides the removal, so every
+    // Workers AI route must opt them back in (LiteLLM 1.93.0, 2026-10-23).
+    // allowed_openai_params covers chat completions and /v1/messages;
+    // model_info.supports_function_calling is what keeps tools on the
+    // /v1/responses bridge the PI harness uses.
+    const expectedAllowedParams: Record<string, string[]> = {
+      'cf-gpt-oss-120b': ['tools', 'tool_choice'],
+      'cf-kimi-k2.7-code': ['tools', 'tool_choice'],
+      'cf-glm-5.2': ['tools', 'tool_choice'],
+      'cf-glm-5.2-no-thinking': ['tools', 'tool_choice', 'chat_template_kwargs'],
+      'cf-gemma-4-26b': ['tools', 'tool_choice'],
+      'cf-qwen3-30b': ['tools', 'tool_choice'],
+    };
+    for (const entry of workersAiModels) {
+      expect(entry.litellm_params?.allowed_openai_params).toEqual(
+        expectedAllowedParams[entry.model_name as string],
+      );
+      expect(entry.model_info).toEqual({ supports_function_calling: true });
+    }
     const noThinking = workersAiModels.find(
       (entry) => entry.model_name === 'cf-glm-5.2-no-thinking',
     );
     expect(noThinking?.litellm_params).toMatchObject({
-      allowed_openai_params: ['chat_template_kwargs'],
       chat_template_kwargs: { enable_thinking: false },
     });
     // The native cloudflare/ provider must stay retired: its only credential

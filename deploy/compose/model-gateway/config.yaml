@@ -98,6 +98,21 @@ model_list:
   #    second identical call across any turn produces NO spend row and that
   #    turn can never settle. Skipping the gateway cache restores per-call
   #    billing evidence (native-provider semantics).
+  #
+  # 4. Tool calling needs two settings on every route (LiteLLM 1.93.0,
+  #    2026-10-23). The together_ai adapter removes tools, tool_choice and
+  #    response_format unless LiteLLM's model map says the model supports
+  #    function calling, and none of these workers-ai/@cf/* names are in that
+  #    map. With drop_params on, tool-calling requests reach the model with no
+  #    tools and come back as plain text.
+  #    - allowed_openai_params: [tools, tool_choice] opts them back in for
+  #      /v1/chat/completions and /v1/messages.
+  #    - model_info.supports_function_calling: true is registered under the
+  #      backend model name the adapter checks. It is the only fix for
+  #      /v1/responses (the PI harness): LiteLLM does not forward
+  #      allowed_openai_params into its responses-to-chat bridge. It also lets
+  #      response_format through; all five backends accept json_schema.
+  #    parallel_tool_calls already passes through and needs no entry.
   - model_name: cf-gpt-oss-120b
     litellm_params:
       model: together_ai/workers-ai/@cf/openai/gpt-oss-120b
@@ -107,6 +122,11 @@ model_list:
       output_cost_per_token: 7.5e-07
       extra_headers:
         cf-aig-skip-cache: "true"
+      allowed_openai_params:
+        - tools
+        - tool_choice
+    model_info:
+      supports_function_calling: true
   - model_name: cf-kimi-k2.7-code
     litellm_params:
       model: together_ai/workers-ai/@cf/moonshotai/kimi-k2.7-code
@@ -116,6 +136,11 @@ model_list:
       output_cost_per_token: 4e-06
       extra_headers:
         cf-aig-skip-cache: "true"
+      allowed_openai_params:
+        - tools
+        - tool_choice
+    model_info:
+      supports_function_calling: true
   - model_name: cf-glm-5.2
     litellm_params:
       model: together_ai/workers-ai/@cf/zai-org/glm-5.2
@@ -125,6 +150,11 @@ model_list:
       output_cost_per_token: 4.4e-06
       extra_headers:
         cf-aig-skip-cache: "true"
+      allowed_openai_params:
+        - tools
+        - tool_choice
+    model_info:
+      supports_function_calling: true
   # Workers AI exposes GLM thinking control through chat_template_kwargs. The
   # OpenAI adapter does not include that field in its supported parameter set,
   # so this explicit alias opts it in without changing the reasoning-enabled
@@ -139,9 +169,13 @@ model_list:
       extra_headers:
         cf-aig-skip-cache: "true"
       allowed_openai_params:
+        - tools
+        - tool_choice
         - chat_template_kwargs
       chat_template_kwargs:
         enable_thinking: false
+    model_info:
+      supports_function_calling: true
   - model_name: cf-gemma-4-26b
     litellm_params:
       model: together_ai/workers-ai/@cf/google/gemma-4-26b-a4b-it
@@ -151,6 +185,11 @@ model_list:
       output_cost_per_token: 3e-07
       extra_headers:
         cf-aig-skip-cache: "true"
+      allowed_openai_params:
+        - tools
+        - tool_choice
+    model_info:
+      supports_function_calling: true
   - model_name: cf-qwen3-30b
     litellm_params:
       model: together_ai/workers-ai/@cf/qwen/qwen3-30b-a3b-fp8
@@ -160,6 +199,11 @@ model_list:
       output_cost_per_token: 3.35e-07
       extra_headers:
         cf-aig-skip-cache: "true"
+      allowed_openai_params:
+        - tools
+        - tool_choice
+    model_info:
+      supports_function_calling: true
 litellm_settings:
   turn_off_message_logging: true
   drop_params: true
