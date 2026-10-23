@@ -41,7 +41,12 @@ duplicating or dropping anything in the durable event log.
   orchestrator is unreachable, with backoff, for at most the window. A
   refusal for stale authority (the old owner's fence) waits until a successor
   installs a new capability, then retries with it. Every retry keeps the same
-  request id.
+  request id. The window opens at the first failure, not when the call
+  started, so a call that waits for minutes (an approval) still gets it; when
+  it closes with no orchestrator attached, the turn is abandoned as above
+  rather than handing the harness a tool failure it could finish the turn
+  with (ctx-2jp0: such a turn was recorded as completed in the sandbox, so
+  the late approval's continuation was acknowledged as a duplicate).
 - Since a dropped stream no longer cancels, cancellation is explicit: the new
   `CancelTurn` RPC, refused for a stale fence so a displaced owner cannot
   cancel the turn its successor adopted. The orchestrator sends it on user
