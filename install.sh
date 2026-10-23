@@ -168,8 +168,9 @@ if [ -n "${STABLEHAND_IMAGE_TAG:-}" ]; then
   candidates=$STABLEHAND_IMAGE_TAG
 else
   candidates=""
-  if have git && git rev-parse --git-dir >/dev/null 2>&1; then
-    candidates="sha-$(git rev-parse --short=7 HEAD)"
+  # A checkout with no commits (a fresh `git init`) has no HEAD; skip the sha tag then.
+  if have git && sha=$(git rev-parse --short=7 HEAD 2>/dev/null); then
+    candidates="sha-$sha"
   fi
   candidates="$candidates $(env_get STABLEHAND_IMAGE_TAG) latest"
 fi
