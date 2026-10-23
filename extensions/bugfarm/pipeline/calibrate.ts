@@ -585,7 +585,9 @@ export async function calibrate(taskDir: string, panel: FrozenPanel, budget: num
     if (launched >= cap(panel.ladder)) return 0;
     const target = panel.ladder.stages.find((s) => s > launched) ?? cap(panel.ladder);
     const est = costModel.estimate(f.model);
-    return (target - launched) * (est + est * panel.reserve_factor);
+    const need = (target - launched) * (est + est * panel.reserve_factor);
+    // A stage the budget cannot cover will not run; holding money for it would only starve the rest.
+    return need <= remaining() ? need : 0;
   };
 
   const views = (blocked: Set<Family> = new Set()): FamilyView[] => ladderViews(panel, task, store, blocked);
