@@ -21,6 +21,11 @@ export interface EventTrigger {
    * starting a new one each time.
    */
   conversationKey?: string;
+  /**
+   * Tags for the turns this trigger starts. Values may use payload
+   * placeholders; a tag whose placeholder has no value is left off.
+   */
+  tags?: Record<string, string>;
   /** Whether this trigger is active. */
   enabled: boolean;
   /** Creation time, epoch milliseconds (ctx-iqzy T5). */
@@ -80,6 +85,17 @@ export function renderConversationKey(
   template: string | undefined,
   payload: Record<string, unknown>,
 ): string | undefined {
+  return renderCompleteTemplate(template, payload);
+}
+
+/**
+ * Render a template only if every placeholder has a value: undefined when the
+ * template is unset, renders empty, or names a field the event lacks.
+ */
+function renderCompleteTemplate(
+  template: string | undefined,
+  payload: Record<string, unknown>,
+): string | undefined {
   if (!template || template.trim() === '') return undefined;
   let missing = false;
   const rendered = template.replace(PAYLOAD_PLACEHOLDER, (_placeholder, path: string) => {
@@ -89,4 +105,25 @@ export function renderConversationKey(
     return value ?? '';
   }).trim();
   return missing || rendered === '' ? undefined : rendered;
+}
+
+/**
+ * Resolve a trigger's tag templates against the event payload (ctx-89id),
+ * with the same placeholders as task templates. A tag whose placeholder has
+ * no value, or whose result is empty or longer than `maxValueLength`, is left
+ * off so the event's or the agent's tag for that key applies instead.
+ */
+export function interpolateTagTemplates(
+  templates: Record<string, string> | undefined,
+  payload: Record<string, unknown>,
+  maxValueLength: number,
+): Record<string, string> {
+  const tags: Record<string, string> = {};
+  if (!templates) return tags;
+  for (const [key, template] of Object.entries(templates)) {
+    const value = renderCompleteTemplate(template, payload);
+    if (value === undefined || value.length > maxValueLength) continue;
+    tags[key] = value;
+  }
+  return tags;
 }

@@ -46,6 +46,32 @@ describe('createTriggerRunCallback', () => {
     }));
   });
 
+  it('passes inherited trigger and event tags to the turn it starts (ctx-89id)', async () => {
+    const agent = { id: 'agent-1', harness: 'langgraph' } as NonNullable<Awaited<ReturnType<DatabaseRepository['getAgent']>>>;
+    const preparedRun = { turnId: 'turn-1' } as Awaited<ReturnType<TurnStartupService['prepareTurnStart']>>;
+    const db: Pick<DatabaseRepository, 'getAgent'> = {
+      getAgent: vi.fn().mockResolvedValue(agent),
+    };
+    const turnStartupService: Pick<TurnStartupService, 'prepareTurnStart' | 'requestDispatch'> = {
+      prepareTurnStart: vi.fn().mockResolvedValue(preparedRun),
+      requestDispatch: vi.fn(),
+    };
+    const eventBus: Pick<TypedEventBus, 'emit'> = { emit: vi.fn() };
+
+    const callback = createTriggerRunCallback({ db, turnStartupService, eventBus });
+    await callback('agent-1', 'task', 'trigger-1', 1, 7, { tags: { campaign: 'bugfarm-1' } });
+    await callback('agent-1', 'task', 'trigger-1', 1, 8);
+
+    // Inherited tags never fail a firing that continues an existing thread.
+    expect(turnStartupService.prepareTurnStart).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      tags: { campaign: 'bugfarm-1' },
+      keepConversationTags: true,
+    }));
+    expect(turnStartupService.prepareTurnStart).toHaveBeenNthCalledWith(2, expect.not.objectContaining({
+      tags: expect.anything(),
+    }));
+  });
+
   it('omits trigger depth when the source event was not already inside a cascade', async () => {
     const agent = { id: 'agent-1', harness: 'langgraph' } as NonNullable<Awaited<ReturnType<DatabaseRepository['getAgent']>>>;
     const preparedRun = { turnId: 'turn-1' } as Awaited<ReturnType<TurnStartupService['prepareTurnStart']>>;

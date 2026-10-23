@@ -14,6 +14,7 @@ import { TURN_CANCELLED_MESSAGE, isTurnCancelled } from '../../turn-cancellation
 import { TurnFinalizer } from '../../turn-finalizer.js';
 import { buildAgentDefinition } from '../../agent-definition.js';
 import { sendTurnStartError } from '../../turn-start-errors.js';
+import { parseTagsInput } from '../../turn-tags.js';
 import { toApiMessage } from '../agent-helpers.js';
 import { getRequestAgent, safeError, toApiAgentTurn } from './helpers.js';
 import type { AgentSubRouteOptions } from './types.js';
@@ -129,25 +130,6 @@ export async function turnRoutes(
     return Object.freeze({ ...parsed.data });
   };
 
-  const RESERVED_TAG_KEYS = new Set(['agent', 'harness', 'mode']);
-  const parseTags = (value: unknown): Record<string, string> | undefined => {
-    if (value === undefined || value === null) return undefined;
-    if (typeof value !== 'object' || Array.isArray(value)) {
-      throw new Error('tags must be an object of string values');
-    }
-    const tags: Record<string, string> = {};
-    for (const [key, tagValue] of Object.entries(value)) {
-      if (RESERVED_TAG_KEYS.has(key)) {
-        throw new Error(`tags.${key} is reserved (stamped by the system)`);
-      }
-      if (typeof tagValue !== 'string' || tagValue.length === 0 || tagValue.length > 256) {
-        throw new Error(`tags.${key} must be a non-empty string (max 256 chars)`);
-      }
-      tags[key] = tagValue;
-    }
-    return Object.keys(tags).length > 0 ? tags : undefined;
-  };
-
   const claimIdempotentStart = async (params: {
     agentId: string;
     idempotencyKey?: string;
@@ -251,7 +233,7 @@ export async function turnRoutes(
 
       try {
         const turnSecrets = parseSandboxSecrets(body.sandboxSecrets);
-        const tags = parseTags(body.tags);
+        const tags = parseTagsInput(body.tags);
         const requestedTurnId = parseRequestedId(body.requestedTurnId, 'requestedTurnId');
         const requestedConversationId = parseRequestedId(body.conversationId, 'conversationId');
         const idempotencyKey = readIdempotencyKey(request, requestedTurnId);
@@ -357,7 +339,7 @@ export async function turnRoutes(
       let ledger: { id: string; requestHash: string; turnId: string } | undefined;
       try {
         const turnSecrets = parseSandboxSecrets(body.sandboxSecrets);
-        const tags = parseTags(body.tags);
+        const tags = parseTagsInput(body.tags);
         const requestedTurnId = parseRequestedId(body.requestedTurnId, 'requestedTurnId');
         const requestedConversationId = parseRequestedId(body.conversationId, 'conversationId');
         const idempotencyKey = readIdempotencyKey(request, requestedTurnId);

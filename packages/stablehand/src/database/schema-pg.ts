@@ -434,6 +434,8 @@ export const eventTriggers = pgTable('event_triggers', {
   taskTemplate: text('task_template').notNull(),
   /** Thread key template: firings with the same rendered key share a conversation. */
   conversationKey: text('conversation_key'),
+  // Tag templates for the turns this trigger starts ({{payload.field}} allowed).
+  tags: jsonb('tags').$type<Record<string, string> | null>(),
   enabled: boolean('enabled').notNull().default(true),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 }, (table) => ({

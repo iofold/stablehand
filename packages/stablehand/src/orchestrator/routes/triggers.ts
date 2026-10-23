@@ -17,6 +17,7 @@ import {
   TriggerListResponseSchema,
   TriggerSchema,
 } from '@stablehand/contracts';
+import { parseTagsInput } from '../turn-tags.js';
 
 export interface TriggerRouteOptions {
   triggerManager: EventTriggerManager;
@@ -60,6 +61,7 @@ export async function triggerRoutes(
           selector?: unknown;
           taskTemplate: string;
           conversationKey?: string;
+          tags?: unknown;
           enabled?: boolean;
         };
       }>,
@@ -71,6 +73,7 @@ export async function triggerRoutes(
         selector?: unknown;
         taskTemplate?: string;
         conversationKey?: unknown;
+        tags?: unknown;
         enabled?: boolean;
       } | undefined;
 
@@ -91,6 +94,13 @@ export async function triggerRoutes(
         ? body.conversationKey.trim()
         : undefined;
 
+      let tags: Record<string, string> | undefined;
+      try {
+        tags = parseTagsInput(body.tags);
+      } catch (err) {
+        return reply.status(400).send({ error: (err as Error).message });
+      }
+
       // Verify agent exists
       const agent = await db.getAgent(body.agentId);
       if (!agent) {
@@ -105,6 +115,7 @@ export async function triggerRoutes(
           selector: body.selector,
           taskTemplate: body.taskTemplate,
           ...(conversationKey ? { conversationKey } : {}),
+          ...(tags ? { tags } : {}),
           enabled: body.enabled ?? true,
         });
       } catch (err) {
@@ -188,6 +199,7 @@ export async function triggerRoutes(
           selector?: unknown;
           eventType?: string;
           conversationKey?: string | null;
+          tags?: unknown;
         };
       }>,
       reply: FastifyReply,
@@ -199,6 +211,7 @@ export async function triggerRoutes(
         selector?: unknown;
         eventType?: string;
         conversationKey?: unknown;
+        tags?: unknown;
       } | undefined;
 
       if (!body) {
@@ -217,6 +230,14 @@ export async function triggerRoutes(
         if (keyError) return reply.status(400).send({ error: keyError });
       }
 
+      // `tags: null` (or `{}`) clears the trigger's tags.
+      let tags: Record<string, string> | undefined;
+      try {
+        tags = parseTagsInput(body.tags);
+      } catch (err) {
+        return reply.status(400).send({ error: (err as Error).message });
+      }
+
       const updates = {
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
         ...(body.taskTemplate !== undefined ? { taskTemplate: body.taskTemplate } : {}),
@@ -230,6 +251,7 @@ export async function triggerRoutes(
             ? body.conversationKey.trim()
             : undefined,
         } : {}),
+        ...(body.tags !== undefined ? { tags } : {}),
       };
 
       let updated;

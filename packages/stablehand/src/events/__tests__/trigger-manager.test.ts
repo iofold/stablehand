@@ -14,6 +14,7 @@ function createDbMock() {
     hasTriggerFiring: vi.fn().mockResolvedValue(false),
     recordTriggerFiring: vi.fn().mockResolvedValue({ id: 'firing-1' }),
     recordTriggerFiringFailure: vi.fn().mockResolvedValue({ id: 'failed-1' }),
+    getTurn: vi.fn().mockResolvedValue(undefined),
   } as unknown as DatabaseRepository & {
     getTriggers: ReturnType<typeof vi.fn>;
     saveTrigger: ReturnType<typeof vi.fn>;
@@ -22,6 +23,7 @@ function createDbMock() {
     hasTriggerFiring: ReturnType<typeof vi.fn>;
     recordTriggerFiring: ReturnType<typeof vi.fn>;
     recordTriggerFiringFailure: ReturnType<typeof vi.fn>;
+    getTurn: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -356,6 +358,185 @@ describe('EventTriggerManager durable mutations', () => {
       errorCode: 'queue_full',
       error: 'Gave up after 8 attempts: queue full',
       attempts: 8,
+    });
+  });
+});
+
+describe('EventTriggerManager tag inheritance (ctx-89id)', () => {
+  const campaignTurn = {
+    id: 'turn-scout-1',
+    tags: {
+      campaign: 'bugfarm-1',
+      batch: '3',
+      agent: 'scout',
+      harness: 'pi',
+      mode: 'background',
+    },
+  };
+
+  it('carries the emitting turn\'s tags, without the system keys, into the triggered turn', async () => {
+    const { manager, db, onFire } = createManager();
+    db.getTurn.mockResolvedValue(campaignTurn);
+    const trigger = await manager.register({
+      agentId: 'env-builder',
+      eventType: 'custom.candidate.found',
+      taskTemplate: 'Build {{payload.sha}}',
+      enabled: true,
+    });
+
+    // Sandbox-emitted events are flat; the runtime stamps turnId on them.
+    await manager.handleRawEvent(rawEvent({
+      sourceType: 'custom.candidate.found',
+      payload: { sha: 'abc123', turnId: 'turn-scout-1', agentId: 'scout', timestamp: 1_000 },
+    }));
+
+    expect(db.getTurn).toHaveBeenCalledWith('turn-scout-1');
+    expect(onFire).toHaveBeenCalledWith('env-builder', 'Build abc123', trigger.id, 1, 42, {
+      tags: { campaign: 'bugfarm-1', batch: '3' },
+    });
+  });
+
+  it('uses a tags object on API-posted events and never lets it override the emitting turn', async () => {
+    const { manager, db, onFire } = createManager();
+    db.getTurn.mockResolvedValue(campaignTurn);
+    await manager.register({
+      agentId: 'writer',
+      eventType: 'custom.env.ready',
+      taskTemplate: 'Write',
+      enabled: true,
+    });
+
+    await manager.handleRawEvent(rawEvent({
+      sourceType: 'custom.env.ready',
+      payload: {
+        type: 'custom.env.ready',
+        agentId: '',
+        turnId: 'turn-scout-1',
+        payload: {
+          turnId: 'turn-scout-1',
+          tags: { campaign: 'elsewhere', repo: 'rich', agent: 'spoofed', empty: '', count: 3 },
+        },
+        timestamp: 1_000,
+      },
+    }));
+
+    expect(onFire.mock.calls[0]?.[5]?.tags).toEqual({
+      campaign: 'bugfarm-1',
+      batch: '3',
+      repo: 'rich',
+    });
+  });
+
+  it('uses payload tags alone when the event does not belong to a turn', async () => {
+    const { manager, db, onFire } = createManager();
+    await manager.register({
+      agentId: 'scout',
+      eventType: 'custom.batch.start',
+      taskTemplate: 'Scout',
+      enabled: true,
+    });
+
+    await manager.handleRawEvent(rawEvent({
+      sourceType: 'custom.batch.start',
+      payload: {
+        type: 'custom.batch.start',
+        agentId: '',
+        payload: { tags: { campaign: 'bugfarm-2' } },
+        timestamp: 1_000,
+      },
+    }));
+
+    expect(db.getTurn).not.toHaveBeenCalled();
+    expect(onFire.mock.calls[0]?.[5]?.tags).toEqual({ campaign: 'bugfarm-2' });
+  });
+
+  it('lets trigger tags, including templated ones, win over event tags', async () => {
+    const { manager, db, onFire } = createManager();
+    db.getTurn.mockResolvedValue(campaignTurn);
+    const trigger = await manager.register({
+      agentId: 'reviewer',
+      eventType: 'custom.task.written',
+      taskTemplate: 'Review',
+      tags: {
+        stage: 'review',
+        batch: 'b{{payload.batchNo}}',
+        repo: '{{payload.missing}}',
+      },
+      enabled: true,
+    });
+    expect(manager.get(trigger.id)?.tags).toEqual({
+      stage: 'review',
+      batch: 'b{{payload.batchNo}}',
+      repo: '{{payload.missing}}',
+    });
+
+    await manager.handleRawEvent(rawEvent({
+      sourceType: 'custom.task.written',
+      payload: { batchNo: 4, turnId: 'turn-scout-1', timestamp: 1_000 },
+    }));
+
+    // Unresolved placeholders are left off so the lower-precedence value shows.
+    expect(onFire.mock.calls[0]?.[5]?.tags).toEqual({
+      campaign: 'bugfarm-1',
+      batch: 'b4',
+      stage: 'review',
+    });
+  });
+
+  it('passes no options when nothing carries tags', async () => {
+    const { manager, onFire } = createManager();
+    const trigger = await manager.register({
+      agentId: 'agent-1',
+      eventType: 'custom.ready',
+      taskTemplate: 'process',
+      enabled: true,
+    });
+
+    await manager.handleRawEvent(rawEvent());
+
+    expect(onFire.mock.calls[0]).toEqual(['agent-1', 'process', trigger.id, 1, 42]);
+  });
+
+  it('persists trigger tags and clears them on update', async () => {
+    const { manager, db } = createManager();
+    const trigger = await manager.register({
+      agentId: 'agent-1',
+      eventType: 'custom.ready',
+      taskTemplate: 'process',
+      tags: { campaign: 'bugfarm-1' },
+      enabled: true,
+    });
+    expect(db.saveTrigger).toHaveBeenLastCalledWith(expect.objectContaining({
+      tags: { campaign: 'bugfarm-1' },
+    }));
+
+    const updated = await manager.update(trigger.id, { tags: undefined });
+
+    expect(updated).not.toHaveProperty('tags');
+    expect(db.saveTrigger).toHaveBeenLastCalledWith(expect.objectContaining({ tags: null }));
+  });
+});
+
+describe('EventTriggerManager tags with conversation keys (ctx-89id)', () => {
+  it('passes the conversation key and the tags together', async () => {
+    const { manager, db, onFire } = createManager();
+    db.getTurn.mockResolvedValue({ id: 'turn-1', tags: { campaign: 'bugfarm-1' } });
+    const trigger = await manager.register({
+      agentId: 'writer',
+      eventType: 'custom.ready',
+      taskTemplate: 'Write',
+      conversationKey: 'task-{{payload.value}}',
+      tags: { stage: 'writer' },
+      enabled: true,
+    });
+
+    await manager.handleRawEvent(rawEvent({
+      payload: { type: 'custom.ready', agentId: 'agent-0', turnId: 'turn-1', payload: { value: 'abc' }, timestamp: 1_000 },
+    }));
+
+    expect(onFire).toHaveBeenCalledWith('writer', 'Write', trigger.id, 1, 42, {
+      conversationKey: 'task-abc',
+      tags: { campaign: 'bugfarm-1', stage: 'writer' },
     });
   });
 });

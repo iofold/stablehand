@@ -931,4 +931,213 @@ describe('Events and Triggers Integration', () => {
       }
     });
   });
+
+  describe('Triggered turn tags (ctx-89id)', () => {
+    it('stamps trigger, event and agent default tags on the triggered turn, in that order', async () => {
+      // Keep the triggered turn queued: this test is about its tags, not a sandbox run.
+      const launch = vi.spyOn(container.turnStartupService, 'launchPreparedTurn')
+        .mockResolvedValue(undefined);
+      try {
+        const suffix = Date.now().toString(36);
+        const sourceAgentId = await createAgent(`Tag Source ${suffix}`);
+        const target = await app.inject({
+          method: 'POST',
+          url: '/api/agents',
+          payload: {
+            name: `Tag Target ${suffix}`,
+            harness: 'langgraph',
+            harnessConfig: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+            systemPrompt: 'You are a test agent.',
+            tools: ['bash'],
+            metadata: { defaultTags: { team: 'platform', campaign: 'unset', stage: 'default' } },
+          },
+        });
+        expect(target.statusCode).toBe(201);
+        const targetAgentId = target.json().id as string;
+
+        // The turn that "emitted" the event, tagged for a campaign.
+        const conversation = await container.db.createConversation(sourceAgentId);
+        const sourceTurn = await container.db.createTurn({
+          id: `turn-source-${suffix}`,
+          agentId: sourceAgentId,
+          conversationId: conversation.id,
+          mode: 'background',
+          status: 'completed',
+          completedAt: Date.now(),
+          tags: {
+            campaign: 'bugfarm-1',
+            batch: '2',
+            agent: sourceAgentId,
+            harness: 'langgraph',
+            mode: 'background',
+          },
+        });
+
+        const eventType = `custom.tags.${suffix}`;
+        const trigger = await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: {
+            agentId: targetAgentId,
+            eventType,
+            taskTemplate: 'Build {{payload.sha}}',
+            tags: { stage: 'env-builder', repo: '{{payload.repo}}' },
+          },
+        });
+        expect(trigger.statusCode).toBe(201);
+        expect(trigger.json().tags).toEqual({ stage: 'env-builder', repo: '{{payload.repo}}' });
+
+        const emitted = await app.inject({
+          method: 'POST',
+          url: '/api/triggers/emit',
+          payload: {
+            type: eventType,
+            payload: {
+              turnId: sourceTurn.id,
+              sha: 'abc123',
+              repo: 'rich',
+              tags: { campaign: 'elsewhere', origin: 'worker' },
+            },
+          },
+        });
+        expect(emitted.statusCode).toBe(200);
+
+        let triggered: Awaited<ReturnType<typeof container.db.getTurnsByAgent>> = [];
+        for (let attempt = 0; attempt < 100 && triggered.length === 0; attempt += 1) {
+          triggered = await container.db.getTurnsByAgent(targetAgentId);
+          if (triggered.length === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+
+        expect(triggered).toHaveLength(1);
+        expect(triggered[0]?.taskDescription).toBe('Build abc123');
+        expect(triggered[0]?.tags).toEqual({
+          // From the emitting turn; the payload's campaign cannot override it.
+          campaign: 'bugfarm-1',
+          batch: '2',
+          // From the event payload.
+          origin: 'worker',
+          // From the agent's defaults, where nothing above set the key.
+          team: 'platform',
+          // From the trigger, which wins over everything.
+          stage: 'env-builder',
+          repo: 'rich',
+          // Stamped by the system.
+          agent: targetAgentId,
+          harness: 'langgraph',
+          mode: 'background',
+        });
+      } finally {
+        launch.mockRestore();
+      }
+    });
+
+    it('keeps a keyed thread on the tags it started with instead of failing the firing', async () => {
+      const launch = vi.spyOn(container.turnStartupService, 'launchPreparedTurn')
+        .mockResolvedValue(undefined);
+      try {
+        const suffix = Date.now().toString(36);
+        const targetAgentId = await createAgent(`Tag Thread ${suffix}`);
+        const eventType = `custom.tags.thread.${suffix}`;
+        const trigger = await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: {
+            agentId: targetAgentId,
+            eventType,
+            taskTemplate: 'Continue {{payload.step}}',
+            conversationKey: 'thread-{{payload.thread}}',
+          },
+        });
+        expect(trigger.statusCode).toBe(201);
+
+        const emit = async (step: string, campaign: string) => {
+          const emitted = await app.inject({
+            method: 'POST',
+            url: '/api/triggers/emit',
+            payload: { type: eventType, payload: { thread: 'a', step, tags: { campaign } } },
+          });
+          expect(emitted.statusCode).toBe(200);
+        };
+        const waitForTurns = async (count: number) => {
+          let turns: Awaited<ReturnType<typeof container.db.getTurnsByAgent>> = [];
+          for (let attempt = 0; attempt < 100 && turns.length < count; attempt += 1) {
+            turns = await container.db.getTurnsByAgent(targetAgentId);
+            if (turns.length < count) await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          return turns;
+        };
+
+        await emit('one', 'bugfarm-1');
+        await waitForTurns(1);
+        await emit('two', 'bugfarm-2');
+        const turns = (await waitForTurns(2)).sort((a, b) => a.queuedAt - b.queuedAt);
+
+        expect(turns.map((turn) => turn.taskDescription)).toEqual(['Continue one', 'Continue two']);
+        expect(turns[1]?.conversationId).toBe(turns[0]?.conversationId);
+        expect(turns.map((turn) => turn.tags.campaign)).toEqual(['bugfarm-1', 'bugfarm-1']);
+      } finally {
+        launch.mockRestore();
+      }
+    });
+
+    it('rejects trigger tags that break the tag rules', async () => {
+      const targetAgentId = await createAgent('Tag Rules Agent');
+      const reserved = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          agentId: targetAgentId,
+          eventType: 'custom.tags.reserved',
+          taskTemplate: 'Run',
+          tags: { agent: 'someone-else' },
+        },
+      });
+      expect(reserved.statusCode).toBe(400);
+      expect(reserved.json().error).toContain('reserved');
+
+      const tooLong = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          agentId: targetAgentId,
+          eventType: 'custom.tags.long',
+          taskTemplate: 'Run',
+          tags: { campaign: 'x'.repeat(257) },
+        },
+      });
+      expect(tooLong.statusCode).toBe(400);
+    });
+
+    it('updates and clears trigger tags', async () => {
+      const targetAgentId = await createAgent('Tag Update Agent');
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          agentId: targetAgentId,
+          eventType: 'custom.tags.update',
+          taskTemplate: 'Run',
+        },
+      });
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).not.toHaveProperty('tags');
+      const id = created.json().id as string;
+
+      const tagged = await app.inject({
+        method: 'PUT',
+        url: `/api/triggers/${id}`,
+        payload: { tags: { campaign: 'bugfarm-1' } },
+      });
+      expect(tagged.statusCode).toBe(200);
+      expect(tagged.json().tags).toEqual({ campaign: 'bugfarm-1' });
+
+      const cleared = await app.inject({
+        method: 'PUT',
+        url: `/api/triggers/${id}`,
+        payload: { tags: null },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json()).not.toHaveProperty('tags');
+    });
+  });
 });

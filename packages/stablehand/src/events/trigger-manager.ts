@@ -9,7 +9,8 @@ import type { DatabaseRepository } from '../database/repository.js';
 import type { TriggerSelect } from '../database/types.js';
 import { isUniqueConstraintViolation } from '../database/errors.js';
 import type { EventTrigger } from './triggers.js';
-import { interpolateTemplate, renderConversationKey } from './triggers.js';
+import { interpolateTagTemplates, interpolateTemplate, renderConversationKey } from './triggers.js';
+import { MAX_TAG_VALUE_LENGTH, pickValidTags } from '../orchestrator/turn-tags.js';
 import { matchesSelector } from './wait-condition.js';
 import type { SpineConsumer, SpineRawEvent } from './spine-consumer-runner.js';
 import {
@@ -68,6 +69,7 @@ function hydrateTrigger(row: TriggerSelect | undefined): EventTrigger | undefine
     selector: row.selector ?? undefined,
     taskTemplate: row.taskTemplate,
     ...(row.conversationKey ? { conversationKey: row.conversationKey } : {}),
+    ...(row.tags && Object.keys(row.tags).length > 0 ? { tags: row.tags } : {}),
     enabled: row.enabled,
     createdAt: row.createdAt,
   };
@@ -77,6 +79,11 @@ function hydrateTrigger(row: TriggerSelect | undefined): EventTrigger | undefine
 export interface TriggerFireOptions {
   /** Rendered thread key: runs with the same key continue one conversation. */
   conversationKey?: string;
+  /**
+   * Tags for the run (ctx-89id): the trigger's resolved tags laid over the
+   * event's tags. The callback lays them over the agent's default tags.
+   */
+  tags?: Record<string, string>;
 }
 
 /** Callback invoked when a trigger fires to start a background run. */
@@ -167,6 +174,7 @@ export class EventTriggerManager {
       selector: input.selector,
       taskTemplate: input.taskTemplate,
       ...(input.conversationKey ? { conversationKey: input.conversationKey } : {}),
+      ...(input.tags && Object.keys(input.tags).length > 0 ? { tags: input.tags } : {}),
       enabled: input.enabled ?? true,
       createdAt: input.createdAt ?? Date.now(),
     };
@@ -180,6 +188,7 @@ export class EventTriggerManager {
         selector: trigger.selector ?? null,
         taskTemplate: trigger.taskTemplate,
         conversationKey: trigger.conversationKey ?? null,
+        tags: trigger.tags ?? null,
         enabled: trigger.enabled,
         createdAt: trigger.createdAt,
       });
@@ -222,13 +231,14 @@ export class EventTriggerManager {
    */
   async update(
     triggerId: string,
-    updates: Partial<Pick<EventTrigger, 'enabled' | 'taskTemplate' | 'selector' | 'eventType' | 'conversationKey'>>,
+    updates: Partial<Pick<EventTrigger, 'enabled' | 'taskTemplate' | 'selector' | 'eventType' | 'conversationKey' | 'tags'>>,
   ): Promise<EventTrigger | undefined> {
     const existing = this.triggers.get(triggerId);
     if (!existing) return undefined;
 
     const updated: EventTrigger = { ...existing, ...updates };
     if (!updated.conversationKey) delete updated.conversationKey;
+    if (!updated.tags || Object.keys(updated.tags).length === 0) delete updated.tags;
     const duplicate = this.findBySignature(updated.agentId, updated.eventType, updated.selector);
     if (duplicate && duplicate.id !== triggerId) {
       throw new TriggerConflictError(
@@ -245,6 +255,7 @@ export class EventTriggerManager {
         selector: updated.selector ?? null,
         taskTemplate: updated.taskTemplate,
         conversationKey: updated.conversationKey ?? null,
+        tags: updated.tags ?? null,
         enabled: updated.enabled,
         createdAt: updated.createdAt,
       });
@@ -400,6 +411,7 @@ export class EventTriggerManager {
     const firedAgents = new Set<string>();
     const unsettled: Array<{ trigger: EventTrigger; err: unknown; failure: TriggerFireFailure }> = [];
     const flatPayload = flattenEventPayload(payloadObj);
+    let eventTags: Promise<Record<string, string>> | undefined;
 
     for (const trigger of this.matchingTriggers(eventType, flatPayload)) {
       if (firedAgents.has(trigger.agentId)) continue;
@@ -414,7 +426,17 @@ export class EventTriggerManager {
 
       // Fire the run — errors are isolated per trigger within this event.
       try {
-        await this.fireTrigger(trigger, task, currentDepth, eventSeq, conversationKey);
+        eventTags ??= this.resolveEventTags(payloadObj, flatPayload);
+        // Precedence (ctx-89id): trigger tags > event tags > agent default
+        // tags. The run callback lays this map over the agent's defaults.
+        const tags = {
+          ...await eventTags,
+          ...interpolateTagTemplates(trigger.tags, flatPayload, MAX_TAG_VALUE_LENGTH),
+        };
+        await this.fireTrigger(trigger, task, currentDepth, eventSeq, {
+          ...(conversationKey ? { conversationKey } : {}),
+          ...(Object.keys(tags).length > 0 ? { tags } : {}),
+        });
         firedAgents.add(trigger.agentId);
         console.log(`[EventTriggerManager] trigger ${trigger.id} fired for agent ${trigger.agentId}`);
       } catch (err) {
@@ -560,16 +582,38 @@ export class EventTriggerManager {
     }
   }
 
+  /**
+   * The tags an event carries into the turns it triggers (ctx-89id):
+   * - the tags of the turn the event belongs to (`turnId`, which the runtime
+   *   stamps on everything an agent emits), minus the system keys;
+   * - plus a `tags` object in the event payload, for events posted through
+   *   the API or fired by a schedule. These cannot override the turn's own
+   *   tags, so an agent cannot move its work to another budget.
+   * Invalid entries are dropped rather than failing the trigger.
+   */
+  private async resolveEventTags(
+    payloadObj: Record<string, unknown>,
+    flatPayload: Record<string, unknown>,
+  ): Promise<Record<string, string>> {
+    const carried = pickValidTags(flatPayload.tags);
+    const turnId = typeof payloadObj.turnId === 'string' && payloadObj.turnId.length > 0
+      ? payloadObj.turnId
+      : undefined;
+    if (!turnId) return carried;
+    const turn = await this.db.getTurn(turnId);
+    return { ...carried, ...pickValidTags(turn?.tags) };
+  }
+
   private async fireTrigger(
     trigger: EventTrigger,
     task: string,
     currentDepth: number,
     eventSeq: number | undefined,
-    conversationKey?: string,
+    options: TriggerFireOptions = {},
   ): Promise<void> {
     if (this.retiredAgentIds.has(trigger.agentId)) return;
-    if (conversationKey) {
-      await this.onFire(trigger.agentId, task, trigger.id, currentDepth + 1, eventSeq, { conversationKey });
+    if (options.conversationKey || options.tags) {
+      await this.onFire(trigger.agentId, task, trigger.id, currentDepth + 1, eventSeq, options);
     } else {
       await this.onFire(trigger.agentId, task, trigger.id, currentDepth + 1, eventSeq);
     }

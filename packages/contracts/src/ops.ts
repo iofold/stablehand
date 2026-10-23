@@ -120,6 +120,9 @@ export const TriggerSchema = z.strictObject({
   taskTemplate: z.string(),
   /** Thread key template: firings that render the same key share a conversation. */
   conversationKey: z.string().optional(),
+  // Tags for the turns this trigger starts; values may use {{payload.field}}.
+  // They win over the event's tags, which win over the agent's default tags.
+  tags: z.record(z.string(), z.string()).optional(),
   enabled: z.boolean(),
   createdAt: EpochMillisSchema,
 });

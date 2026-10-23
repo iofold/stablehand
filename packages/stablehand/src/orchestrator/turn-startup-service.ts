@@ -86,6 +86,13 @@ export interface PrepareTurnStartParams {
    * conversation are rejected (TagConflictError).
    */
   tags?: Record<string, string>;
+  /**
+   * When the conversation already exists, keep its tags and ignore `tags`
+   * that differ instead of failing with TagConflictError. Triggered turns set
+   * this: their tags are inherited, not chosen, and a trigger whose
+   * conversation key continues a thread must not dead-letter over them.
+   */
+  keepConversationTags?: boolean;
 }
 
 export interface PreparedTurnStart {
@@ -186,9 +193,11 @@ export class TurnStartupService {
       : undefined;
     if (existingConversation && existingConversation.agentId === agentId) {
       const storedTags = existingConversation.tags ?? {};
-      for (const [key, value] of Object.entries(callerTags)) {
-        if (storedTags[key] !== value) {
-          throw new TagConflictError(existingConversation.id, key, storedTags[key] ?? '(unset)', value);
+      if (!params.keepConversationTags) {
+        for (const [key, value] of Object.entries(callerTags)) {
+          if (storedTags[key] !== value) {
+            throw new TagConflictError(existingConversation.id, key, storedTags[key] ?? '(unset)', value);
+          }
         }
       }
       conversationTags = storedTags;

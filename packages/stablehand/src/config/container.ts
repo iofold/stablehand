@@ -204,6 +204,12 @@ export function createTriggerRunCallback({
         emitUserMessageEvent: false,
         ...(requestedTurnId ? { requestedTurnId } : {}),
         ...(conversationId ? { conversationId, createMissingConversationWithRequestedId: true } : {}),
+        // Trigger and event tags, laid over the agent's default tags (ctx-89id).
+        // A keyed conversation that already exists keeps the tags it started
+        // with, so an inherited tag never fails the firing as a conflict.
+        ...(options?.tags && Object.keys(options.tags).length > 0
+          ? { tags: options.tags, keepConversationTags: true }
+          : {}),
       });
     } catch (err) {
       if (requestedTurnId && err instanceof Error && err.message.includes(`Turn already exists for id ${requestedTurnId}`)) {
