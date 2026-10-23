@@ -108,7 +108,9 @@ class RuleSyntaxError(ValueError):
     pass
 
 
-def parse_rule(line: str, source: str = "<inline>") -> Optional[Rule]:
+def parse_rule(line: str, source: str = "<inline>", *, allow_internal: bool = True) -> Optional[Rule]:
+    """Parse one rule. ``allow_internal=False`` refuses ``!internal``: only the operator's own rule
+    files may open private destinations, never rules that arrive per agent."""
     text = line.split("#", 1)[0].strip()
     if not text:
         return None
@@ -119,6 +121,8 @@ def parse_rule(line: str, source: str = "<inline>") -> Optional[Rule]:
     unknown = flags - {"!internal"}
     if unknown:
         raise RuleSyntaxError(f"{source}: unknown rule flag(s) {sorted(unknown)} in {line.strip()!r}")
+    if "!internal" in flags and not allow_internal:
+        raise RuleSyntaxError(f"{source}: !internal is not allowed here: {line.strip()!r}")
     port = match.group("port")
     return Rule(
         method=match.group("method").upper(),
@@ -130,10 +134,10 @@ def parse_rule(line: str, source: str = "<inline>") -> Optional[Rule]:
     )
 
 
-def parse_rules(lines: Iterable[str], source: str = "<inline>") -> list[Rule]:
+def parse_rules(lines: Iterable[str], source: str = "<inline>", *, allow_internal: bool = True) -> list[Rule]:
     rules: list[Rule] = []
     for number, line in enumerate(lines, start=1):
-        rule = parse_rule(line, f"{source}:{number}")
+        rule = parse_rule(line, f"{source}:{number}", allow_internal=allow_internal)
         if rule is not None:
             rules.append(rule)
     return rules

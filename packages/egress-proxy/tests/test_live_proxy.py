@@ -1,10 +1,15 @@
 """End-to-end checks against a real mitmdump started through the shipped entrypoint.
 
 Runs only inside the proxy image with the hosts that tests/run-in-docker.sh sets up:
-allowed.test -> 127.0.0.1 and denied.test -> 127.0.0.2, no network. Two upstream servers
-(one per address, plain HTTP and TLS) count every connection they accept, so each test can
-assert that a denied request never reached its target, not just that it got a 403.
+allowed.test and defaults.test -> 127.0.0.1, denied.test -> 127.0.0.2, no network. Two upstream
+servers (one per address, plain HTTP and TLS) count every connection they accept, so each test
+can assert that a denied request never reached its target, not just that it got a 403.
+
+A stub orchestrator answers lease checks, so the lease tests run the real proxy end to end:
+allowed.test is a runtime rule (every session keeps it), defaults.test is a server default
+(``deny`` sessions lose it).
 """
+import base64
 import datetime
 import http.client
 import ipaddress
@@ -22,19 +27,32 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENTRYPOINT = os.path.join(HERE, "..", "entrypoint.sh")
 PROXY = ("127.0.0.1", 18888)
+LEASE_PROXY = ("127.0.0.1", 18889)
+ORCHESTRATOR = ("127.0.0.1", 18090)
 HTTP_PORT, TLS_PORT = 18080, 18443
-RULES = """
+RUNTIME_RULES = """
 * allowed.test/** !internal
-GET *
 """
+RULES = """
+GET *
+* defaults.test/** !internal
+"""
+# The stub orchestrator's leases: (session, token) -> egress setting, or an HTTP status.
+LEASES = {
+    ("sess-deny", "tok-deny"): {"mode": "deny"},
+    ("sess-default", "tok-default"): {"mode": "default"},
+    # An agent rule can never open a private destination, even one it names exactly.
+    ("sess-allow", "tok-allow"): {"mode": "allow", "rules": ["GET denied.test/**"]},
+    ("sess-down", "tok-down"): 500,
+}
 
 
 def _live_environment() -> bool:
     if os.environ.get("STABLEHAND_EGRESS_LIVE") != "1" or not os.path.exists(ENTRYPOINT):
         return False
     try:
-        return (socket.gethostbyname("allowed.test"), socket.gethostbyname("denied.test")) == (
-            "127.0.0.1", "127.0.0.2")
+        return tuple(socket.gethostbyname(name) for name in ("allowed.test", "defaults.test", "denied.test")) == (
+            "127.0.0.1", "127.0.0.1", "127.0.0.2")
     except OSError:
         return False
 
@@ -43,7 +61,8 @@ class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_GET(self):
-        self.server.requests.append((self.command, self.path, self.headers.get("Host")))
+        self.server.requests.append((self.command, self.path, self.headers.get("Host"),
+                                     self.headers.get("Proxy-Authorization")))
         body = f"upstream:{self.server.name}".encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
@@ -68,6 +87,44 @@ class _Upstream(ThreadingHTTPServer):
     def verify_request(self, request, client_address):
         self.connections += 1
         return True
+
+
+class _LeaseHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        request = json.loads(self.rfile.read(length) or b"{}")
+        self.server.calls.append(request.get("sessionId"))
+        entry = LEASES.get((request.get("sessionId"), request.get("token")))
+        if entry is None:
+            status, payload = 401, {"error": "Invalid egress lease", "code": "invalid_lease"}
+        elif isinstance(entry, int):
+            status, payload = entry, {"error": "boom"}
+        else:
+            status, payload = 200, {"sessionId": request["sessionId"], "agentId": "agent-live",
+                                    "egress": entry, "ttlSeconds": 30}
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        pass
+
+
+class _Orchestrator(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, address):
+        super().__init__(address, _LeaseHandler)
+        self.calls = []
+
+
+def _proxy_auth(session, token):
+    return "Proxy-Authorization: Basic " + base64.b64encode(f"{session}:{token}".encode()).decode() + "\r\n"
 
 
 def _self_signed(tmp):
@@ -131,20 +188,29 @@ class LiveProxyTests(unittest.TestCase):
         cls.allowed_tls = _Upstream("allowed-tls", ("127.0.0.1", TLS_PORT), tls)
         cls.denied_tls = _Upstream("denied-tls", ("127.0.0.2", TLS_PORT), tls)
         cls.upstreams = (cls.allowed, cls.denied, cls.allowed_tls, cls.denied_tls)
-        for server in cls.upstreams:
+        cls.orchestrator = _Orchestrator(ORCHESTRATOR)
+        for server in (*cls.upstreams, cls.orchestrator):
             threading.Thread(target=server.serve_forever, daemon=True).start()
 
         rules = os.path.join(cls.tmp, "rules.txt")
         with open(rules, "w", encoding="utf-8") as handle:
             handle.write(RULES)
+        runtime_rules = os.path.join(cls.tmp, "rules.runtime.txt")
+        with open(runtime_rules, "w", encoding="utf-8") as handle:
+            handle.write(RUNTIME_RULES)
         cls.log_path = os.path.join(cls.tmp, "proxy.log")
         env = dict(
             os.environ,
             MITMPROXY_CONFDIR=os.path.join(cls.tmp, "conf"),
             STABLEHAND_EGRESS_CA_PUBLIC_DIR=os.path.join(cls.tmp, "ca"),
             STABLEHAND_EGRESS_PORT=str(PROXY[1]),
+            STABLEHAND_EGRESS_LEASE_PORT=str(LEASE_PROXY[1]),
+            STABLEHAND_EGRESS_LEASE_URL=f"http://{ORCHESTRATOR[0]}:{ORCHESTRATOR[1]}/api/egress/lease",
             STABLEHAND_EGRESS_RULES=rules,
+            STABLEHAND_EGRESS_RUNTIME_RULES=runtime_rules,
             STABLEHAND_EGRESS_EXTRA_ALLOW="",
+            STABLEHAND_EGRESS_RUNTIME_ALLOW="",
+            STABLEHAND_EGRESS_UNLEASED="global",
         )
         cls.log = open(cls.log_path, "w", encoding="utf-8")
         # The shipped entrypoint and options; upstream TLS here is self-signed, hence ssl_insecure.
@@ -156,6 +222,7 @@ class LiveProxyTests(unittest.TestCase):
         while True:
             try:
                 socket.create_connection(PROXY, timeout=1).close()
+                socket.create_connection(LEASE_PROXY, timeout=1).close()
                 break
             except OSError:
                 if time.time() > deadline or cls.proxy.poll() is not None:
@@ -168,7 +235,7 @@ class LiveProxyTests(unittest.TestCase):
         cls.proxy.terminate()
         cls.proxy.wait(timeout=10)
         cls.log.close()
-        for server in cls.upstreams:
+        for server in (*cls.upstreams, cls.orchestrator):
             server.shutdown()
             server.server_close()
 
@@ -192,19 +259,21 @@ class LiveProxyTests(unittest.TestCase):
 
     # ── helpers ──────────────────────────────────────────────────────────────────────────
 
-    def plain(self, raw):
-        with socket.create_connection(PROXY, timeout=10) as sock:
+    def plain(self, raw, proxy=PROXY):
+        with socket.create_connection(proxy, timeout=10) as sock:
             sock.sendall(raw)
             return _response(sock)
 
-    def tunnel(self, target, host_header=None):
-        sock = socket.create_connection(PROXY, timeout=10)
+    def tunnel(self, target, host_header=None, proxy=PROXY, extra=""):
+        sock = socket.create_connection(proxy, timeout=10)
         header = f"Host: {host_header}\r\n" if host_header else ""
-        sock.sendall(f"CONNECT {target} HTTP/1.1\r\n{header}\r\n".encode())
-        return sock, _status(_read_head(sock))
+        sock.sendall(f"CONNECT {target} HTTP/1.1\r\n{header}{extra}\r\n".encode())
+        head = _read_head(sock)
+        self.last_connect_head = head
+        return sock, _status(head)
 
-    def tls_request(self, target, sni, host_header):
-        sock, status = self.tunnel(target, target)
+    def tls_request(self, target, sni, host_header, proxy=PROXY, extra=""):
+        sock, status = self.tunnel(target, target, proxy, extra)
         self.assertEqual(status, 200)
         context = ssl.create_default_context()
         context.check_hostname = False
@@ -310,6 +379,77 @@ class LiveProxyTests(unittest.TestCase):
         self.assertEqual(reply, b"")
         self.assertIn("non_http_protocol", self.denial_reasons())
         self.assertNotContacted(self.allowed)
+
+
+    # ── session leases ───────────────────────────────────────────────────────────────────
+
+    def leased_get(self, url_host, session, token, proxy=LEASE_PROXY, path="/x"):
+        auth = _proxy_auth(session, token) if session else ""
+        return self.plain(
+            f"GET http://{url_host}{path} HTTP/1.1\r\nHost: {url_host}\r\n{auth}Connection: close\r\n\r\n".encode(),
+            proxy)
+
+    def test_lease_listener_challenges_requests_without_a_lease(self):
+        status, headers, body = self.leased_get("defaults.test:18080", None, None)
+        self.assertEqual((status, json.loads(body)["reason"]), (407, "lease_required"))
+        self.assertEqual(headers.get("Proxy-Authenticate"), 'Basic realm="stablehand-egress"')
+        sock, status = self.tunnel("defaults.test:18443", "defaults.test:18443", LEASE_PROXY)
+        sock.close()
+        self.assertEqual(status, 407)
+        self.assertIn(b"Proxy-Authenticate", self.last_connect_head)
+        self.assertNotContacted(self.allowed, self.allowed_tls)
+
+    def test_open_listener_without_a_lease_keeps_the_server_rules(self):
+        status, _, body = self.leased_get("defaults.test:18080", None, None, proxy=PROXY)
+        self.assertEqual((status, body), (200, b"upstream:allowed"))
+
+    def test_deny_lease_reaches_runtime_hosts_only(self):
+        for proxy in (PROXY, LEASE_PROXY):
+            status, _, body = self.leased_get("allowed.test:18080", "sess-deny", "tok-deny", proxy)
+            self.assertEqual((status, body), (200, b"upstream:allowed"))
+            self.assertIsNone(self.allowed.requests[-1][3])  # credentials never go upstream
+            self.setUp()
+            status, headers, body = self.leased_get("defaults.test:18080", "sess-deny", "tok-deny", proxy)
+            denial = json.loads(body)
+            self.assertEqual((status, denial["reason"], denial["source"]), (403, "no_matching_rule", "agent:deny"))
+            self.assertEqual(headers.get("X-Stablehand-Egress"), "denied")
+            self.assertNotContacted(self.allowed)
+
+    def test_deny_lease_through_a_tls_tunnel(self):
+        auth = _proxy_auth("sess-deny", "tok-deny")
+        sock, status = self.tunnel("defaults.test:18443", "defaults.test:18443", LEASE_PROXY, auth)
+        sock.close()
+        self.assertEqual(status, 403)
+        self.assertNotContacted(self.allowed_tls)
+        status, _, body = self.tls_request("allowed.test:18443", "allowed.test", "allowed.test:18443",
+                                           LEASE_PROXY, auth)
+        self.assertEqual((status, body), (200, b"upstream:allowed-tls"))
+        # The upstream never sees the sandbox's proxy credentials.
+        self.assertEqual([request[3] for request in self.allowed_tls.requests[-1:]], [None])
+
+    def test_default_lease_gets_the_server_defaults(self):
+        status, _, body = self.leased_get("defaults.test:18080", "sess-default", "tok-default")
+        self.assertEqual((status, body), (200, b"upstream:allowed"))
+
+    def test_agent_rules_cannot_open_private_destinations(self):
+        status, _, body = self.leased_get("denied.test:18080", "sess-allow", "tok-allow")
+        self.assertEqual(status, 502)
+        self.assertIn(b"resolves_to_private", body)
+        self.assertNotContacted(self.denied)
+
+    def test_bad_and_unverifiable_leases_are_refused(self):
+        for session, token, status, reason in (("sess-deny", "forged", 403, "invalid_lease"),
+                                               ("sess-down", "tok-down", 503, "lease_unverifiable")):
+            for proxy in (PROXY, LEASE_PROXY):
+                got, _, body = self.leased_get("allowed.test:18080", session, token, proxy)
+                self.assertEqual((session, proxy, got, json.loads(body)["reason"]), (session, proxy, status, reason))
+        self.assertNotContacted(self.allowed)
+
+    def test_lease_answers_are_cached(self):
+        before = self.orchestrator.calls.count("sess-default")
+        for _ in range(3):
+            self.leased_get("allowed.test:18080", "sess-default", "tok-default")
+        self.assertLessEqual(self.orchestrator.calls.count("sess-default") - before, 1)
 
 
 if __name__ == "__main__":

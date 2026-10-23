@@ -13,6 +13,7 @@ if [ -z "${STABLEHAND_EGRESS_TEST_IMAGE:-}" ]; then
 fi
 exec docker run --rm --network none \
   --add-host allowed.test:127.0.0.1 \
+  --add-host defaults.test:127.0.0.1 \
   --add-host denied.test:127.0.0.2 \
   --env STABLEHAND_EGRESS_LIVE=1 \
   --volume "$PACKAGE_DIR/tests:/opt/stablehand/tests:ro" \

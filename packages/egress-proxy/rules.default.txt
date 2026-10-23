@@ -1,6 +1,8 @@
 # Stablehand sandbox egress: server defaults.
 # Grammar: <METHOD|*> <host-glob>[:<port>][/<path-glob>] [!internal]
-# Everything not listed here (or in the agent's own egress list) is denied.
+# Sandboxes whose agent egress is "default" or "allow" get these rules, as do requests that carry
+# no session lease. Agents set to "deny" do not; they keep only rules.runtime.txt.
+# Everything not listed here, in rules.runtime.txt or in the agent's own egress rules is denied.
 
 # Package registries agents install from
 * registry.npmjs.org/**
@@ -13,10 +15,3 @@
 * api.github.com/**
 * codeload.github.com/**
 * *.githubusercontent.com/**
-
-# Model providers (direct-provider mode). Real keys leave the sandbox once ctx-2yek lands.
-* api.openai.com/**
-* api.anthropic.com/**
-* generativelanguage.googleapis.com/**
-* gateway.ai.cloudflare.com/**
-* openrouter.ai/**

@@ -1,0 +1,13 @@
+# Stablehand sandbox egress: what the runtime itself needs.
+# Grammar: <METHOD|*> <host-glob>[:<port>][/<path-glob>] [!internal]
+# Every sandbox gets these rules, including agents whose egress is set to "deny". Keep this list
+# to what a harness needs to run a turn. The orchestrator adds the model gateway, the artifact
+# store and the agent's own model endpoint per session when sandboxes reach them through the
+# proxy; in the compose stack they are reached directly and need no rule.
+
+# Model providers (direct-provider mode). Real keys leave the sandbox once ctx-2yek lands.
+* api.openai.com/**
+* api.anthropic.com/**
+* generativelanguage.googleapis.com/**
+* gateway.ai.cloudflare.com/**
+* openrouter.ai/**
