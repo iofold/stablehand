@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, extname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type postgres from 'postgres';
 import {
   CANONICAL_EVENT_CONTRACTS_MIGRATION_ID,
@@ -23,6 +27,14 @@ export const CURRENT_SCHEMA_VERSION = 1;
 export const SCHEMA_VERSION_TABLE = 'stablehand_schema_version';
 /** Version-marker table name from before the 2026-09-24 Stablehand rename. */
 export const LEGACY_SCHEMA_VERSION_TABLE = 'ctxmill_schema_version';
+/**
+ * Marker row recording the fingerprint of the last completed schema pass; its
+ * `baseline` column holds the fingerprint (see runMigrations).
+ */
+export const SCHEMA_FINGERPRINT_MARKER_ID = 'schema-fingerprint';
+/** One-time adoption of message/terminal history from before durable message identity. */
+export const MESSAGE_HISTORY_ADOPTION_MIGRATION_ID = 'message-history-adoption';
+export const MESSAGE_HISTORY_ADOPTION_MIGRATION_VERSION = 1;
 
 /**
  * Databases initialized before the rename carry their baseline marker under
@@ -86,7 +98,8 @@ async function renameColumn(
   );
 }
 
-async function assertSchemaBaseline(sql: postgres.Sql): Promise<void> {
+/** Returns true when the database already carries a stablehand baseline marker. */
+async function assertSchemaBaseline(sql: postgres.Sql): Promise<boolean> {
   const [versionTable] = await sql`
     SELECT to_regclass('public.stablehand_schema_version') AS table_name
   `;
@@ -102,7 +115,7 @@ async function assertSchemaBaseline(sql: postgres.Sql): Promise<void> {
         'Pre-release schema migrations only support the current baseline.',
       );
     }
-    return;
+    return true;
   }
 
   const existingTables = await sql`
@@ -120,6 +133,7 @@ async function assertSchemaBaseline(sql: postgres.Sql): Promise<void> {
       'Start with an empty database or restore from a versioned stablehand baseline.',
     );
   }
+  return false;
 }
 
 async function initializeSchemaBaseline(sql: postgres.Sql): Promise<void> {
@@ -139,6 +153,112 @@ async function initializeSchemaBaseline(sql: postgres.Sql): Promise<void> {
 }
 
 /**
+ * Source modules of the schema pass. Their bytes, plus the baseline version,
+ * form the fingerprint recorded after a completed pass: any edit to the DDL,
+ * a data-migration step or a data-migration version constant changes it.
+ */
+const SCHEMA_PASS_MODULES = [
+  'migrations',
+  'canonical-event-data-migration',
+  'tool-policy-data-migration',
+] as const;
+
+let cachedSchemaFingerprint: string | null | undefined;
+
+/**
+ * Fingerprint of the schema pass shipped in this build, or null when the
+ * source modules cannot be read (for example a bundled build). Without a
+ * fingerprint the pass runs on every start, as it always used to.
+ */
+export function schemaMigrationFingerprint(): string | null {
+  if (cachedSchemaFingerprint !== undefined) {
+    return cachedSchemaFingerprint;
+  }
+  try {
+    const selfPath = fileURLToPath(import.meta.url);
+    const extension = extname(selfPath);
+    const hash = createHash('sha256').update(`baseline:${CURRENT_SCHEMA_VERSION}\n`);
+    for (const moduleName of SCHEMA_PASS_MODULES) {
+      hash.update(`${moduleName}\n`);
+      hash.update(readFileSync(join(dirname(selfPath), `${moduleName}${extension}`)));
+    }
+    cachedSchemaFingerprint = hash.digest('hex').slice(0, 32);
+  } catch (error) {
+    console.warn(
+      '[migrations] cannot fingerprint the schema pass; it will run on every start:',
+      error instanceof Error ? error.message : error,
+    );
+    cachedSchemaFingerprint = null;
+  }
+  return cachedSchemaFingerprint;
+}
+
+async function readSchemaFingerprint(sql: postgres.Sql): Promise<string | null> {
+  const [row] = await sql`
+    SELECT baseline
+    FROM stablehand_schema_version
+    WHERE id = ${SCHEMA_FINGERPRINT_MARKER_ID}
+  `;
+  return typeof row?.baseline === 'string' ? row.baseline : null;
+}
+
+async function recordSchemaFingerprint(sql: postgres.Sql, fingerprint: string): Promise<void> {
+  await sql`
+    INSERT INTO stablehand_schema_version (id, version, baseline)
+    VALUES (${SCHEMA_FINGERPRINT_MARKER_ID}, ${CURRENT_SCHEMA_VERSION}, ${fingerprint})
+    ON CONFLICT (id) DO UPDATE
+    SET version = EXCLUDED.version,
+        baseline = EXCLUDED.baseline,
+        initialized_at = now()
+  `;
+}
+
+export interface MigrationOutcome {
+  /**
+   * `current`: this database recorded the same schema fingerprint, so the
+   * pass already completed with exactly this code and nothing ran.
+   * `applied`: the full pass ran (new database, new code, or no fingerprint).
+   */
+  schema: 'current' | 'applied';
+  fingerprint: string | null;
+}
+
+/**
+ * Bring the database to this build's schema.
+ *
+ * The full pass is idempotent but not free: every ALTER TABLE takes an
+ * ACCESS EXCLUSIVE lock even when it changes nothing, and it prints a notice
+ * per existing object. It therefore runs only when the recorded fingerprint
+ * differs from this build's (ctx-new8). The fingerprint is written last, so a
+ * pass interrupted part-way runs again on the next start. To force a pass on
+ * an unchanged build (for example after editing the schema by hand), delete
+ * the `schema-fingerprint` row from `stablehand_schema_version`.
+ */
+export async function runMigrations(sql: postgres.Sql): Promise<MigrationOutcome> {
+  await sql`SELECT pg_advisory_lock(${MIGRATION_ADVISORY_LOCK_ID})`;
+  try {
+    await adoptLegacySchemaVersionTable(sql);
+    const versioned = await assertSchemaBaseline(sql);
+    const fingerprint = schemaMigrationFingerprint();
+    if (
+      versioned
+      && fingerprint !== null
+      && await readSchemaFingerprint(sql) === fingerprint
+    ) {
+      return { schema: 'current', fingerprint };
+    }
+    await initializeSchemaBaseline(sql);
+    await applySchema(sql);
+    if (fingerprint !== null) {
+      await recordSchemaFingerprint(sql, fingerprint);
+    }
+    return { schema: 'applied', fingerprint };
+  } finally {
+    await sql`SELECT pg_advisory_unlock(${MIGRATION_ADVISORY_LOCK_ID})`;
+  }
+}
+
+/**
  * Single-pass schema creation for a fresh database.
  *
  * Tables are ordered by foreign-key dependency (parents before children).
@@ -147,13 +267,7 @@ async function initializeSchemaBaseline(sql: postgres.Sql): Promise<void> {
  * Source of truth: schema-pg.ts (Drizzle ORM definitions) plus the
  * `secrets` table used via raw SQL in secrets/postgres-provider.ts.
  */
-export async function runMigrations(sql: postgres.Sql): Promise<void> {
-  await sql`SELECT pg_advisory_lock(${MIGRATION_ADVISORY_LOCK_ID})`;
-  try {
-    await adoptLegacySchemaVersionTable(sql);
-    await assertSchemaBaseline(sql);
-    await initializeSchemaBaseline(sql);
-
+async function applySchema(sql: postgres.Sql): Promise<void> {
     // ── Extensions ──────────────────────────────────────────────────────
     await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
     await sql`CREATE EXTENSION IF NOT EXISTS vector`;
@@ -1346,6 +1460,33 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   `;
   await canonicalizePersistedEventContracts(sql);
   await canonicalizeInterruptToolName(sql);
+  await adoptPreRevisionMessageHistory(sql);
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_turn_seq
+    ON messages(turn_id, message_seq)
+    WHERE turn_id IS NOT NULL AND message_seq IS NOT NULL
+  `;
+}
+
+/**
+ * One-time adoption of canonical history written before durable message
+ * identity (`message_seq`, revisions) and terminal publication watermarks
+ * existed. Runtime writers set those atomically with the frames they persist
+ * (saveMessageEventBatch, saveTerminalEventBatch, addCanonicalMessage), so an
+ * adopted database never has anything left to adopt. Re-running it re-parsed
+ * every message frame on each start (75+ s on dev1's spine, ctx-new8) and
+ * rewrote terminal message frames into this migration's shape, dropping
+ * fields the runtime adds later (for example ADR 025 delivery tags).
+ */
+async function adoptPreRevisionMessageHistory(sql: postgres.Sql): Promise<void> {
+  const [applied] = await sql`
+    SELECT version
+    FROM stablehand_schema_version
+    WHERE id = ${MESSAGE_HISTORY_ADOPTION_MIGRATION_ID}
+  `;
+  if (Number(applied?.version ?? 0) >= MESSAGE_HISTORY_ADOPTION_MIGRATION_VERSION) {
+    return;
+  }
 
   // Adopt only terminal history that already contains the complete frame set
   // for the durable turn outcome. Rows without proof stay pending and are
@@ -1626,11 +1767,13 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
   await sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_turn_seq
-    ON messages(turn_id, message_seq)
-    WHERE turn_id IS NOT NULL AND message_seq IS NOT NULL
+    INSERT INTO stablehand_schema_version (id, version, baseline)
+    VALUES (
+      ${MESSAGE_HISTORY_ADOPTION_MIGRATION_ID},
+      ${MESSAGE_HISTORY_ADOPTION_MIGRATION_VERSION},
+      'data-migration'
+    )
+    ON CONFLICT (id) DO UPDATE
+    SET version = EXCLUDED.version, baseline = EXCLUDED.baseline
   `;
-  } finally {
-    await sql`SELECT pg_advisory_unlock(${MIGRATION_ADVISORY_LOCK_ID})`;
-  }
 }

@@ -9,8 +9,12 @@ import {
   INTERRUPT_TOOL_NAME_MIGRATION_ID,
   CANONICAL_EVENT_CONTRACTS_MIGRATION_VERSION,
   CURRENT_SCHEMA_VERSION,
+  MESSAGE_HISTORY_ADOPTION_MIGRATION_ID,
+  MESSAGE_HISTORY_ADOPTION_MIGRATION_VERSION,
   MIGRATION_ADVISORY_LOCK_ID,
   runMigrations,
+  SCHEMA_FINGERPRINT_MARKER_ID,
+  schemaMigrationFingerprint,
   TEXT_MESSAGE_END_CONTRACT_MIGRATION_ID,
   TEXT_MESSAGE_END_CONTRACT_MIGRATION_VERSION,
 } from '../../packages/stablehand/src/database/migrations.js';
@@ -26,6 +30,21 @@ async function dropAllPublicTables(conn: DatabaseConnection): Promise<void> {
   for (const table of tables) {
     await conn.pgClient`DROP TABLE IF EXISTS ${conn.pgClient(table.tablename as string)} CASCADE`;
   }
+}
+
+/**
+ * Make the next runMigrations start like one on a database last migrated by
+ * older code: forget the schema fingerprint (and any named data-migration
+ * markers) so the full pass runs over rows seeded in legacy shapes.
+ */
+async function forgetMigrationMarkers(
+  conn: DatabaseConnection,
+  ...markerIds: string[]
+): Promise<void> {
+  await conn.pgClient`
+    DELETE FROM stablehand_schema_version
+    WHERE id IN ${conn.pgClient([SCHEMA_FINGERPRINT_MARKER_ID, ...markerIds])}
+  `;
 }
 
 describe('database migration baseline guard', () => {
@@ -142,6 +161,7 @@ describe('database migration baseline guard', () => {
         )
     `;
 
+    await forgetMigrationMarkers(conn);
     await runMigrations(conn.pgClient);
 
     const rows = await conn.pgClient`
@@ -190,6 +210,7 @@ describe('database migration baseline guard', () => {
       }),
     ]);
 
+    await forgetMigrationMarkers(conn);
     await runMigrations(conn.pgClient);
     const repeated = await conn.pgClient`
       SELECT id, tools, manifest, metadata
@@ -228,6 +249,7 @@ describe('database migration baseline guard', () => {
         )
     `;
 
+    await forgetMigrationMarkers(conn);
     await runMigrations(conn.pgClient);
 
     const rows = await conn.pgClient`
@@ -258,6 +280,7 @@ describe('database migration baseline guard', () => {
       }),
     ]);
 
+    await forgetMigrationMarkers(conn);
     await runMigrations(conn.pgClient);
     const repeated = await conn.pgClient`
       SELECT id, name, manifest
@@ -289,6 +312,7 @@ describe('database migration baseline guard', () => {
   it('adds artifact routing metadata and content hash idempotently', async () => {
     await dropAllPublicTables(conn);
     await runMigrations(conn.pgClient);
+    await forgetMigrationMarkers(conn);
     await runMigrations(conn.pgClient);
 
     const columns = await conn.pgClient`
@@ -310,6 +334,7 @@ describe('database migration baseline guard', () => {
   it('adds the event conversation correlation index idempotently', async () => {
     await dropAllPublicTables(conn);
     await runMigrations(conn.pgClient);
+    await forgetMigrationMarkers(conn);
     await runMigrations(conn.pgClient);
 
     const [index] = await conn.pgClient`
@@ -321,6 +346,181 @@ describe('database migration baseline guard', () => {
 
     expect(index?.indexdef).toContain('(conversation_id, seq)');
     expect(index?.indexdef).toContain('WHERE (conversation_id IS NOT NULL)');
+  });
+
+  it('skips the schema pass when this build already completed it on the database', async () => {
+    const indexName = async () => {
+      const [row] = await conn.pgClient`
+        SELECT to_regclass('public.idx_event_store_conversation_seq')::text AS name
+      `;
+      return row?.name ?? null;
+    };
+    const recordedFingerprint = async () => {
+      const [row] = await conn.pgClient`
+        SELECT version, baseline
+        FROM stablehand_schema_version
+        WHERE id = ${SCHEMA_FINGERPRINT_MARKER_ID}
+      `;
+      return row ? { version: Number(row.version), baseline: row.baseline } : null;
+    };
+    const fingerprint = schemaMigrationFingerprint();
+    expect(fingerprint).toMatch(/^[0-9a-f]{32}$/);
+
+    await dropAllPublicTables(conn);
+    await expect(runMigrations(conn.pgClient)).resolves.toEqual({ schema: 'applied', fingerprint });
+    expect(await recordedFingerprint()).toEqual({
+      version: CURRENT_SCHEMA_VERSION,
+      baseline: fingerprint,
+    });
+
+    // Same build, same database: nothing runs, so a dropped index stays dropped.
+    await conn.pgClient`DROP INDEX idx_event_store_conversation_seq`;
+    await expect(runMigrations(conn.pgClient)).resolves.toEqual({ schema: 'current', fingerprint });
+    expect(await indexName()).toBeNull();
+
+    // A database last migrated by different code gets the full pass again.
+    await conn.pgClient`
+      UPDATE stablehand_schema_version
+      SET baseline = 'older-build'
+      WHERE id = ${SCHEMA_FINGERPRINT_MARKER_ID}
+    `;
+    await expect(runMigrations(conn.pgClient)).resolves.toEqual({ schema: 'applied', fingerprint });
+    expect(await indexName()).toBe('idx_event_store_conversation_seq');
+    expect(await recordedFingerprint()).toEqual({
+      version: CURRENT_SCHEMA_VERSION,
+      baseline: fingerprint,
+    });
+  });
+
+  it('records the schema fingerprint only after the pass completes', async () => {
+    await dropAllPublicTables(conn);
+    await runMigrations(conn.pgClient);
+    await forgetMigrationMarkers(conn);
+    // Legacy and canonical policy keys together make the tool-policy hard cut
+    // refuse, failing the pass part-way.
+    await conn.pgClient`
+      INSERT INTO agents (
+        id, name, harness, harness_config, system_prompt, tools, metadata,
+        created_at, updated_at
+      )
+      VALUES (
+        'agent-conflict', 'conflict', 'langgraph', '{}', 'prompt', '[]',
+        '{"nativeTools":{"allowlist":["Read"]},"nativeToolPolicy":{"policy":"all"}}',
+        1, 1
+      )
+    `;
+
+    await expect(runMigrations(conn.pgClient)).rejects.toThrow(/legacy\/canonical conflicts/);
+    const markers = await conn.pgClient`
+      SELECT id FROM stablehand_schema_version WHERE id = ${SCHEMA_FINGERPRINT_MARKER_ID}
+    `;
+    expect(markers).toHaveLength(0);
+
+    await conn.pgClient`DELETE FROM agents WHERE id = 'agent-conflict'`;
+    await expect(runMigrations(conn.pgClient)).resolves.toMatchObject({ schema: 'applied' });
+    await expect(runMigrations(conn.pgClient)).resolves.toMatchObject({ schema: 'current' });
+  });
+
+  it('adopts pre-revision message history once, not on every full pass', async () => {
+    await dropAllPublicTables(conn);
+    await runMigrations(conn.pgClient);
+    const [adoption] = await conn.pgClient`
+      SELECT version
+      FROM stablehand_schema_version
+      WHERE id = ${MESSAGE_HISTORY_ADOPTION_MIGRATION_ID}
+    `;
+    expect(Number(adoption?.version)).toBe(MESSAGE_HISTORY_ADOPTION_MIGRATION_VERSION);
+
+    // History in the pre-revision shape: no message identity on the row, no
+    // terminal watermark on the completed turn.
+    await conn.pgClient`
+      INSERT INTO agents (
+        id, name, harness, harness_config, system_prompt, tools,
+        created_at, updated_at
+      )
+      VALUES ('agent-1', 'agent', 'langgraph', '{}', 'prompt', '[]', 1, 1)
+    `;
+    await conn.pgClient`
+      INSERT INTO conversations (id, agent_id, created_at, updated_at)
+      VALUES ('conversation-1', 'agent-1', 1, 1)
+    `;
+    await conn.pgClient`
+      INSERT INTO turns (
+        id, agent_id, conversation_id, mode, status, queued_at, started_at, completed_at, tags
+      )
+      VALUES ('turn-1', 'agent-1', 'conversation-1', 'interactive', 'completed', 1, 1, 20, '{}')
+    `;
+    await conn.pgClient`
+      INSERT INTO messages (id, conversation_id, agent_id, role, content, created_at)
+      VALUES ('message-1', 'conversation-1', 'agent-1', 'assistant', 'Done.', 1)
+    `;
+    const source = {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      messageId: 'message-1',
+      messageSeq: 0,
+      role: 'assistant',
+      content: 'Done.',
+      timestamp: 10,
+    };
+    await conn.pgClient`
+      INSERT INTO event_store (
+        type, agent_id, payload, created_at, turn_id, conversation_id,
+        channel, source_type, source_payload
+      )
+      VALUES
+        (
+          'CUSTOM', 'agent-1',
+          ${JSON.stringify({ type: 'CUSTOM', name: 'stablehand.message.committed', ...source, delivery: { id: 'd-1', seq: 3 } })},
+          10, 'turn-1', 'conversation-1', 'run', 'message.committed',
+          ${JSON.stringify(source)}
+        ),
+        (
+          'RUN_FINISHED', 'agent-1',
+          '{"type":"RUN_FINISHED","runId":"turn-1","threadId":"conversation-1","timestamp":20}',
+          20, 'turn-1', 'conversation-1', 'run', 'turn.completed',
+          '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conversation-1","status":"completed","durationMs":19,"timestamp":20}'
+        )
+    `;
+    const snapshot = async () => {
+      const [message] = await conn.pgClient`
+        SELECT turn_id, message_seq FROM messages WHERE id = 'message-1'
+      `;
+      const [turn] = await conn.pgClient`
+        SELECT terminal_published_seq FROM turns WHERE id = 'turn-1'
+      `;
+      const frames = await conn.pgClient`
+        SELECT seq, xmin::text AS row_version FROM event_store ORDER BY seq
+      `;
+      return {
+        turnId: message?.turn_id ?? null,
+        messageSeq: message?.message_seq == null ? null : Number(message.message_seq),
+        terminalPublishedSeq: turn?.terminal_published_seq == null
+          ? null
+          : Number(turn.terminal_published_seq),
+        frames: frames.map((frame) => `${frame.seq}:${frame.row_version}`),
+      };
+    };
+    const before = await snapshot();
+
+    // A full pass (new build) does not repeat the recorded adoption.
+    await forgetMigrationMarkers(conn);
+    await expect(runMigrations(conn.pgClient)).resolves.toMatchObject({ schema: 'applied' });
+    expect(await snapshot()).toEqual(before);
+
+    // Without the adoption marker (a database from before it), it adopts.
+    await forgetMigrationMarkers(conn, MESSAGE_HISTORY_ADOPTION_MIGRATION_ID);
+    await runMigrations(conn.pgClient);
+    const after = await snapshot();
+    const [finished] = await conn.pgClient`
+      SELECT seq FROM event_store WHERE type = 'RUN_FINISHED'
+    `;
+    expect(after).toMatchObject({
+      turnId: 'turn-1',
+      messageSeq: 0,
+      terminalPublishedSeq: Number(finished?.seq),
+    });
   });
 
   it('hard-migrates persisted event, trigger, wait, and webhook contracts', async () => {
@@ -457,6 +657,7 @@ describe('database migration baseline guard', () => {
       )
     `;
 
+    await forgetMigrationMarkers(conn);
     await runMigrations(conn.pgClient);
 
     const frames = await conn.pgClient`
@@ -593,6 +794,7 @@ describe('database migration baseline guard', () => {
       )
     `;
 
+    await forgetMigrationMarkers(conn);
     await runMigrations(conn.pgClient);
     const [firstRepair] = await conn.pgClient`
       SELECT payload FROM event_store WHERE type = 'TEXT_MESSAGE_END'
@@ -614,6 +816,7 @@ describe('database migration baseline guard', () => {
     `;
     expect(Number(applied?.version)).toBe(TEXT_MESSAGE_END_CONTRACT_MIGRATION_VERSION);
 
+    await forgetMigrationMarkers(conn);
     await runMigrations(conn.pgClient);
     const [secondRepair] = await conn.pgClient`
       SELECT payload FROM event_store WHERE type = 'TEXT_MESSAGE_END'
@@ -653,6 +856,7 @@ describe('database migration baseline guard', () => {
       )
     `;
 
+    await forgetMigrationMarkers(conn);
     await runMigrations(conn.pgClient);
     const [firstStart] = await conn.pgClient`
       SELECT xmin::text AS row_version, payload
@@ -667,6 +871,7 @@ describe('database migration baseline guard', () => {
 
     expect(Number(applied?.version)).toBe(CANONICAL_EVENT_CONTRACTS_MIGRATION_VERSION);
 
+    await forgetMigrationMarkers(conn);
     await runMigrations(conn.pgClient);
     const [secondStart] = await conn.pgClient`
       SELECT xmin::text AS row_version, payload
@@ -728,6 +933,7 @@ describe('database migration baseline guard', () => {
       )
     `;
 
+    await forgetMigrationMarkers(conn);
     await runMigrations(conn.pgClient);
 
     const assertRetained = async () => {
@@ -766,6 +972,7 @@ describe('database migration baseline guard', () => {
     };
 
     await assertRetained();
+    await forgetMigrationMarkers(conn);
     await runMigrations(conn.pgClient);
     await assertRetained();
   });
@@ -1029,8 +1236,10 @@ describe('database migration baseline guard', () => {
       expect(JSON.parse(openEvent?.payload as string).toolCalls).toHaveLength(1);
     };
 
+    await forgetMigrationMarkers(conn, MESSAGE_HISTORY_ADOPTION_MIGRATION_ID);
     await runMigrations(conn.pgClient);
     await assertBackfill();
+    await forgetMigrationMarkers(conn, MESSAGE_HISTORY_ADOPTION_MIGRATION_ID);
     await runMigrations(conn.pgClient);
     await assertBackfill();
   });

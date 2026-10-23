@@ -151,13 +151,18 @@ describe('DatabaseRepository', () => {
     });
 
     it('backfills lifecycle-independent heads for orphaned deletion events', async () => {
-      const { runMigrations } = await import('../../packages/stablehand/src/database/migrations.js');
+      const { runMigrations, SCHEMA_FINGERPRINT_MARKER_ID } = await import('../../packages/stablehand/src/database/migrations.js');
       const orphanAgentId = 'deleted-legacy-agent';
       const orphanPayload = 'orphaned-before-agent-heads';
       const [orphanEvent] = await testDb.conn.pgClient`
         INSERT INTO event_store (type, agent_id, payload, created_at)
         VALUES ('RUN_FINISHED', ${orphanAgentId}, ${orphanPayload}, 1)
         RETURNING seq
+      `;
+      // The orphan predates agent heads, as on a database migrated by older
+      // code: forget the schema fingerprint so the full pass runs.
+      await testDb.conn.pgClient`
+        DELETE FROM stablehand_schema_version WHERE id = ${SCHEMA_FINGERPRINT_MARKER_ID}
       `;
 
       try {
