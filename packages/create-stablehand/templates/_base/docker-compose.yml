@@ -35,7 +35,8 @@ services:
       STABLEHAND_API_TOKEN: ${STABLEHAND_API_TOKEN:?set STABLEHAND_API_TOKEN in .env}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${UI_PORT:-3200}}
       STABLEHAND_DATA_VOLUME: ${COMPOSE_PROJECT_NAME}_stablehand-data
-      STABLEHAND_SANDBOX_EGRESS_PROXY_URL: http://egress:8080
+      # Port 8081: each sandbox presents its session lease, so its agent's egress setting applies.
+      STABLEHAND_SANDBOX_EGRESS_PROXY_URL: http://egress:8081
       STABLEHAND_SANDBOX_EGRESS_CA_VOLUME: ${COMPOSE_PROJECT_NAME}_egress-ca-public
       STABLEHAND_IMAGE_PREFIX: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-harness
       STABLEHAND_SANDBOX_IMAGE_TAG: ${STABLEHAND_IMAGE_TAG:-{{imageTag}}}

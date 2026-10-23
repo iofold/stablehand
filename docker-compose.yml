@@ -49,9 +49,12 @@ services:
       STABLEHAND_SANDBOX_IMAGE_TAG: ${STABLEHAND_IMAGE_TAG:-latest}
       STABLEHAND_SANDBOX_NETWORK: ${STABLEHAND_SANDBOX_NETWORK:-stablehand-agents}
       # Sandboxes live on the internal agents network; the egress proxy is their only route out.
+      # Each sandbox gets this URL with its session lease as credentials, so the proxy applies that
+      # agent's egress setting (ctx-3aef). Port 8081 requires the lease; 8080 serves sandboxes
+      # started before leases existed.
       # Set STABLEHAND_SANDBOX_EGRESS_PROXY_URL to an empty string to run sandboxes without a proxy
       # (they then have no internet at all, since the agents network is internal).
-      STABLEHAND_SANDBOX_EGRESS_PROXY_URL: ${STABLEHAND_SANDBOX_EGRESS_PROXY_URL-http://egress:8080}
+      STABLEHAND_SANDBOX_EGRESS_PROXY_URL: ${STABLEHAND_SANDBOX_EGRESS_PROXY_URL-http://egress:8081}
       STABLEHAND_SANDBOX_EGRESS_CA_VOLUME: ${COMPOSE_PROJECT_NAME:-stablehand}_egress-ca-public
       STABLEHAND_TURN_TIMEOUT_MS: ${STABLEHAND_TURN_TIMEOUT_MS:-}
       # HTTP tools and MCP servers are called from the orchestrator through the egress guard.
@@ -132,8 +135,17 @@ services:
     image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-egress:${STABLEHAND_IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
+      # Server defaults every sandbox gets unless its agent's egress is "deny".
       STABLEHAND_EGRESS_EXTRA_ALLOW: ${STABLEHAND_EGRESS_EXTRA_ALLOW:-}
+      # What the runtime needs, kept even for "deny" agents (model providers are built in).
+      STABLEHAND_EGRESS_RUNTIME_ALLOW: ${STABLEHAND_EGRESS_RUNTIME_ALLOW:-}
       STABLEHAND_EGRESS_LOG_ALLOWED: ${STABLEHAND_EGRESS_LOG_ALLOWED:-0}
+      # Where the proxy checks each sandbox's session lease.
+      STABLEHAND_EGRESS_LEASE_URL: ${STABLEHAND_EGRESS_LEASE_URL:-http://orchestrator:3001/api/egress/lease}
+      # Requests without a lease on port 8080: "global" (server rules) or "deny". Set "deny" once
+      # every running sandbox was started with a lease; until then a sandbox could drop its lease
+      # and use 8080 to get the server rules instead of its agent's.
+      STABLEHAND_EGRESS_UNLEASED: ${STABLEHAND_EGRESS_UNLEASED:-global}
     volumes:
       - egress-ca:/home/mitmproxy/.mitmproxy
       - egress-ca-public:/srv/egress-ca
