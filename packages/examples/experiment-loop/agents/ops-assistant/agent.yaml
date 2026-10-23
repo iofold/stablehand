@@ -1,0 +1,32 @@
+apiVersion: stablehand.io/v1
+kind: Agent
+metadata:
+  name: ops-assistant
+  displayName: Ops assistant
+  description: >-
+    Reads documents and spreadsheets for a small back office: pulls fields out
+    of invoices, emails and receipts, and writes spreadsheet formulas. The
+    experiment loop tunes its instructions; a person approves each promotion.
+  labels:
+    example: experiment-loop
+spec:
+  harness: langgraph
+  # No apiKeyRef: model calls go through the model gateway, so every run is
+  # priced and stops at limits.maxCostUsd.
+  harnessConfig:
+    provider: openai
+    model: gpt-5.4-mini
+    maxTokens: 2000
+    limits:
+      maxCostUsd: 0.05
+      maxModelCalls: 4
+  builtinToolPolicy:
+    policy: none
+  nativeToolPolicy:
+    policy: none
+  mode: both
+  # The starting point. It leaves out the task set's output conventions on
+  # purpose, so the loop has something to find.
+  instructions: |
+    You are an operations assistant for a small company's back office. You
+    read documents and spreadsheets and answer exactly what the request asks.

@@ -1,0 +1,407 @@
+{
+  "name": "ops-desk-16",
+  "description": "16 synthetic back-office tasks: 8 field extractions graded field by field, 8 spreadsheet formulas graded by running them. Written for this example; MIT like the rest of the repository.",
+  "conventions": [
+    "Dates are ISO 8601: YYYY-MM-DD.",
+    "Money amounts are integers in the currency's minor unit (ISO 4217): 1234.50 EUR is 123450, 480000 JPY is 480000.",
+    "Currencies are ISO 4217 codes; countries are ISO 3166-1 alpha-2 codes.",
+    "Phone numbers are E.164: + and country code, digits only.",
+    "IBANs are written without spaces.",
+    "Rates and shares are decimal fractions: 19% is 0.19.",
+    "Card digits and other identifiers are strings; counts are numbers.",
+    "A field the document does not give is null.",
+    "Formulas must run in Excel 2016: no XLOOKUP, FILTER, UNIQUE, MAXIFS, MINIFS, IFS, SWITCH, TEXTJOIN, CONCAT or LET."
+  ],
+  "tasks": [
+    {
+      "id": "ext-invoice-berlin",
+      "kind": "extraction",
+      "title": "Supplier invoice from Berlin",
+      "fields": {
+        "invoice_number": "the invoice number",
+        "issue_date": "the date the invoice was issued",
+        "due_date": "the payment due date",
+        "po_number": "the buyer's purchase order number",
+        "total": "the total amount due",
+        "currency": "the currency of the total",
+        "vat_rate": "the VAT rate applied",
+        "vendor_country": "the vendor's country",
+        "vendor_phone": "the vendor's phone number"
+      },
+      "document": "Kreuzberg Kaffeemaschinen GmbH\nOranienstraße 41, 10999 Berlin, Deutschland\nTel. 030 6981 2245 · USt-IdNr. DE298114702\n\nRECHNUNG Nr. KK-2026-0419\nRechnungsdatum: 14. März 2026\nFällig am: 13. April 2026\nIhre Bestellnummer: PO-55102\n\n2 × Siebträgermaschine Duo ............ 1.698,00 €\n1 × Mahlwerk Präzision ..................   389,50 €\nZwischensumme ......................... 2.087,50 €\nMwSt. 19 % ............................   396,63 €\nGesamtbetrag .......................... 2.484,13 €",
+      "expected": {
+        "invoice_number": "KK-2026-0419",
+        "issue_date": "2026-03-14",
+        "due_date": "2026-04-13",
+        "po_number": "PO-55102",
+        "total": 248413,
+        "currency": "EUR",
+        "vat_rate": 0.19,
+        "vendor_country": "DE",
+        "vendor_phone": "+493069812245"
+      }
+    },
+    {
+      "id": "ext-shipment-notice",
+      "kind": "extraction",
+      "title": "Dispatch note from a UK warehouse",
+      "fields": {
+        "consignment_id": "the consignment number",
+        "ship_date": "the date the goods were shipped",
+        "delivery_date": "the estimated delivery date",
+        "origin_country": "the country the goods ship from",
+        "destination_country": "the country the goods ship to",
+        "packages": "the number of packages",
+        "gross_weight_kg": "the gross weight in kilograms",
+        "declared_value": "the declared value of the goods",
+        "currency": "the currency of the declared value",
+        "insured_value": "the insured value",
+        "carrier_phone": "the carrier's phone number"
+      },
+      "document": "DISPATCH NOTE\n\nFrom: Harbourline Logistics Ltd\nUnit 7, Dock Road, Felixstowe IP11 3QW, United Kingdom\nPhone: 01394 604118\n\nConsignment: HL-77310-B\nShipped: 2nd October 2026\nEstimated delivery: 9 Oct 2026\n\nConsignee: Brightwater Labs Pty Ltd\n18 Quay Street, Brisbane QLD 4000, Australia\n\nPackages: 3 cartons, gross weight 41.5 kg\nDeclared value: GBP 1,920.00\nInsurance: not included",
+      "expected": {
+        "consignment_id": "HL-77310-B",
+        "ship_date": "2026-10-02",
+        "delivery_date": "2026-10-09",
+        "origin_country": "GB",
+        "destination_country": "AU",
+        "packages": 3,
+        "gross_weight_kg": 41.5,
+        "declared_value": 192000,
+        "currency": "GBP",
+        "insured_value": null,
+        "carrier_phone": "+441394604118"
+      }
+    },
+    {
+      "id": "ext-support-ticket",
+      "kind": "extraction",
+      "title": "Damaged-order email from Porto",
+      "fields": {
+        "order_id": "the order number",
+        "order_date": "the date the order was placed",
+        "customer_email": "the customer's email address",
+        "customer_country": "the customer's country",
+        "customer_phone": "the customer's phone number",
+        "items_damaged": "how many items arrived damaged",
+        "damaged_share": "the share of the ordered items that arrived damaged",
+        "requested_resolution": "what the customer asks for: refund, replacement or store_credit",
+        "refund_amount": "the refund the customer is asking for",
+        "currency": "the currency of the refund"
+      },
+      "document": "From: Ana Lima <ana.lima@porto-ceramica.pt>\nSent: Tuesday 6 January 2026, 09:12\nSubject: Order A-30981 arrived damaged\n\nHello,\n\nOur order A-30981, placed on 22/12/2025, arrived yesterday. 3 of the 24 plates were broken. We paid 312,00 € for the whole order.\n\nWe would like a refund for the broken plates only. Please do not send replacements.\n\nYou can reach me on 912 345 678 if you need photos.\n\nAna Lima\nPorto Cerâmica, Lda.\nRua de Santa Catarina 210, 4000-447 Porto, Portugal",
+      "expected": {
+        "order_id": "A-30981",
+        "order_date": "2025-12-22",
+        "customer_email": "ana.lima@porto-ceramica.pt",
+        "customer_country": "PT",
+        "customer_phone": "+351912345678",
+        "items_damaged": 3,
+        "damaged_share": 0.125,
+        "requested_resolution": "refund",
+        "refund_amount": 3900,
+        "currency": "EUR"
+      }
+    },
+    {
+      "id": "ext-purchase-order",
+      "kind": "extraction",
+      "title": "Purchase order from Portland",
+      "fields": {
+        "po_number": "the purchase order number",
+        "order_date": "the date of the purchase order",
+        "ship_by": "the latest ship date",
+        "buyer_phone": "the buyer contact's phone number",
+        "supplier_country": "the supplier's country",
+        "payment_terms_days": "the number of days allowed for payment",
+        "early_payment_discount": "the discount for paying early",
+        "total": "the order total",
+        "currency": "the currency of the order total",
+        "incoterms": "the Incoterms rule, if any"
+      },
+      "document": "PURCHASE ORDER\nPO #: 2026-1187\nDate: 10/03/2026\n\nBuyer: Cedar & Pine Furniture Inc.\n2201 Alder Way, Portland, OR 97209, USA\nContact: Marcus Webb, (503) 555-0142\n\nSupplier: Nordlys Tekstil AS\nGrünerløkka, Oslo, Norway\n\nShip by: 11/14/2026\nPayment terms: Net 45. 2.5% discount if paid within 10 days.\n\nLine 1: Upholstery fabric, Fjord Blue, 120 m @ $14.25/m = $1,710.00\nLine 2: Upholstery fabric, Birch Grey, 40 m @ $14.25/m = $570.00\nOrder total: $2,280.00\nIncoterms: none agreed",
+      "expected": {
+        "po_number": "2026-1187",
+        "order_date": "2026-10-03",
+        "ship_by": "2026-11-14",
+        "buyer_phone": "+15035550142",
+        "supplier_country": "NO",
+        "payment_terms_days": 45,
+        "early_payment_discount": 0.025,
+        "total": 228000,
+        "currency": "USD",
+        "incoterms": null
+      }
+    },
+    {
+      "id": "ext-bank-transfer",
+      "kind": "extraction",
+      "title": "Remittance advice from Lyon",
+      "fields": {
+        "payer_name": "the name of the company that sent the payment",
+        "payer_phone": "the payer's phone number",
+        "payee_country": "the payee's country",
+        "execution_date": "the date the transfer was executed",
+        "amount": "the amount transferred",
+        "currency": "the currency of the transfer",
+        "invoice_reference": "the invoice the payment refers to",
+        "deposit_share": "the share of the invoice this payment covers",
+        "payee_iban": "the payee's IBAN"
+      },
+      "document": "AVIS DE VIREMENT\n\nDonneur d'ordre : Atelier Lumière SARL\n12 rue des Tanneurs, 69001 Lyon, France\nTél. : 04 78 29 61 03\n\nBénéficiaire : Kestrel Analytics B.V., Amsterdam, Pays-Bas\nIBAN du bénéficiaire : NL91 ABNA 0417 1643 00\n\nDate d'exécution : 03/11/2026\nMontant : 7 450,00 EUR\nMotif : facture FACT-2026-311, acompte de 30 %\nFrais : partagés (SHA)",
+      "expected": {
+        "payer_name": "Atelier Lumière SARL",
+        "payer_phone": "+33478296103",
+        "payee_country": "NL",
+        "execution_date": "2026-11-03",
+        "amount": 745000,
+        "currency": "EUR",
+        "invoice_reference": "FACT-2026-311",
+        "deposit_share": 0.3,
+        "payee_iban": "NL91ABNA0417164300"
+      }
+    },
+    {
+      "id": "ext-job-application",
+      "kind": "extraction",
+      "title": "Job application email from Pune",
+      "fields": {
+        "role_ref": "the reference of the role applied for",
+        "candidate_name": "the candidate's full name",
+        "candidate_country": "the country the candidate lives in",
+        "candidate_phone": "the candidate's phone number",
+        "notice_days": "the candidate's notice period in days",
+        "expected_salary": "the candidate's expected yearly salary",
+        "currency": "the currency of the expected salary",
+        "earliest_start": "the earliest start date",
+        "willing_to_relocate": "whether the candidate will relocate"
+      },
+      "document": "Subject: Application: Senior Data Engineer (ref DE-0925)\n\nHi,\n\nI'd like to apply for the Senior Data Engineer role (ref DE-0925). I live in Pune, India, and I'm happy to relocate for the role.\n\nMy notice period is 60 days. My current salary is ₹34,00,000 a year and I'm looking for ₹42,00,000.\nThe earliest I could start is 1 February 2027.\n\nPhone: 098220 41736\nPortfolio: github.com/r-iyer-data\n\nThanks,\nRohan Iyer",
+      "expected": {
+        "role_ref": "DE-0925",
+        "candidate_name": "Rohan Iyer",
+        "candidate_country": "IN",
+        "candidate_phone": "+919822041736",
+        "notice_days": 60,
+        "expected_salary": 420000000,
+        "currency": "INR",
+        "earliest_start": "2027-02-01",
+        "willing_to_relocate": true
+      }
+    },
+    {
+      "id": "ext-meeting-request",
+      "kind": "extraction",
+      "title": "Meeting request from Osaka",
+      "fields": {
+        "meeting_date": "the proposed meeting date",
+        "start_time": "the local start time, 24-hour HH:MM",
+        "duration_minutes": "the meeting length in minutes",
+        "city": "the city of the meeting",
+        "country": "the country of the meeting",
+        "attendee_count": "the number of attendees from the sender's side",
+        "workshop_budget": "the budget set aside for the workshop",
+        "currency": "the currency of the budget",
+        "contact_phone": "the phone number to reply to",
+        "video_option": "whether joining by video is offered"
+      },
+      "document": "Subject: Q3 forecast review\n\nDear team,\n\nCould we meet to review the Q3 forecast? We propose Thursday 12 November 2026, 3:00 to 4:30 pm Tokyo time, at our Osaka office (Umeda Sky Building, 1-1-88 Oyodonaka, Kita-ku, Osaka, Japan). If travel is difficult, you can join by video.\n\nFrom our side: Kenji Watanabe (CFO) and Mei Sato (Controller).\n\nWe have set aside ¥480,000 for the review workshop and will cover it.\n\nPlease reply to Mei on 06-6440-3855.\n\nBest regards,\nKenji Watanabe\nHoshizora Trading K.K.",
+      "expected": {
+        "meeting_date": "2026-11-12",
+        "start_time": "15:00",
+        "duration_minutes": 90,
+        "city": "Osaka",
+        "country": "JP",
+        "attendee_count": 2,
+        "workshop_budget": 480000,
+        "currency": "JPY",
+        "contact_phone": "+81664403855",
+        "video_option": true
+      }
+    },
+    {
+      "id": "ext-restaurant-receipt",
+      "kind": "extraction",
+      "title": "Restaurant receipt from Montréal",
+      "fields": {
+        "merchant_country": "the restaurant's country",
+        "merchant_phone": "the restaurant's phone number",
+        "date": "the date of the meal",
+        "subtotal": "the subtotal before taxes",
+        "tax_total": "all sales taxes together",
+        "tip": "the tip",
+        "amount_paid": "the amount charged to the card",
+        "currency": "the currency of the receipt",
+        "card_last4": "the last four digits of the card",
+        "guests": "the number of guests"
+      },
+      "document": "LA BUVETTE DU PORT\n455 rue de la Commune O., Montréal QC H2Y 2C9, Canada\nTél. : 514-555-0199\n\n2026-07-18  20:41   Table 12   Serveur : Julien\n\n2 × Menu dégustation        190.00\n1 × Bouteille Pinot noir      68.00\nSous-total                   258.00\nTPS 5 %                       12.90\nTVQ 9,975 %                   25.74\nTotal                        296.64 CAD\nPourboire                     45.00\nPayé VISA ****4417           341.64",
+      "expected": {
+        "merchant_country": "CA",
+        "merchant_phone": "+15145550199",
+        "date": "2026-07-18",
+        "subtotal": 25800,
+        "tax_total": 3864,
+        "tip": 4500,
+        "amount_paid": 34164,
+        "currency": "CAD",
+        "card_last4": "4417",
+        "guests": null
+      }
+    },
+    {
+      "id": "fx-west-revenue",
+      "kind": "formula",
+      "title": "Revenue of open West orders",
+      "question": "Write one formula for cell G2 that returns the total revenue (Units times Price) of West orders that are not Cancelled.",
+      "table": [
+        ["Order", "Region", "Units", "Price", "Status"],
+        ["SO-1001", "West", 12, 19.5, "Shipped"],
+        ["SO-1002", "North", 4, 120, "Shipped"],
+        ["SO-1003", "West", 30, 7.25, "Cancelled"],
+        ["SO-1004", "South", 15, 19.5, "Shipped"],
+        ["SO-1005", "West", 8, 120, "Pending"],
+        ["SO-1006", "North", 22, 7.25, "Shipped"],
+        ["SO-1007", "West", 5, 64, "Shipped"],
+        ["SO-1008", "East", 9, 64, "Cancelled"]
+      ],
+      "reference": "=SUMPRODUCT((B2:B9=\"West\")*(E2:E9<>\"Cancelled\")*C2:C9*D2:D9)",
+      "expected": 1514
+    },
+    {
+      "id": "fx-north-big-orders",
+      "kind": "formula",
+      "title": "Large North orders",
+      "question": "Write one formula for cell F2 that returns how many North orders have more than 10 units, not counting Cancelled orders.",
+      "table": [
+        ["Order", "Region", "Units", "Status"],
+        ["SO-2001", "North", 14, "Shipped"],
+        ["SO-2002", "North", 10, "Shipped"],
+        ["SO-2003", "South", 25, "Shipped"],
+        ["SO-2004", "North", 31, "Cancelled"],
+        ["SO-2005", "East", 12, "Shipped"],
+        ["SO-2006", "North", 11, "Pending"],
+        ["SO-2007", "North", 9, "Shipped"],
+        ["SO-2008", "West", 40, "Shipped"],
+        ["SO-2009", "North", 18, "Shipped"]
+      ],
+      "reference": "=COUNTIFS(B2:B10,\"North\",C2:C10,\">10\",D2:D10,\"<>Cancelled\")",
+      "expected": 3
+    },
+    {
+      "id": "fx-price-lookup",
+      "kind": "formula",
+      "title": "Price of one SKU",
+      "question": "Write one formula for cell F2 that returns the unit price of SKU P-1043.",
+      "table": [
+        ["SKU", "Product", "Unit price", "In stock"],
+        ["P-1040", "Cable tray 2m", 18.4, 120],
+        ["P-1051", "Junction box", 6.15, 800],
+        ["P-1043", "Conduit 25mm 3m", 9.8, 340],
+        ["P-1012", "Wall plate", 2.35, 1500],
+        ["P-1077", "LED panel 60x60", 41, 64],
+        ["P-1043X", "Conduit 25mm 3m, bulk", 8.9, 1200],
+        ["P-1029", "Circuit breaker 16A", 12.6, 210],
+        ["P-1035", "Cable gland M20", 0.95, 4000]
+      ],
+      "reference": "=INDEX(C2:C9,MATCH(\"P-1043\",A2:A9,0))",
+      "expected": 9.8
+    },
+    {
+      "id": "fx-largest-open-invoice",
+      "kind": "formula",
+      "title": "Largest invoice not yet paid",
+      "question": "Write one formula for cell F2 that returns the largest amount among invoices whose status is not Paid.",
+      "table": [
+        ["Invoice", "Customer", "Amount", "Status"],
+        ["INV-301", "Larkspur Dental", 1250, "Paid"],
+        ["INV-302", "Okafor Builders", 4380, "Unpaid"],
+        ["INV-303", "Meridian Vets", 975.5, "Overdue"],
+        ["INV-304", "Larkspur Dental", 6120, "Paid"],
+        ["INV-305", "Tamsin & Co", 2210, "Overdue"],
+        ["INV-306", "Okafor Builders", 3999.99, "Unpaid"],
+        ["INV-307", "Bluebell Nursery", 5150, "Paid"],
+        ["INV-308", "Meridian Vets", 4380.01, "Overdue"]
+      ],
+      "reference": "=MAX(IF(D2:D9<>\"Paid\",C2:C9))",
+      "expected": 4380.01
+    },
+    {
+      "id": "fx-distinct-customers",
+      "kind": "formula",
+      "title": "Number of different customers",
+      "question": "Write one formula for cell E2 that returns how many different customers placed orders.",
+      "table": [
+        ["Order", "Customer", "Amount"],
+        ["A-1", "Harbor Cafe", 120],
+        ["A-2", "Pinecrest Hotel", 860],
+        ["A-3", "Harbor Cafe", 75],
+        ["A-4", "Lumen Studio", 240],
+        ["A-5", "Pinecrest Hotel", 310],
+        ["A-6", "Quarry Gym", 95],
+        ["A-7", "Harbor Cafe", 60],
+        ["A-8", "Lumen Studio", 180],
+        ["A-9", "Northgate School", 430]
+      ],
+      "reference": "=SUMPRODUCT(1/COUNTIF(B2:B10,B2:B10))",
+      "expected": 5
+    },
+    {
+      "id": "fx-sla-share",
+      "kind": "formula",
+      "title": "Share of tickets inside SLA",
+      "question": "Write one formula for cell F2 that returns the share of tickets resolved within their SLA (hours to resolve at most the SLA hours), as a decimal between 0 and 1.",
+      "table": [
+        ["Ticket", "Priority", "Hours to resolve", "SLA hours"],
+        ["T-881", "High", 3.5, 4],
+        ["T-882", "Low", 30, 48],
+        ["T-883", "High", 6, 4],
+        ["T-884", "Medium", 20, 24],
+        ["T-885", "Medium", 26, 24],
+        ["T-886", "Low", 47.5, 48],
+        ["T-887", "High", 4, 4],
+        ["T-888", "Medium", 12, 24]
+      ],
+      "reference": "=SUMPRODUCT(--(C2:C9<=D2:D9))/COUNTA(A2:A9)",
+      "expected": 0.75
+    },
+    {
+      "id": "fx-weekly-hours",
+      "kind": "formula",
+      "title": "Hours on one project in one week",
+      "question": "Write one formula for cell F2 that returns the total hours Priya Nair logged in week 42 on project Atlas.",
+      "table": [
+        ["Employee", "Week", "Project", "Hours"],
+        ["Priya Nair", 41, "Atlas", 12],
+        ["Priya Nair", 42, "Atlas", 9.5],
+        ["Tomas Berg", 42, "Atlas", 14],
+        ["Priya Nair", 42, "Beacon", 6],
+        ["Priya Nair", 42, "Atlas", 7.25],
+        ["Tomas Berg", 41, "Beacon", 8],
+        ["Priya Nair", 43, "Atlas", 10],
+        ["Lena Ortiz", 42, "Atlas", 11],
+        ["Priya Nair", 42, "atlas", 3]
+      ],
+      "reference": "=SUMIFS(D2:D10,A2:A10,\"Priya Nair\",B2:B10,42,C2:C10,\"Atlas\")",
+      "expected": 19.75
+    },
+    {
+      "id": "fx-commission",
+      "kind": "formula",
+      "title": "Tiered commission, filled down",
+      "question": "Write the formula for cell D2. It will be filled down to D7, one row per rep. It returns the rep's commission: 2% of sales up to 10,000 plus 5% of any sales above 10,000, rounded to 2 decimals.",
+      "table": [
+        ["Rep", "Region", "Sales"],
+        ["Ines Duarte", "South", 18437.5],
+        ["Kofi Mensah", "North", 9200],
+        ["Hana Kobayashi", "East", 10000],
+        ["Owen Price", "West", 25125],
+        ["Sara Lindqvist", "North", 0],
+        ["Raj Malhotra", "South", 12000.4]
+      ],
+      "reference": "=ROUND(MIN(C2,10000)*0.02+MAX(C2-10000,0)*0.05,2)",
+      "fillDownRows": 6,
+      "expected": [621.88, 184, 200, 956.25, 0, 300.02]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "@stablehand/example-experiment-loop",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "description": "Experiment loop: hill-climbs an agent's configuration against graded tasks under one campaign budget; a person approves the promotion",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "seed": "tsc -p tsconfig.build.json && node dist/seed.js",
+    "loop": "tsc -p tsconfig.build.json && node dist/run.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stablehand/manifest": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.3"
+  }
+}

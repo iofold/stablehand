@@ -1,0 +1,45 @@
+{
+  "campaign": "experiment-loop",
+  "agents": {
+    "production": "agents/ops-assistant/agent.yaml",
+    "proposer": "agents/proposer/agent.yaml",
+    "reviewer": "agents/reviewer/agent.yaml"
+  },
+  "tasks": "tasks/tasks.json",
+  "slice": [
+    "ext-invoice-berlin",
+    "ext-shipment-notice",
+    "ext-support-ticket",
+    "fx-price-lookup",
+    "fx-distinct-customers"
+  ],
+  "holdout": [
+    "ext-purchase-order",
+    "ext-meeting-request",
+    "ext-restaurant-receipt",
+    "fx-largest-open-invoice",
+    "fx-weekly-hours",
+    "fx-commission"
+  ],
+  "maxIterations": 6,
+  "baselineRepeats": 2,
+  "minGain": 0.05,
+  "campaignBudgetUsd": 1,
+  "tagBudget": {
+    "window": "rolling-24h",
+    "usd": 3,
+    "runs": 400
+  },
+  "searchSpace": {
+    "models": ["gpt-5.4-mini"],
+    "reasoning": [],
+    "maxTokens": { "min": 500, "max": 4000 },
+    "nativeTools": ["none"],
+    "maxInstructionChars": 6000
+  },
+  "concurrency": 5,
+  "turnTimeoutSec": 300,
+  "approvalWaitMinutes": 30,
+  "proposerEstimateUsd": 0.02,
+  "maxInvalidInARow": 2
+}

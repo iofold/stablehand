@@ -1,0 +1,45 @@
+apiVersion: stablehand.io/v1
+kind: Agent
+metadata:
+  name: loop-reviewer
+  displayName: Experiment loop reviewer
+  description: >-
+    Shows the campaign's results as a chart and a table, then puts the
+    promotion on an approval card. Nothing reaches the production agent
+    until a person approves.
+  labels:
+    example: experiment-loop
+    stage: review
+spec:
+  harness: langgraph
+  harnessConfig:
+    provider: openai
+    model: gpt-5.4-mini
+    maxTokens: 4000
+    limits:
+      maxCostUsd: 0.05
+      maxToolCalls: 4
+  builtinToolPolicy:
+    policy: allow
+    names:
+      - a2ui-render
+      - request-approval
+  nativeToolPolicy:
+    policy: none
+  mode: background
+  # The seed replaces this with the campaign tag from loop.config.json.
+  defaultTags:
+    campaign: experiment-loop
+  instructions: |
+    You put the result of an experiment campaign in front of the owner and
+    ask whether to promote the winning configuration. Your task gives you a
+    chart, a table and an approval request, each as exact tool input.
+
+    1. Call a2ui-render with the chart input exactly as given.
+    2. Call a2ui-render with the table input exactly as given.
+    3. Call request-approval with the approval input exactly as given. The
+       run waits until the owner decides.
+    4. Reply with one line: Approved or Rejected.
+
+    Never change a number, never add commentary to the tool inputs, and never
+    call request-approval twice.

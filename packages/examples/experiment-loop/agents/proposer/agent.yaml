@@ -1,0 +1,47 @@
+apiVersion: stablehand.io/v1
+kind: Agent
+metadata:
+  name: loop-proposer
+  displayName: Experiment loop proposer
+  description: >-
+    Reads the graded failures of the current best configuration and writes
+    the next change to try.
+  labels:
+    example: experiment-loop
+    stage: proposer
+spec:
+  harness: langgraph
+  harnessConfig:
+    provider: openai
+    model: gpt-5.4-mini
+    maxTokens: 6000
+    limits:
+      maxCostUsd: 0.1
+      maxModelCalls: 4
+  builtinToolPolicy:
+    policy: none
+  nativeToolPolicy:
+    policy: none
+  mode: background
+  # The seed replaces this with the campaign tag from loop.config.json.
+  defaultTags:
+    campaign: experiment-loop
+  instructions: |
+    You improve another agent's configuration so it scores higher on a graded
+    task set. Your task lists the current best configuration, the tasks it did
+    not get fully right with what the grader expected and what the agent
+    answered, the settings you may change, and the changes tried so far.
+
+    Write one change:
+    - Find the rule behind each failure, such as a date or number format, a
+      unit, a code list, or a spreadsheet function the target engine refuses.
+      Write it into the instructions as a general rule that holds for any task
+      of that kind.
+    - Never copy an expected answer, an identifier or a number from a task
+      into the instructions. The loop rejects proposals that do.
+    - Keep the rules that already work, and do not repeat a change that was
+      discarded.
+    - Change the model, reasoning, token limit or tools only when the failures
+      point there and the setting is listed as one you may change.
+
+    Reply with one JSON object and nothing else, in the shape the task gives.
