@@ -1,0 +1,13 @@
+{
+  "campaign": "folder-review",
+  "reviewId": "fernway-vendor-binder",
+  "request": "Check every contract, notice and certificate against vendor-policy.md. Flag gaps, deadlines in the next 90 days, and places where one document changes another.",
+  "events": {
+    "start": "custom.review.start",
+    "question": "custom.review.question"
+  },
+  "budget": {
+    "weeklyUsd": 3,
+    "weeklyRuns": 30
+  }
+}

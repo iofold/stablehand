@@ -1,0 +1,21 @@
+{
+  "name": "@stablehand/example-folder-review",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "description": "Folder review: reads every document in a folder and returns findings that cite the document and page or section, with cited answers to follow-up questions",
+  "scripts": {
+    "seed": "node --experimental-strip-types seed.ts",
+    "review": "node --experimental-strip-types review.ts",
+    "documents": "sh documents-src/build.sh",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stablehand/manifest": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.3"
+  }
+}
