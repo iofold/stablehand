@@ -1,4 +1,4 @@
-# Bugfarm pipeline (deterministic spike)
+# Bugfarm pipeline
 
 Turns a GitHub repo's bug-fix history into [Harbor](https://harborframework.com) coding tasks with no
 model calls. Each task has:
@@ -9,13 +9,17 @@ model calls. Each task has:
 - the fix, as the reference solution.
 
 This is the deterministic half of the Bugfarm worker (`docs/plans/proposals/2026-10-23-bugfarm.md`).
-The agent-driven version swaps two seams for agents: the env Dockerfile (`buildEnvFromDockerfile`)
-and the instruction text (`placeholderInstruction`).
+The worker runs these steps as jobs and swaps three seams for floor agents: which pull requests to
+mine (the Scout, `candidateFromUnit`), the env Dockerfile (the Env builder, `buildEnvFromDockerfile`)
+and the instruction text (the Writer, `packageTask(..., { instruction })`). The CLI below still runs
+the whole pipeline by hand, with no model calls.
 
 ## Method
 
 1. **`scout`.** Blobless clone (`--filter=blob:none`). Walk HEAD's **first-parent** history since
-   2026-01-01, so each squash commit or merged PR counts as one unit of change. Keep a unit when:
+   2025-07-01 (`BUGFARM_SINCE`), so each squash commit or merged PR counts as one unit of change.
+   Every task records its fix date, so decontamination can filter by a model's cutoff later. Keep a
+   unit when:
    - its message (the PR title, for merges) looks like a fix;
    - it touches package source and a test module;
    - it changes 5 files or fewer, ignoring docs and changelogs;
@@ -28,41 +32,56 @@ and the instruction text (`placeholderInstruction`).
    It installs the repo in editable mode plus its test dependencies, then confirms that
    `pytest --collect-only` works. The Dockerfiles are hand-written in `lib/repos.ts`.
    `buildEnvFromDockerfile` takes Dockerfile text and returns the logs and a pass/fail verdict.
-3. **`check_candidate`** uses three states, following SWE-gen. The env is built once at HEAD, so
-   there is no dependency drift.
+3. **`check_candidate`** uses three states, following SWE-gen. The env is always the one built
+   at HEAD. The buggy state comes from HEAD when the fix still reverts there, and from the fix's
+   parent commit when it does not:
 
-   | State | Contents |
-   |---|---|
-   | fixed | HEAD |
-   | buggy | HEAD with the fix's source diff reverse-applied. Tests stay at HEAD, so the fix's tests are present. |
-   | agent | buggy with the fix's test diff also reverse-applied. This is what the solver sees: the new tests are hidden. |
+   | State | HEAD base (preferred) | Parent base (fallback) |
+   |---|---|---|
+   | fixed | HEAD | the fix commit's tree |
+   | buggy | HEAD with the fix's source diff reverted; tests stay at HEAD, so the fix's tests are present | the fix's parent with the fix's test files overlaid |
+   | agent | buggy with the fix's test diff also reverted: what the solver sees | the fix's parent |
 
    Reverting tries an exact `git apply -R` first. If that fails because later commits moved the
    context lines, it falls back to a per-file 3-way merge with `git merge-file` (HEAD, the fix, the
-   fix's parent), which is what `git revert` does. The solution patch is then regenerated as
-   `diff(buggy → HEAD)`, so `solve.sh` always applies.
+   fix's parent), which is what `git revert` does. If that conflicts too, or the fix is not in HEAD,
+   the parent base takes over. The solution patch is regenerated as `diff(buggy → fixed)`, so
+   `solve.sh` always applies. On the parent base the old tree runs on today's dependencies; when
+   its own tests no longer even collect, the reject is `env_drift`.
 
    - Run the test modules the fix touched, 3 times on buggy and 3 times on fixed. Fail-to-pass
      tests are those that fail in every buggy run and pass in every fixed run. Anything that changes
      outcome between runs is `flaky`.
-   - Run the full suite once on buggy. Pass-to-pass tests are those that also passed in both cached
-     HEAD runs.
+   - Pass-to-pass is a **time-boxed subset**, not the full suite: the fix's own test modules plus
+     up to 4 related modules (beside a target, or named after a touched source module; ties break
+     by a hash of the sha). It runs twice on fixed and once on buggy; pass-to-pass tests passed in
+     all three. The verifier runs the same modules, so a trial takes seconds instead of the full
+     suite's two minutes. Tests that crash the interpreter on fixed are deselected for both.
+   - The FAILURES section of the first buggy run is kept as the failing output, for the Writer.
    - Every reject gets a reason: `reverse_patch_conflict`, `no_test_targets`, `no_fail_to_pass`,
      `import_error_only` (fail-to-pass only because the module can't import), `flaky`, `timeout`,
-     `env_build_failed`, `check_error`.
+     `env_drift`, `env_build_failed`, `check_error`.
 4. **`package_task`.** Writes a Harbor 0.24 task to `.work/tasks/<slug>/<slug>-<sha10>/` and one
    SWE-bench-style row to `.work/results/<slug>/swebench.jsonl`.
-   - The instruction comes from the commit or PR message, with a canary comment and never the diff.
+   - The instruction is the Writer's text when there is one; otherwise the commit or PR message
+     becomes a placeholder. Either way it gets a canary comment and never the diff.
    - `task.toml` carries `[metadata.bugfarm]` provenance and sets `environment_mode = "separate"`
      and `network_mode = "no-network"`.
    - `environment/docker-compose.yaml` forces `network_mode: none`.
-   - `tests/test.sh` overlays the hidden tests, runs the suite and grades it with `tests/grade.py`,
-     which writes `/logs/verifier/reward.txt`.
+   - `tests/test.sh` overlays the hidden tests, runs the subset's modules and grades them with
+     `tests/grade.py`, which writes `/logs/verifier/reward.txt`.
    - `solution/solve.sh` is executable and runs `git apply` on the fix.
 5. **`controls`.** Runs `harbor run -a oracle` (must score 1) and `-a nop` (must score 0) on local
    Docker. Failures are `oracle_failed`, `nop_passed` or `control_error`.
 6. **`run`.** Chains all of the above for N candidates, prints the funnel and writes
    `.work/results/<slug>/funnel.json`.
+
+### Results with the M1 changes (2026-10-23, the Azure box)
+
+A smoke run of `check` on six fastapi candidates accepted all six, four of them through the parent
+base; each check took 22-43 s with the subset. Their controls (oracle 1, nop 0 on all six) took 93 s
+and 97 s for the six tasks at `-n 4`, against 19 and 21 minutes for twelve tasks with the full suite
+in the spike.
 
 ## Commands
 
