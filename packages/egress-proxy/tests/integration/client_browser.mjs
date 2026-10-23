@@ -1,3 +1,4 @@
+/* global process, URL, console */
 // Chromium through the egress proxy, launched the way the browse tool does it
 // (packages/sandbox-daemon/src/sandbox/browser-handler.ts): the lease goes to Playwright as proxy
 // credentials, which it sends when the proxy answers 407.
