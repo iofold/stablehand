@@ -254,6 +254,16 @@ export class BoardStore {
     return row ? toBoardRow(row) : null;
   }
 
+  /** The latest row of every key of one kind, oldest first. The foreman and job runner resume from these. */
+  async currentOfKind<K extends RowKind>(kind: K): Promise<BoardRow<K>[]> {
+    const rows = await this.sql<DbRow[]>`
+      select distinct on (key) id, kind, key, content_sha, payload, created_at
+      from ${this.table('rows')}
+      where kind = ${kind}
+      order by key, id desc`;
+    return rows.map(toBoardRow).sort((a, b) => a.id - b.id) as BoardRow<K>[];
+  }
+
   /** Counts of current things, for the health check and the simulator's safety check. */
   async summary(): Promise<{ rows: number; simulatedKeys: number; realKeys: number }> {
     const [row] = await this.sql<{ rows: string; simulated: string; real: string }[]>`

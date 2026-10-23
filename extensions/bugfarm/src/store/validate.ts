@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ROW_KINDS, STAGES, type RowKind } from '../shared/board.js';
+import { JOB_KINDS, ROW_KINDS, STAGES, type JobKind, type RowKind } from '../shared/board.js';
 
 /** Epoch milliseconds, or an ISO-8601 string that is converted to them. */
 const Millis = z.union([
@@ -103,6 +103,43 @@ const Cell = z.looseObject({
   simulated: z.boolean().optional(),
 });
 
+const Job = z.looseObject({
+  kind: z.enum(JOB_KINDS as [JobKind, ...JobKind[]]),
+  status: z.enum(['queued', 'running', 'done', 'failed']),
+  args: z.record(z.string(), z.unknown()),
+  progress: z.string().max(2000).nullable().optional(),
+  result: z.record(z.string(), z.unknown()).nullable().optional(),
+  error: z.string().max(8000).nullable().optional(),
+  owner: z.enum(['foreman', 'agent']).optional(),
+  runs: Count.optional(),
+  created_at: Millis.optional(),
+  started_at: Millis.nullable().optional(),
+  finished_at: Millis.nullable().optional(),
+});
+
+const Turn = z.looseObject({
+  turn_id: z.string().min(1),
+  role: z.enum(['scout', 'env_builder', 'writer']),
+  agent_id: z.string().min(1),
+  campaign: z.string().min(1),
+  batch: Count,
+  stage: z.string().min(1),
+  item: z.string().min(1),
+  status: z.enum(['running', 'completed', 'error', 'cancelled']),
+  cost_usd: Usd.nullable().optional(),
+  started_at: Millis.optional(),
+  finished_at: Millis.nullable().optional(),
+});
+
+const Env = z.looseObject({
+  repo: z.string().min(1),
+  head: z.string().min(1),
+  tag: z.string().min(1),
+  ok: z.boolean(),
+  dockerfile: z.string().max(100_000),
+  built_at: Millis.optional(),
+});
+
 export const PAYLOAD_SCHEMAS: Record<RowKind, z.ZodType<Record<string, unknown>>> = {
   campaign: Campaign,
   batch: Batch,
@@ -110,6 +147,9 @@ export const PAYLOAD_SCHEMAS: Record<RowKind, z.ZodType<Record<string, unknown>>
   attempt: Attempt,
   rule: Rule,
   cell: Cell,
+  job: Job,
+  turn: Turn,
+  env: Env,
 };
 
 export const RowKey = z.string().min(1).max(200).regex(/^[^\u0000-\u001f]+$/, 'key must not contain control characters');

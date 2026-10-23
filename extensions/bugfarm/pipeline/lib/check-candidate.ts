@@ -36,7 +36,9 @@ export type RejectReason =
   | 'import_error_only'
   | 'flaky'
   | 'timeout'
-  | 'check_error';
+  | 'check_error'
+  /** On the parent base, the fixed tree does not even collect on today's env: its dependencies moved on. */
+  | 'env_drift';
 
 /** Where the buggy state came from: HEAD with the fix reverted, or the fix's parent commit. */
 export type BuggyBase = 'head' | 'parent';
@@ -400,6 +402,9 @@ export async function checkCandidate(cand: Candidate, env: EnvBuildResult, opts:
       return reject('import_error_only', `pytest could not start on the buggy state (exit ${firstBuggy.exitCode})\n${firstBuggy.tail}`);
     }
     const passingFixed = [...firstFixed.outcomes].filter(([, o]) => o === 'passed').map(([id]) => id);
+    if (passingFixed.length === 0 && trees.base === 'parent' && firstFixed.collectionErrors.length > 0) {
+      return reject('env_drift', `the fix's own tree does not collect on the env built at HEAD (dependencies changed since): ${firstFixed.collectionErrors.join(', ')}\n${firstFixed.tail}`);
+    }
     if (passingFixed.length === 0) {
       return reject('no_fail_to_pass', `no target test passes on the fixed state (collection errors: ${firstFixed.collectionErrors.join(', ') || 'none'})\n${firstFixed.tail}`);
     }

@@ -9,6 +9,7 @@ import { UpsertValidationError } from './store/store.js';
 import { UpsertBodySchema, UpsertInputSchema, formatIssues, type UpsertInput } from './store/validate.js';
 import { checkDelivery, deliveryToRows, verifyWebhookSignature } from './webhooks.js';
 import type { LinkStatus } from './stablehand.js';
+import { ToolError, type ToolHandlers } from './tools.js';
 
 export interface ServerDeps {
   store: Pick<BoardStore, 'upsert' | 'changes' | 'current' | 'epoch' | 'reset' | 'summary' | 'ping'>;
@@ -16,10 +17,19 @@ export interface ServerDeps {
   ingestToken: string;
   viewToken: string;
   webhookSecret: string;
-  campaignKey: string;
+  /** Campaign row that webhook updates land on; a function follows the foreman's current campaign. */
+  campaignKey: string | (() => string);
   webDir: string | null;
   link: () => LinkStatus | null;
   sim: () => { running: boolean } | null;
+  /** The floor agents' HTTP tools; null turns them off. */
+  tools?: ToolHandlers | null;
+  /** Bearer secret the floor agents' HTTP tools send. */
+  toolsToken?: string;
+  /** Start a campaign (`POST /internal/v1/campaigns`, ingest token). */
+  launchCampaign?: (body: unknown) => Promise<Record<string, unknown>>;
+  /** What the foreman is doing, for `/healthz`. */
+  foreman?: () => Record<string, unknown> | null;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
   heartbeatMs?: number;
 }
@@ -273,7 +283,25 @@ export function createBugfarmServer(deps: ServerDeps): Server {
         ingest: deps.ingestToken ? 'on' : 'off',
         stablehand: deps.link(),
         simulator: deps.sim(),
+        tools: deps.tools && deps.toolsToken ? 'on' : 'off',
+        foreman: deps.foreman?.() ?? null,
       });
+      return;
+    }
+
+    if (pathname.startsWith('/tools/')) {
+      if (!deps.tools || !deps.toolsToken) throw new HttpError(503, 'The floor tools are off. Set BUGFARM_TOOLS_TOKEN.');
+      if (!safeEqual(bearer(req), deps.toolsToken)) throw new HttpError(401, 'missing or wrong tools token');
+      if (method !== 'POST') throw new HttpError(405, 'tools take POST');
+      const match = /^\/tools\/v1\/([a-z_]+)$/.exec(pathname);
+      if (!match) throw new HttpError(404, 'no such tool');
+      const body = parseJson(await readBody(req));
+      try {
+        sendJson(res, 200, await deps.tools.handle(match[1], body, req));
+      } catch (err) {
+        if (err instanceof ToolError) throw new HttpError(err.status, err.message);
+        throw err;
+      }
       return;
     }
 
@@ -302,7 +330,7 @@ export function createBugfarmServer(deps: ServerDeps): Server {
         sendJson(res, 200, { ok: true, duplicate: true });
         return;
       }
-      const { rows, ingest: nested } = deliveryToRows(checked.delivery, deps.campaignKey);
+      const { rows, ingest: nested } = deliveryToRows(checked.delivery, typeof deps.campaignKey === 'function' ? deps.campaignKey() : deps.campaignKey);
       let extra: UpsertInput[] = [];
       if (nested !== null) {
         const parsed = UpsertBodySchema.safeParse(nested);
@@ -332,6 +360,19 @@ export function createBugfarmServer(deps: ServerDeps): Server {
         const parsed = UpsertInputSchema.safeParse({ kind: single[1], key: decodeURIComponent(single[2]), payload: body, mode });
         if (!parsed.success) throw new HttpError(400, formatIssues(parsed.error));
         sendJson(res, 200, await ingest([parsed.data]));
+        return;
+      }
+      if (method === 'POST' && pathname === '/internal/v1/campaigns') {
+        if (!deps.launchCampaign) throw new HttpError(503, 'The foreman is off. Set STABLEHAND_BASE_URL and STABLEHAND_API_KEY.');
+        const body = parseJson(await readBody(req));
+        try {
+          sendJson(res, 201, await deps.launchCampaign(body));
+        } catch (err) {
+          const status = (err as { status?: unknown }).status;
+          if (typeof status === 'number') throw new HttpError(status, (err as Error).message);
+          if (err instanceof Error && (err.name === 'CampaignBusyError' || /already exists/.test(err.message))) throw new HttpError(409, err.message);
+          throw err;
+        }
         return;
       }
       if (method === 'POST' && pathname === '/internal/v1/reset') {
