@@ -132,15 +132,19 @@ export class BudgetEnforcer {
         this.deps.logger.error(`${TAG} spend query failed for policy ${match.policyId}; no run cap from it (fail-open):`, err);
         continue;
       }
-      if (spend.costUsd === null) continue;
+      // No turns and no campaign spend in the window is a known zero; a cost
+      // that is null while something was recorded is unknown (fail-open).
+      const nothingRecorded = spend.turns === 0 && spend.totalTokens === null;
+      const spentUsd = spend.costUsd ?? (nothingRecorded ? 0 : null);
+      if (spentUsd === null) continue;
 
       const limitUsd = costLimit * blockAt;
-      const remainingUsd = Math.max(0, limitUsd - spend.costUsd);
+      const remainingUsd = Math.max(0, limitUsd - spentUsd);
       if (!tightest || remainingUsd < tightest.remainingUsd) {
         tightest = {
           remainingUsd,
           limitUsd,
-          spentUsd: spend.costUsd,
+          spentUsd,
           policyId: match.policyId,
           policyName: match.policyName,
           ...(match.bucketLabel ? { bucket: match.bucketLabel } : {}),

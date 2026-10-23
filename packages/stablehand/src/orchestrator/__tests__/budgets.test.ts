@@ -531,6 +531,20 @@ describe('BudgetEnforcer.costHeadroom', () => {
     await expect(enforcer.costHeadroom({ a: '1', b: '1', c: '1', d: '1' })).resolves.toBeNull();
   });
 
+  it('treats a policy with nothing recorded in its window as untouched, not unknown', async () => {
+    const db = makeDb(
+      [{ id: 'p1', name: 'Growth team', enabled: true, doc: COST_DOC }],
+      { p1: { totalTokens: null, costUsd: null, turns: 0 } },
+    );
+    const enforcer = new BudgetEnforcer({ db: db as never, logger: silentLogger });
+
+    await expect(enforcer.costHeadroom({ team: 'growth' })).resolves.toMatchObject({
+      remainingUsd: 9,
+      limitUsd: 9,
+      spentUsd: 0,
+    });
+  });
+
   it('never reports negative headroom', async () => {
     const db = makeDb(
       [{ id: 'p1', name: 'Growth team', enabled: true, doc: COST_DOC }],
