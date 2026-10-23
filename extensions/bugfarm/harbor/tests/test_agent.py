@@ -74,6 +74,9 @@ def test_agent_body_denies_egress_and_web_tools(tmp_path):
     assert pi_body["harnessConfig"]["limits"] == {"maxCostUsd": 2.0, "maxToolCalls": 250, "maxModelCalls": 80}
     assert pi.bench_cell == "pi-agent/gpt-5.4-mini"
 
+    bare = _agent(tmp_path, harness="langgraph", model="gpt-5.4-mini", native_tools="none")
+    assert bare._agent_body("t", "task", "/app")["nativeToolPolicy"] == {"policy": "none"}
+
 
 def test_task_name_comes_from_the_trial_config(tmp_path):
     agent = _agent(tmp_path, harness="pi", model="gpt-5.4-mini")

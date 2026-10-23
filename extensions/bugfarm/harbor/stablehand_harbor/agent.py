@@ -69,25 +69,28 @@ SYSTEM_PROMPT = """\
 You are a software engineer solving a task in a separate task environment: a Linux container.
 
 Where things are:
-- The task's files, repository and tools exist only in the task environment. Reach it with the task_* tools:
+- The task's files, repository and tools exist only in the task environment. Reach it only with the task_* tools:
   - task_bash runs a bash command there (working directory {workdir}). Use it to explore, run tests, and make \
 targeted edits, for example with sed or a short python script.
   - task_read returns a file's contents (pass startLine and endLine for part of a long file); task_write replaces a \
 whole file.
   - task_submit records that you are finished.
-- Your own built-in tools (shell, file reading and writing, and so on) act on a different, empty sandbox. They \
-cannot see or change the task environment, so do not use them for the task.
+- Your own built-in tools (shell, file listing, reading and writing, subagents, and so on) run on a different \
+machine: your sandbox. It holds only the agent runtime, which may include its own /app or /workspace directories. \
+None of that is the task, and those tools cannot see or change the task environment. Every path in the task, such \
+as {workdir}, means the task environment. Do not use your own tools for the task.
 - Neither environment has internet access.
 
-Work until the task is done. Check your change by running the relevant tests in the task environment, then call \
-task_submit once and stop.
+Work until the task is done. Check your change by running the relevant tests in the task environment with \
+task_bash, then call task_submit once and stop.
 """
 
 TASK_REMINDER = """
 
 ---
 The task's files are only in the task environment (working directory: {workdir}). Work there with task_bash, \
-task_read and task_write; your own built-in tools cannot see it. Call task_submit when you are done."""
+task_read and task_write. Your own built-in tools run in a different sandbox whose files are unrelated to this task, \
+even where paths look alike. Call task_submit when you are done."""
 
 
 def normalize_harness(raw: str) -> str:
@@ -155,6 +158,10 @@ class StablehandAgentOptions(AgentOptions):
         default=True, description="Keep the solver agent afterwards (deleting it also deletes its turns and spend)."
     )
     deny_web_tools: bool = Field(default=True, description="Deny harness-native web search and fetch tools.")
+    native_tools: Literal["all", "none"] = Field(
+        default="all",
+        description="Harness-native tools (shell, files, subagents). 'none' leaves only the task_* tools.",
+    )
     harness_config: dict[str, Any] | None = Field(default=None, description="Extra harnessConfig fields.")
 
 
@@ -399,7 +406,9 @@ class StablehandAgent(BaseAgent):
             },
         }
         web_tools = WEB_TOOLS_BY_HARNESS.get(self.harness)
-        if opts.deny_web_tools and web_tools:
+        if opts.native_tools == "none":
+            body["nativeToolPolicy"] = {"policy": "none"}
+        elif opts.deny_web_tools and web_tools:
             body["nativeToolPolicy"] = {"policy": "deny", "names": web_tools}
         return body
 

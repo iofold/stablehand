@@ -25,8 +25,11 @@ harbor (host) ── StablehandAgent.run ──┬─ relay on the Docker bridge
   are kept by default: deleting an agent also deletes its turns and their spend history.
 - The solver sandbox has `egress: {mode: "deny"}` (model gateway only). Claude's `WebSearch` and
   `WebFetch` are denied because web search runs on the provider's side, outside the sandbox proxy.
-  Stablehand's built-in tools (approval requests, events, UI blocks) are off; other harness-native tools
-  stay on, and the prompt says they only see an empty sandbox.
+  Stablehand's built-in tools (approval requests, events, UI blocks) are off. Other harness-native tools
+  stay on, and the prompt says they act on the solver's own sandbox, not the task. That sandbox holds the
+  runtime, including its own `/app`, which a task's `/app` can be mistaken for: in a trial, LangGraph with
+  gpt-5.4-mini explored and "fixed" the runtime's files instead of the task's. `--ak native_tools=none`
+  leaves only the `task_*` tools for a cell where that happens.
 - The relay secret is a tools-scope agent secret: the orchestrator sends it, the sandbox never sees it.
   It is deleted when the trial ends.
 - A turn that ends in `ERROR` raises `NonZeroAgentExitCodeError`, so Harbor records it and still runs the
@@ -67,7 +70,7 @@ uv run stablehand-harbor probe-egress --agent-id <solver agent id> --campaign bu
 Harbor's `-m` works in place of `--ak model=`. Other kwargs (`harbor agent schema
 stablehand_harbor:StablehandAgent` lists them all): `provider`, `bench_cell`, `max_cost_usd` (per trial,
 default 2), `max_tool_calls`, `turn_timeout_sec`, `bash_max_timeout_sec`, `keep_agent`,
-`deny_web_tools`, `harness_config` (JSON merged into the harness config), `relay_bind`, `relay_host`,
+`deny_web_tools`, `native_tools` (`all` or `none`), `harness_config` (JSON merged into the harness config), `relay_bind`, `relay_host`,
 `relay_port`, `workdir`.
 
 How a campaign's spend is capped: harness turns run on Stablehand's per-session gateway keys and are
