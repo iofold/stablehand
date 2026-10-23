@@ -1,11 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { toAtifV17 } from './calibrate-atif.ts';
 import { jobConfig, judge } from './calibrate-harbor.ts';
 import { defaultPanel, panelSha, validatePanel } from './calibrate-panel.ts';
-import { BudgetPool, CostModel, itemKeyFor, readBugfarmMetadata, readTaskInfo } from './calibrate.ts';
+import { BudgetPool, CostModel, calibrationToml, itemKeyFor, readBugfarmMetadata, readTaskInfo, writeTaskCalibration } from './calibrate.ts';
 
 const tmp = mkdtempSync(join(tmpdir(), 'bugfarm-cal-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -41,6 +41,29 @@ describe('task identity', () => {
     const b = readTaskInfo(dir);
     expect(b.instruction_sha).not.toBe(a.instruction_sha);
     expect(b.verifier_sha).toBe(a.verifier_sha);
+  });
+});
+
+describe('task.toml receipt', () => {
+  it('appends the calibration block once and replaces it on recalibration', () => {
+    const dir = join(tmp, 'toml-task');
+    mkdirSync(dir, { recursive: true });
+    const base = '[metadata.bugfarm]\nrepo = "a/b"\n\n[environment]\ncpus = 2\n';
+    writeFileSync(join(dir, 'task.toml'), base);
+    const panel = { ...defaultPanel(), frozen_at: 'x', sha: 'abc', routes: [] };
+    const result = (decision: 'accept' | 'too_easy', passes: number) => ({
+      task: 'toml-task', item: 'b@1', panel: { id: panel.id, sha: 'abc' }, decision, cost: 1.5, cost_this_call: 1.5, cost_settled: true,
+      screen: { cheap: null, frontier: null }, attempts: 4,
+      perFamily: { anthropic: { model: 'claude-sonnet-5', passes, attempts: 4, errors: 0, rate: passes / 4, ci95: [0, 1] as [number, number], state: 'open' as const } },
+    });
+    writeTaskCalibration(dir, panel, result('accept', 1));
+    writeTaskCalibration(dir, panel, result('too_easy', 3));
+    const text = readFileSync(join(dir, 'task.toml'), 'utf8');
+    expect(text.startsWith(base)).toBe(true);
+    expect(text.match(/\[metadata\.bugfarm\.calibration\]/g)?.length).toBe(1);
+    expect(text).toContain('decision = "too_easy"');
+    expect(text).toContain('[metadata.bugfarm.difficulty.anthropic]\nmodel = "claude-sonnet-5"\npasses = 3\nattempts = 4');
+    expect(calibrationToml(panel, result('accept', 1))).toContain('phase = "selection"');
   });
 });
 

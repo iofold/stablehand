@@ -11,7 +11,7 @@
 //
 // CLI: node --experimental-strip-types calibrate.ts <command>   (run without one for help)
 import { createHash, randomBytes } from 'node:crypto';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PROFILES } from './lib/repos.ts';
@@ -707,9 +707,63 @@ export async function calibrate(taskDir: string, panel: FrozenPanel, budget: num
     attempts: all.length,
   };
   writeJson(join(taskStoreDir(panel.id, task.name), 'summary.json'), { ...result, task_info: task, updated_at: new Date().toISOString() });
+  if (decision !== 'screened') writeTaskCalibration(task.dir, panel, result);
   await board.write([itemRow(decision === 'screened' ? undefined : { decision })]);
   log('cal', `${task.item}: ${decision} — ${Object.entries(perFamily).map(([f, r]) => `${f} ${r?.passes}/${r?.attempts}`).join(', ')} — $${result.cost.toFixed(3)}`);
   return result;
+}
+
+const TOML_BEGIN = '# --- bugfarm calibration (written by calibrate.ts; replaced on every calibration) ---';
+const TOML_END = '# --- end bugfarm calibration ---';
+
+/**
+ * Record the per-family difficulty in the task's own task.toml, under
+ * `[metadata.bugfarm.calibration]` and `[metadata.bugfarm.difficulty.<family>]`. The block sits
+ * between marker comments at the end of the file and is replaced on every calibration, so the
+ * task always carries the latest receipt. task.toml is not part of a cell's identity (instruction,
+ * tests and environment are), so writing it never splits a cell.
+ */
+export function calibrationToml(panel: FrozenPanel, result: CalibrationResult): string {
+  const q = (s: string) => JSON.stringify(s);
+  const lines = [
+    TOML_BEGIN,
+    '[metadata.bugfarm.calibration]',
+    `panel = ${q(panel.id)}`,
+    `panel_sha = ${q(panel.sha)}`,
+    `harness = ${q(panel.harness)}`,
+    `harbor_version = ${q(panel.harbor_version)}`,
+    `frontier_family = ${q(panel.frontier)}`,
+    `decision = ${q(result.decision)}`,
+    `attempts = ${result.attempts}`,
+    `cost_usd = ${result.cost}`,
+    `calibrated_at = ${q(new Date().toISOString())}`,
+    'phase = "selection"',
+  ];
+  for (const [family, r] of Object.entries(result.perFamily)) {
+    if (!r) continue;
+    lines.push(
+      '',
+      `[metadata.bugfarm.difficulty.${family}]`,
+      `model = ${q(r.model)}`,
+      `passes = ${r.passes}`,
+      `attempts = ${r.attempts}`,
+      `errors = ${r.errors}`,
+      `state = ${q(r.state)}`,
+    );
+  }
+  lines.push(TOML_END, '');
+  return lines.join('\n');
+}
+
+export function writeTaskCalibration(taskDir: string, panel: FrozenPanel, result: CalibrationResult): void {
+  const path = join(taskDir, 'task.toml');
+  let text = readFileSync(path, 'utf8');
+  const begin = text.indexOf(TOML_BEGIN);
+  if (begin >= 0) {
+    const end = text.indexOf(TOML_END, begin);
+    text = text.slice(0, begin) + (end >= 0 ? text.slice(end + TOML_END.length).replace(/^\n/, '') : '');
+  }
+  writeFileSync(path, `${text.replace(/\n*$/, '\n')}\n${calibrationToml(panel, result)}`);
 }
 
 function rejectDetail(decision: Decision, difficulty: Record<string, { passes: number; attempts: number }>, panel: FrozenPanel): string {
@@ -1064,6 +1118,20 @@ async function main(): Promise<void> {
       }
       await e.board.write(rows);
       console.log(`sent ${rows.length} rows`);
+      break;
+    }
+    case 'task-toml': {
+      // Write each decided task's per-family difficulty into its task.toml.
+      const panel = loadFrozenPanel(panelId);
+      let n = 0;
+      for (const s of summaries(panel.id)) {
+        if (s.decision === 'screened') continue;
+        const info = readJson<{ task_info: TaskInfo }>(join(taskStoreDir(panel.id, s.task), 'summary.json')).task_info;
+        if (!fileExists(join(info.dir, 'task.toml'))) continue;
+        writeTaskCalibration(info.dir, panel, s);
+        n++;
+      }
+      console.log(`wrote calibration into ${n} task.toml files`);
       break;
     }
     case 'report': {
