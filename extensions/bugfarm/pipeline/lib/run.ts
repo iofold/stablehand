@@ -52,10 +52,11 @@ export async function checkRepo(repo: string, opts: { limit: number; shas?: stri
     : undefined;
   const baseline: HeadBaseline = base ?? { format: 0, repo, head: env.head, env_image: env.tag, deselect: [], runs: [] };
   log('check', `${repo}: checking ${selected.length} candidates, concurrency ${opts.concurrency} (max ${MAX_CONTAINERS} containers)`);
-  const results = await mapLimit(selected, opts.concurrency, (c) => {
+  // check_candidate sums per-candidate time; check_wall is the stage's elapsed time under concurrency.
+  const results = await timer.time('check_wall', () => mapLimit(selected, opts.concurrency, (c) => {
     const t0 = Date.now();
     return checkCandidate(c, env, baseline, { suiteTimeoutMs: suiteTimeout(base), targetTimeoutMs: TARGET_TIMEOUT_MS }).finally(() => timer.add('check_candidate', Date.now() - t0));
-  });
+  }));
   writeJson(join(RESULTS_DIR, slugOf(repo), 'checks.json'), results.map((r) => ({ sha: r.sha, subject: r.subject, accepted: r.accepted, reason: r.reason, detail: r.detail?.split('\n')[0], f2p: r.fail_to_pass.length, p2p: r.pass_to_pass.length, timings: r.timings })));
   return results;
 }
@@ -139,6 +140,8 @@ export interface Funnel {
   rejected: Array<{ sha: string; subject: string; reason: string; detail?: string }>;
   accepted_tasks: Array<{ task: string; sha: string; subject: string; f2p: number; p2p: number; oracle: number | null; nop: number | null }>;
   timings: Record<string, { seconds: number; count: number; mean_seconds: number }>;
+  /** From the scout pass (clone, log walk, numstat, env build, one HEAD suite run). */
+  scout_timings: Record<string, number>;
   wall_seconds: number;
   disk: { work_dir_bytes: number; work_breakdown_bytes: Record<string, number>; env_image_bytes: number; docker_df_before: Record<string, string>; docker_df_after: Record<string, string> };
 }
@@ -194,6 +197,7 @@ export async function runPipeline(repo: string, opts: { limit: number; concurren
       return { task: p.dirName, sha: p.sha.slice(0, 12), subject: checks.find((c) => c.sha === p.sha)?.subject ?? '', f2p: p.fail_to_pass, p2p: p.pass_to_pass, oracle: v?.oracle ?? null, nop: v?.nop ?? null };
     }),
     timings: timer.summary(),
+    scout_timings: fileExists(join(RESULTS_DIR, slug, 'scout.json')) ? readJson<{ timings?: Record<string, number> }>(join(RESULTS_DIR, slug, 'scout.json')).timings ?? {} : {},
     wall_seconds: Math.round((Date.now() - t0) / 1000),
     disk: {
       work_dir_bytes: Object.values(breakdown).reduce((a, b) => a + b, 0),
