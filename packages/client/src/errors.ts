@@ -58,8 +58,8 @@ export class StablehandApiError extends Error {
 export class StablehandTimeoutError extends Error {
   readonly timeoutMs: number;
 
-  constructor(timeoutMs: number) {
-    super(`Stablehand request timed out after ${timeoutMs}ms`);
+  constructor(timeoutMs: number, message?: string) {
+    super(message ?? `Stablehand request timed out after ${timeoutMs}ms`);
     this.name = 'StablehandTimeoutError';
     this.timeoutMs = timeoutMs;
   }

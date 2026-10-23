@@ -17,6 +17,7 @@ export {
   createStablehandControlClient,
   type AgentEventStreamInput,
   type AgentEventStreamItem,
+  type WaitForTurnOptions,
 } from './control-client.js';
 
 export {

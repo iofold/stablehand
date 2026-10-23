@@ -971,3 +971,156 @@ describe('StablehandAgUiClient', () => {
     })).toThrow();
   });
 });
+
+describe('turn search and waitForTurn (ctx-89id)', () => {
+  function apiTurn(status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'ERROR' | 'CANCELLED', overrides: Record<string, unknown> = {}) {
+    const done = status === 'COMPLETED' || status === 'ERROR' || status === 'CANCELLED';
+    return {
+      id: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      sandboxSessionId: null,
+      status,
+      mode: 'background',
+      queuedAt: 1,
+      startedAt: 2,
+      completedAt: done ? 3 : null,
+      error: status === 'ERROR' ? 'boom' : null,
+      taskDescription: 'Scout',
+      usage: null,
+      tags: { campaign: 'bugfarm-1' },
+      ...overrides,
+    };
+  }
+
+  function makeClient(fetchImpl: ReturnType<typeof vi.fn>) {
+    return new clientModule.StablehandControlClient({
+      apiBase: 'https://stablehand.test/api',
+      fetch: fetchImpl as unknown as typeof fetch,
+      retry: { maxAttempts: 1 },
+    });
+  }
+
+  it('searches turns by tag and status across agents and pages with the cursor', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      turns: [apiTurn('COMPLETED')],
+      nextCursor: 'next-page',
+    }));
+    const client = makeClient(fetchImpl);
+
+    await expect(client.turns.search({
+      tags: { campaign: 'bugfarm-1', repo: 'rich:main' },
+      status: ['COMPLETED', 'ERROR'],
+      limit: 25,
+      cursor: 'page-2',
+    })).resolves.toMatchObject({ nextCursor: 'next-page', turns: [{ id: 'turn-1' }] });
+
+    const url = new URL(String(fetchImpl.mock.calls[0]?.[0]));
+    expect(url.pathname).toBe('/api/turns');
+    expect(url.searchParams.getAll('tag')).toEqual(['campaign:bugfarm-1', 'repo:rich:main']);
+    expect(url.searchParams.getAll('status')).toEqual(['COMPLETED', 'ERROR']);
+    expect(url.searchParams.get('limit')).toBe('25');
+    expect(url.searchParams.get('cursor')).toBe('page-2');
+  });
+
+  it('rejects a tag key containing ":" before any request', () => {
+    const fetchImpl = vi.fn();
+    const client = makeClient(fetchImpl);
+    expect(() => client.turns.search({ tags: { 'a:b': 'c' } })).toThrow(clientModule.StablehandContractError);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('looks a turn up by id alone', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ turn: apiTurn('RUNNING') }));
+    const client = makeClient(fetchImpl);
+    await expect(client.turns.lookup('turn-1')).resolves.toMatchObject({ turn: { status: 'RUNNING' } });
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://stablehand.test/api/turns/turn-1');
+  });
+
+  it('polls with backoff until the turn finishes and returns it', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ turn: apiTurn('QUEUED') }))
+      .mockResolvedValueOnce(jsonResponse({ turn: apiTurn('RUNNING') }))
+      .mockResolvedValueOnce(jsonResponse({ turn: apiTurn('ERROR') }));
+    const client = makeClient(fetchImpl);
+
+    const turn = await client.waitForTurn('turn-1', { pollIntervalMs: 1, useStream: false });
+
+    expect(turn).toMatchObject({ id: 'turn-1', status: 'ERROR', error: 'boom' });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('returns as soon as the agent stream reports the turn ended', async () => {
+    let lookups = 0;
+    let streamSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/agents/agent-1/stream')) {
+        streamSignal = init?.signal ?? undefined;
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            setTimeout(() => controller.enqueue(new TextEncoder().encode([
+              'id: 000000000007',
+              'data: {"type":"RUN_FINISHED","runId":"turn-other","threadId":"c","timestamp":2,"usage":null}',
+              '',
+              'id: 000000000008',
+              'data: {"type":"RUN_FINISHED","runId":"turn-1","threadId":"conversation-1","timestamp":3,"usage":null}',
+              '',
+              '',
+            ].join('\n'))), 20);
+          },
+        });
+        return Promise.resolve(new Response(body, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }));
+      }
+      lookups += 1;
+      return Promise.resolve(jsonResponse({ turn: apiTurn(lookups === 1 ? 'RUNNING' : 'COMPLETED') }));
+    });
+    const client = makeClient(fetchImpl);
+
+    const started = Date.now();
+    // Without the stream the next check would be a minute away.
+    const turn = await client.waitForTurn('turn-1', { pollIntervalMs: 60_000, timeoutMs: 120_000 });
+
+    expect(turn.status).toBe('COMPLETED');
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(lookups).toBe(2);
+    expect(streamSignal?.aborted).toBe(true);
+  });
+
+  it('keeps checking through brief outages but fails at once on a missing turn', async () => {
+    const recovering = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ error: 'restarting' }, 503))
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(jsonResponse({ turn: apiTurn('COMPLETED') }));
+    await expect(makeClient(recovering).waitForTurn('turn-1', { pollIntervalMs: 1, useStream: false }))
+      .resolves.toMatchObject({ status: 'COMPLETED' });
+
+    const missing = vi.fn().mockResolvedValue(jsonResponse({ error: 'Turn not found' }, 404));
+    await expect(makeClient(missing).waitForTurn('turn-1', { pollIntervalMs: 1, useStream: false }))
+      .rejects.toMatchObject({ name: 'StablehandApiError', status: 404 });
+    expect(missing).toHaveBeenCalledTimes(1);
+  });
+
+  it('times out with a clear error and honours the caller signal', async () => {
+    const running = vi.fn(() => Promise.resolve(jsonResponse({ turn: apiTurn('RUNNING') })));
+    await expect(makeClient(running).waitForTurn('turn-1', {
+      timeoutMs: 40,
+      pollIntervalMs: 5,
+      useStream: false,
+    })).rejects.toMatchObject({
+      name: 'StablehandTimeoutError',
+      message: 'Turn turn-1 did not finish within 40ms',
+    });
+
+    const caller = new AbortController();
+    const waiting = makeClient(running).waitForTurn('turn-1', {
+      pollIntervalMs: 60_000,
+      useStream: false,
+      signal: caller.signal,
+    });
+    setTimeout(() => caller.abort(new Error('worker stopping')), 10);
+    await expect(waiting).rejects.toThrow('worker stopping');
+  });
+});

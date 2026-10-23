@@ -20,6 +20,29 @@ const turn = await stablehand.turns.startBackground(
 );
 ```
 
+Wait for a turn to finish, or find every turn that carries a tag:
+
+```ts
+// Resolves once the turn is COMPLETED, ERROR or CANCELLED; check turn.status.
+const done = await stablehand.waitForTurn(turn.turnId, { timeoutMs: 30 * 60_000 });
+
+let cursor: string | undefined;
+do {
+  const page = await stablehand.turns.search({
+    tags: { campaign: 'bugfarm-1' },
+    status: ['RUNNING', 'QUEUED'],
+    cursor,
+  });
+  for (const t of page.turns) console.log(t.agentId, t.id, t.status);
+  cursor = page.nextCursor;
+} while (cursor);
+```
+
+`waitForTurn` listens on the agent's event stream so it returns as soon as the
+turn ends, and checks the turn with a growing delay in case the stream is
+unavailable. Brief outages are retried until the timeout; a missing turn or a
+refused key fails at once.
+
 For an extension, inject a dedicated scoped key instead of the operator master
 token:
 
