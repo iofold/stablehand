@@ -102,6 +102,8 @@ export class JobRunner {
       handlers: Record<JobKind, JobHandler>;
       /** Concurrent jobs per kind. */
       limits: Partial<Record<JobKind, number>>;
+      /** Called with each progress line, e.g. to mirror it onto the job's board card. */
+      onProgress?: (job: JobRecord, message: string) => Promise<void>;
       logger?: Logger;
       now?: () => number;
     },
@@ -221,7 +223,10 @@ export class JobRunner {
         const result = await this.deps.handlers[job.kind]({
           id: job.id,
           args: job.args,
-          progress: (message) => this.write(job.id, { progress: message.slice(0, 2000) }),
+          progress: async (message) => {
+            await this.write(job.id, { progress: message.slice(0, 2000) });
+            await this.deps.onProgress?.(job, message);
+          },
         });
         final = { status: 'done', result, error: null, progress: null, finished_at: this.now() };
       } catch (err) {

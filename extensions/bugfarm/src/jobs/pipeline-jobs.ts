@@ -118,7 +118,7 @@ export function createPipelineHandlers(deps: { store: PipelineStore; logger?: Pi
   const checkJob: JobHandler = async (ctx) => {
     const repo = str(ctx.args, 'repo');
     const sha = str(ctx.args, 'sha');
-    await ctx.progress('Reading the fix from git history');
+    await ctx.progress('Reading the fix from git');
     const unit = await resolveCandidate(repo, sha, optionalNumber(ctx.args, 'pr'));
     if (!unit.ok) return { accepted: false, reason: unit.reason, detail: unit.detail };
     const env = await envFor(store, repo);
@@ -175,7 +175,7 @@ export function createPipelineHandlers(deps: { store: PipelineStore; logger?: Pi
     const dirName = `${slug}-${sha.slice(0, 10)}`;
     const datasetDir = join(TASKS_DIR, slug);
     const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
-    await ctx.progress('Running the reference fix (must score 1) and doing nothing (must score 0)');
+    await ctx.progress('Running the oracle and nop controls');
     const [oracle, nop] = await Promise.all([
       runHarborAgent(datasetDir, 'oracle', { jobName: `${dirName}-oracle-${stamp}`, tasks: [dirName], concurrency: 1, timeoutMs: 45 * 60_000 }),
       runHarborAgent(datasetDir, 'nop', { jobName: `${dirName}-nop-${stamp}`, tasks: [dirName], concurrency: 1, timeoutMs: 45 * 60_000 }),

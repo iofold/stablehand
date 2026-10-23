@@ -65,6 +65,10 @@ async function main(): Promise<void> {
     store,
     handlers: createPipelineHandlers({ store }),
     limits: { build_env: 2, check_candidate: config.checkConcurrency, package_task: 2, run_controls: config.controlsConcurrency },
+    // A foreman job's progress is what its card is doing right now.
+    onProgress: async (job, message) => {
+      if (job.owner === 'foreman' && job.item) await store.upsert([{ kind: 'item', key: job.item, payload: { activity: message.slice(0, 200) } }]);
+    },
   });
   const foreman = floor && config.foreman
     ? new Foreman({

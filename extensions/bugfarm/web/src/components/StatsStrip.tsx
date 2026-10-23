@@ -135,7 +135,7 @@ export function StatsStrip({ view }: { view: BoardView }) {
         <div className="wdth-x-wide whitespace-nowrap text-[1.5rem] font-bold leading-none tracking-tight tnum sm:text-[2.2rem] xl:text-[2.6rem]">
           {unattendedSince ? elapsed(clockEnd - unattendedSince) : '—'}
         </div>
-        <div className="mt-1 text-[0.85rem] text-ink-2 sm:mt-1.5 sm:text-[0.92rem]">{!unattendedSince ? 'not unattended yet' : finished ? 'ran unattended, then stopped under the cap' : 'running unattended'}</div>
+        <div className="mt-1 text-[0.85rem] text-ink-2 sm:mt-1.5 sm:text-[0.92rem]">{!unattendedSince ? 'not unattended yet' : finished ? (cap > 0 && spent >= cap * 0.98 ? 'ran unattended, then stopped at the cap' : 'ran unattended to the end') : 'running unattended'}</div>
         {recovered > 0 && <RecoveredBadge count={recovered} className="mt-2 hidden xl:inline-flex" />}
       </div>
       {recovered > 0 && (

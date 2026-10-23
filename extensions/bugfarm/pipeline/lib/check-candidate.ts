@@ -365,7 +365,7 @@ export async function checkCandidate(cand: Candidate, env: EnvBuildResult, opts:
     if ('failure' in trees) {
       result.head_revert_failure = trees.failure.slice(0, 1000);
       log('check', `${profile.slug}@${cand.sha.slice(0, 8)} HEAD revert failed, using the fix's parent: ${trees.failure.split('\n')[0].slice(0, 120)}`);
-      progress('Revert at HEAD conflicts; using the commit before the fix');
+      progress('Using the commit before the fix');
       for (const d of ['buggy', 'agent', '.merge']) rmSync(join(dir, d), { recursive: true, force: true });
       trees = await parentTrees(cand, dir);
     }
@@ -388,7 +388,7 @@ export async function checkCandidate(cand: Candidate, env: EnvBuildResult, opts:
     if (targets.length === 0) return reject('no_test_targets', 'fix touches no test module that exists in the fixed tree and is in the verifier suite');
 
     ts = Date.now();
-    progress("Running the fix's tests before and after the fix");
+    progress('Testing before and after the fix');
     const buggyRuns: PytestRun[] = [];
     const fixedRuns: PytestRun[] = [];
     const runTargets = (tree: string, tb: 'short' | 'line' = 'line') => runPytest({ image: env.tag, treeDir: tree, args: targets, timeoutMs: opts.targetTimeoutMs, tb });
@@ -411,7 +411,7 @@ export async function checkCandidate(cand: Candidate, env: EnvBuildResult, opts:
     let f2p = passingFixed.filter((id) => FAILING.has(outcomeIn(firstBuggy, id)));
     if (f2p.length === 0) return reject('no_fail_to_pass', `all ${passingFixed.length} passing target tests also pass on the buggy state`);
 
-    progress(`${f2p.length} test${f2p.length === 1 ? '' : 's'} fail before the fix; repeating to rule out flakes`);
+    progress(`${f2p.length} failing; re-running for flakes`);
     for (let i = 1; i < F2P_REPEATS; i++) {
       const [b, f] = await Promise.all([runTargets(buggy), runTargets(fixed)]);
       buggyRuns.push(b);
@@ -442,7 +442,7 @@ export async function checkCandidate(cand: Candidate, env: EnvBuildResult, opts:
       extra: opts.extraModules ?? P2P_EXTRA_MODULES,
     });
     result.suite_modules = subset;
-    progress(`Checking ${subset.length} test module${subset.length === 1 ? '' : 's'} still pass`);
+    progress(`Checking ${subset.length} module${subset.length === 1 ? '' : 's'} still pass`);
     const runSubset = (tree: string, deselect: string[] = []) => runPytest({
       image: env.tag,
       treeDir: tree,

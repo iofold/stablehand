@@ -515,7 +515,7 @@ export class Foreman {
         batch: n,
         repo,
         sha: candidate.sha,
-        title: clip(candidate.title, 380) ?? candidate.sha,
+        title: clip(cleanTitle(candidate.title), 380) ?? candidate.sha,
         url: candidate.url ?? `https://github.com/${repo}/pull/${candidate.pr}`,
         pr: candidate.pr,
         issue: candidate.issue ?? null,
@@ -644,7 +644,7 @@ export class Foreman {
     switch (step) {
       case 'queued':
       case 'checking': {
-        if (step === 'queued') await this.setItem(key, { step: 'checking', activity: 'Checking the tests fail before the fix and pass after it' });
+        if (step === 'queued') await this.setItem(key, { step: 'checking', activity: 'Testing before and after the fix' });
         const job = await this.job('check_candidate', `${key}:check`, { repo, sha, ...(item.pr ? { pr: item.pr } : {}) }, campaignId, key);
         if (job.status === 'failed') {
           await this.reject(key, 'check_error', job.error ?? 'the check crashed');
@@ -692,7 +692,7 @@ export class Foreman {
         const input = await this.writerInput(campaign, key, item, context);
         const draft = item.draft ?? '';
         const reviewed = await this.writerGate.run(async () => {
-          await this.setItem(key, { activity: 'Writer is checking the draft for leaks' });
+          await this.setItem(key, { activity: 'Writer is checking for leaks' });
           return this.writerPass(campaignId, item, key, 'review', () => reviewTask({ ...input, draft }));
         });
         const final = reviewed ?? draft;
@@ -717,7 +717,7 @@ export class Foreman {
           await this.reject(key, 'package_error', job.error ?? 'packaging failed');
           return;
         }
-        await this.setItem(key, { step: 'controls', task_dir: String(job.result?.task_dir ?? ''), activity: 'Running the controls: the reference fix must score 1, doing nothing must score 0' });
+        await this.setItem(key, { step: 'controls', task_dir: String(job.result?.task_dir ?? ''), activity: 'Running the oracle and nop controls' });
         return;
       }
       case 'controls': {
@@ -741,7 +741,7 @@ export class Foreman {
           item: key,
         });
         if (outcome.state === 'pending') {
-          await this.setItem(key, { stage: 'calibrating', step: 'handed_off', activity: 'Handed to the calibration ladder' });
+          await this.setItem(key, { stage: 'calibrating', step: 'handed_off', activity: 'Waiting for calibration' });
         } else if (outcome.state === 'accepted') {
           await this.setItem(key, { stage: 'accepted', step: 'accepted', difficulty: outcome.difficulty, activity: null });
         } else {
@@ -787,6 +787,11 @@ export class Foreman {
     }
     return null;
   }
+}
+
+/** PR titles without a leading emoji or gitmoji code, which the card has no room for. */
+export function cleanTitle(title: string): string {
+  return title.replace(/^(?::[a-z0-9_+-]+:|[^\p{L}\p{N}`'"(])+/u, '').trim() || title;
 }
 
 function round(value: number): number {

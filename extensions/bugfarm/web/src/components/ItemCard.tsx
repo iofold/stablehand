@@ -122,7 +122,7 @@ function ItemCardBase({ item, shown, isNew, onOpen }: ItemCardProps) {
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-pollen opacity-60 motion-reduce:hidden" />
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-pollen" />
             </span>
-            <span className="truncate">{item.activity}</span>
+            <span className="truncate" title={item.activity}>{item.activity}</span>
           </span>
         )}
 
