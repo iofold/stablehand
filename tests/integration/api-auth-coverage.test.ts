@@ -15,6 +15,8 @@ const EXPECTED_ROUTE_ACCESS: Readonly<Record<string, ExpectedRouteAccess>> = {
   'GET /api/health': 'public',
   // The OAuth redirect target: authorized by its single-use state, not a token.
   'GET /api/mcp/oauth/callback': 'public',
+  // The egress proxy's lease check: the session lease in the body is the credential.
+  'POST /api/egress/lease': 'public',
 
   'GET /api/agents': 'agents:read',
   'GET /api/agents/:id': 'agents:read',
@@ -160,14 +162,14 @@ describe('API auth route coverage', () => {
     restoreEnv('STABLEHAND_AUTH_DISABLED', oldDisabled);
   });
 
-  it('marks exactly the health endpoints and the MCP OAuth redirect public', () => {
+  it('marks exactly the health endpoints, the MCP OAuth redirect and the egress lease check public', () => {
     const publicUrls = [...new Set(
       app.apiRouteTable
         .filter((route) => route.public)
         .map((route) => route.url),
     )].sort();
 
-    expect(publicUrls).toEqual(['/api/health', '/api/mcp/oauth/callback', '/health']);
+    expect(publicUrls).toEqual(['/api/egress/lease', '/api/health', '/api/mcp/oauth/callback', '/health']);
   });
 
   it('records only API, health, and ConnectRPC routes', () => {
@@ -192,7 +194,7 @@ describe('API auth route coverage', () => {
         : ((route as typeof route & { capability?: CapabilityVerb }).capability ?? 'master'),
     ]));
 
-    expect(routes).toHaveLength(93);
+    expect(routes).toHaveLength(94);
     expect(Object.keys(actual)).toHaveLength(routes.length);
     expect(actual).toEqual(EXPECTED_ROUTE_ACCESS);
   });

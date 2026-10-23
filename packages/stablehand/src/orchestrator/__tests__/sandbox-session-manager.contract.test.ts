@@ -28,6 +28,7 @@ import {
   CALLBACK_TOKEN_ENV,
   mintGrpcCallbackToken,
 } from '../grpc/callback-auth.js';
+import { mintEgressLeaseToken, verifyEgressLeaseToken } from '../egress-lease.js';
 
 const connectMocks = vi.hoisted(() => ({
   createClientMock: vi.fn(),
@@ -537,6 +538,23 @@ describe('SandboxSessionManager contract', () => {
       });
     });
 
+    it('gives each fresh session container its egress lease (ctx-3aef)', async () => {
+      vi.stubEnv('STABLEHAND_API_TOKEN', 'api-token');
+      const { manager, containerManager } = createManager();
+
+      await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
+
+      const createOpts = vi.mocked(containerManager.createContainer).mock.calls[0]?.[0];
+      if (!createOpts) {
+        throw new Error('expected createContainer to be called');
+      }
+      expect(createOpts.egressLeaseToken).toBe(mintEgressLeaseToken(createOpts.sessionId, 'agent-1', 'api-token'));
+      expect(verifyEgressLeaseToken(createOpts.sessionId, createOpts.egressLeaseToken ?? '', 'api-token'))
+        .toEqual({ agentId: 'agent-1' });
+      // The lease travels in the proxy URL only, never as a secret of its own.
+      expect(Object.values(createOpts.secrets ?? {})).not.toContain(createOpts.egressLeaseToken);
+    });
+
     it('binds the fresh-session gRPC client to the exact container instance token', async () => {
       const { manager, containerManager } = createManager();
 
@@ -723,6 +741,11 @@ describe('SandboxSessionManager contract', () => {
 
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
       expect(buildSandboxSecrets).toHaveBeenCalledWith('agent-1', { sessionId: 'sess-1' });
+      // A restored session presents the same lease it had before (ctx-3aef).
+      expect(containerManager.createContainer).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'sess-1',
+        egressLeaseToken: mintEgressLeaseToken('sess-1', 'agent-1'),
+      }));
       expect(db.claimSandboxSessionRestore).toHaveBeenCalledWith({
         sandboxSessionId: 'sess-1',
         ownerId: expect.any(String),

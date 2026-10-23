@@ -90,6 +90,7 @@ const MANIFEST_OWNED_FIELDS = [
   'nativeToolPolicy',
   'workspaceContent',
   'mode',
+  'egress',
 ] as const;
 
 function validateManifestSnapshot(
@@ -169,6 +170,7 @@ function manifestCompiledPatch(
     workspaceContent: compiled.workspaceContent ?? null,
     mode: compiled.mode ?? null,
     mcpServers: compiled.mcpServers ?? null,
+    egress: compiled.egress ?? null,
   };
 }
 
@@ -382,6 +384,9 @@ export async function crudRoutes(
       }
       if (definition.mode) {
         metadata.mode = definition.mode;
+      }
+      if (definition.egress) {
+        metadata.egress = definition.egress;
       }
       if (httpToolDefs !== undefined) {
         metadata.httpTools = httpToolDefs;
@@ -599,6 +604,7 @@ export async function crudRoutes(
         || update.nativeToolPolicy !== undefined
         || update.workspaceContent !== undefined
         || update.mode !== undefined
+        || update.egress !== undefined
         || update.manifest !== undefined
       ) {
         const existingManagedMetadata = Object.fromEntries(
@@ -617,6 +623,7 @@ export async function crudRoutes(
           delete newMetadata.resourceLimits;
           delete newMetadata.workspaceContent;
           delete newMetadata.mode;
+          delete newMetadata.egress;
         }
 
         if (update.httpTools === undefined && existingMetadata.httpTools !== undefined) {
@@ -654,6 +661,13 @@ export async function crudRoutes(
           delete newMetadata.mode;
         } else if (update.mode) {
           newMetadata.mode = update.mode;
+        }
+
+        // Egress changes reach running sandboxes within the proxy's lease cache TTL.
+        if (update.egress === null) {
+          delete newMetadata.egress;
+        } else if (update.egress) {
+          newMetadata.egress = update.egress;
         }
 
         if (update.httpTools !== undefined) {

@@ -23,6 +23,8 @@ export interface SandboxRuntimeCreateOptions {
   pidsLimit?: number;
   timeoutSec?: number;
   secrets?: Record<string, string>;
+  /** The session's egress lease token; the sandbox presents it to the egress proxy (ctx-3aef). */
+  egressLeaseToken?: string;
 }
 
 export interface SandboxRuntimeResources {
@@ -321,17 +323,62 @@ export const SANDBOX_EGRESS_CA_PATH = `${SANDBOX_EGRESS_CA_DIR}/egress-ca.pem`;
 /** Hosts a sandbox reaches directly on the internal agents network, never via the proxy. */
 export const SANDBOX_EGRESS_DEFAULT_NO_PROXY = 'localhost,127.0.0.1,::1,orchestrator,minio,litellm,host.docker.internal';
 
+/** The proxy variables that carry a session's egress lease. */
+export const SANDBOX_PROXY_ENV_KEYS: ReadonlySet<string> = new Set([
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'http_proxy',
+  'https_proxy',
+]);
+
+export interface SandboxEgressLease {
+  sessionId: string;
+  token: string;
+}
+
+type EgressEnv = Readonly<Record<string, string | undefined>>;
+
+/** Hosts a sandbox reaches directly instead of through the egress proxy. */
+export function resolveSandboxNoProxy(env: EgressEnv = process.env): string {
+  return env.STABLEHAND_SANDBOX_NO_PROXY?.trim() || SANDBOX_EGRESS_DEFAULT_NO_PROXY;
+}
+
+/**
+ * The proxy URL with the session lease as its credentials (`http://<sessionId>:<token>@host:port`),
+ * which is how curl, git, Python, Node and grpc-js send `Proxy-Authorization`. A URL that cannot
+ * carry credentials is returned unchanged; the lease listener then answers 407, so the
+ * misconfiguration shows instead of passing silently.
+ */
+export function sandboxProxyUrl(proxyUrl: string, lease?: SandboxEgressLease): string {
+  if (!lease || !URL.canParse(proxyUrl)) return proxyUrl;
+  const url = new URL(proxyUrl);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return proxyUrl;
+  return `${url.protocol}//${encodeURIComponent(lease.sessionId)}:${encodeURIComponent(lease.token)}@${url.host}`;
+}
+
+function sandboxEgressLease(options: SandboxRuntimeCreateOptions): SandboxEgressLease | undefined {
+  return options.egressLeaseToken
+    ? { sessionId: options.sessionId, token: options.egressLeaseToken }
+    : undefined;
+}
+
 /**
  * Sandbox egress environment (ctx-2ctd). When `STABLEHAND_SANDBOX_EGRESS_PROXY_URL` is set
  * the sandbox's only route out is the egress proxy: every HTTP client family reads the
  * proxy and the deployment CA from these variables (Node fetch and undici via
  * NODE_USE_ENV_PROXY, grpc-js via https_proxy/no_proxy, curl, git, Python requests).
- * The browse tool wires Chromium separately from `STABLEHAND_EGRESS_CA`.
+ * With a lease (ctx-3aef) the proxy URL carries the session's credentials, so the proxy
+ * applies that session's agent egress rules.
+ * The browse tool wires Chromium separately from `STABLEHAND_EGRESS_CA` and the proxy URL.
  */
-export function buildSandboxEgressEnv(env: NodeJS.ProcessEnv = process.env): string[] {
-  const proxyUrl = env.STABLEHAND_SANDBOX_EGRESS_PROXY_URL?.trim();
-  if (!proxyUrl) return [];
-  const noProxy = env.STABLEHAND_SANDBOX_NO_PROXY?.trim() || SANDBOX_EGRESS_DEFAULT_NO_PROXY;
+export function buildSandboxEgressEnv(
+  env: EgressEnv = process.env,
+  lease?: SandboxEgressLease,
+): string[] {
+  const configuredUrl = env.STABLEHAND_SANDBOX_EGRESS_PROXY_URL?.trim();
+  if (!configuredUrl) return [];
+  const proxyUrl = sandboxProxyUrl(configuredUrl, lease);
+  const noProxy = resolveSandboxNoProxy(env);
   return [
     `HTTP_PROXY=${proxyUrl}`,
     `HTTPS_PROXY=${proxyUrl}`,
@@ -349,6 +396,18 @@ export function buildSandboxEgressEnv(env: NodeJS.ProcessEnv = process.env): str
   ];
 }
 
+function envKey(entry: string): string {
+  return entry.slice(0, entry.indexOf('='));
+}
+
+/** Egress variables that carry the session lease; Kubernetes keeps them in the per-Job Secret. */
+function leasedEgressEnv(options: SandboxRuntimeCreateOptions): string[] {
+  const lease = sandboxEgressLease(options);
+  return lease
+    ? buildSandboxEgressEnv(process.env, lease).filter((entry) => SANDBOX_PROXY_ENV_KEYS.has(envKey(entry)))
+    : [];
+}
+
 function sandboxEnv(
   options: SandboxRuntimeCreateOptions,
   resources: SandboxRuntimeResources,
@@ -356,6 +415,8 @@ function sandboxEnv(
   sandboxOtelEnv?: string[],
   includeSecrets = true,
 ): string[] {
+  const egressEnv = buildSandboxEgressEnv(process.env, sandboxEgressLease(options));
+  const leased = new Set(leasedEgressEnv(options).map(envKey));
   return [
     `NODE_OPTIONS=--max-old-space-size=${Math.floor(resources.memoryMb * 0.9)}`,
     ...(sandboxOtelEnv ?? buildSandboxOtelEnv(options.harnessName, {
@@ -370,7 +431,7 @@ function sandboxEnv(
     ...(process.env.STABLEHAND_TURN_ORPHAN_GRACE_MS
       ? [`STABLEHAND_TURN_ORPHAN_GRACE_MS=${process.env.STABLEHAND_TURN_ORPHAN_GRACE_MS}`]
       : []),
-    ...buildSandboxEgressEnv(),
+    ...(includeSecrets ? egressEnv : egressEnv.filter((entry) => !leased.has(envKey(entry)))),
     ...(includeSecrets
       ? Object.entries(options.secrets ?? {}).map(([key, value]) => `${key}=${value}`)
       : []),
@@ -467,7 +528,13 @@ export function buildKubernetesJobSpec(input: KubernetesJobSpecInput): Kubernete
   const annotations = runtimeAnnotations(resources, input.startedAtIso, input.startupGraceMs);
   const workspaceHostPath = input.options.workspaceDir
     ?? join(input.dataHostPathRoot, 'sandbox-empty', input.options.sessionId);
-  const secretEntries = Object.entries(input.options.secrets ?? {});
+  const secretEntries = [
+    ...Object.entries(input.options.secrets ?? {}),
+    ...leasedEgressEnv(input.options).map((entry): [string, string] => [
+      envKey(entry),
+      entry.slice(entry.indexOf('=') + 1),
+    ]),
+  ];
   const secretName = kubernetesSandboxSecretName(jobName);
   const env = kubernetesEnv(sandboxEnv(
     input.options,

@@ -32,6 +32,8 @@ export interface CreateContainerOptions {
   pidsLimit?: number;
   timeoutSec?: number;
   secrets?: Record<string, string>;
+  /** The session's egress lease token; the sandbox presents it to the egress proxy (ctx-3aef). */
+  egressLeaseToken?: string;
 }
 
 export interface ContainerInfo {

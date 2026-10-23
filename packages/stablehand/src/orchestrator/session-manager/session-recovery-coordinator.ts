@@ -31,6 +31,7 @@ import { nativeToolPolicyToProto } from './native-tool-policy-proto.js';
 import { resolveAgentToolNames } from '../agent-definition.js';
 import type { BuiltinToolPolicy } from '@stablehand/contracts';
 import { getGrpcCallbackSandboxSecrets } from '../grpc/callback-auth.js';
+import { mintEgressLeaseToken } from '../egress-lease.js';
 import {
   decideRestoreOutcome,
   InvalidCheckpointError,
@@ -487,6 +488,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         pidsLimit: agentDef.resourceLimits?.pidsLimit,
         timeoutSec: agentDef.resourceLimits?.timeoutSec,
         secrets: stableSandboxSecrets,
+        egressLeaseToken: mintEgressLeaseToken(sessionId, dbSession.agentId),
       });
       createdContainer = containerInfo;
       restoreLease.signal.throwIfAborted();

@@ -1,7 +1,9 @@
 import { dirname } from 'node:path';
 import {
+  AgentEgressSchema,
   BuiltinToolPolicySchema,
   NativeToolPolicySchema,
+  type AgentEgress,
   type BuiltinToolPolicy,
   type NativeToolPolicy,
 } from '@stablehand/contracts';
@@ -49,6 +51,18 @@ export function resolveResourceLimits(agent: StoredAgent): AgentResourceLimits |
 
   return (metadata?.resourceLimits ??
     manifestResources?.sandbox) as AgentResourceLimits | undefined;
+}
+
+/**
+ * The agent's sandbox egress setting (ctx-3aef): an API override persisted in metadata, else the
+ * manifest's `spec.egress`. Undefined means the server allowlist applies (mode `default`).
+ */
+export function resolveAgentEgress(agent: StoredAgent): AgentEgress | undefined {
+  const manifest = isObjectRecord(agent.manifest) ? agent.manifest : undefined;
+  const manifestSpec = isObjectRecord(manifest?.spec) ? manifest.spec : undefined;
+  const metadata = isObjectRecord(agent.metadata) ? agent.metadata : {};
+  const candidate = 'egress' in metadata ? metadata.egress : manifestSpec?.egress;
+  return candidate === undefined || candidate === null ? undefined : AgentEgressSchema.parse(candidate);
 }
 
 /** Top-level API values persisted in metadata override their canonical manifest counterparts. */

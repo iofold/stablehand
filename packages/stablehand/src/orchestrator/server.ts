@@ -28,6 +28,7 @@ import { triggerRoutes } from './routes/triggers.js';
 import { createCanonicalIngestAdmission } from './canonical-ingest-admission.js';
 import { scheduleRoutes } from './routes/schedules.js';
 import { sandboxRoutes } from './routes/sandbox.js';
+import { egressRoutes } from './routes/egress.js';
 import type { EventTriggerManager } from '../events/trigger-manager.js';
 import type { ScheduleService } from '../schedules/index.js';
 import type { SSEManager } from './sse.js';
@@ -289,6 +290,10 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   // /api/health for nginx-proxied or prefix-based access
   app.get('/health', { config: { public: true } }, healthHandler);
   app.get('/api/health', { config: { public: true } }, healthHandler);
+
+  // ── Sandbox egress leases (ctx-3aef) ──────────────────
+  // The egress proxy checks each sandbox's session lease here to learn which rules apply.
+  await app.register(egressRoutes, { prefix: '/api/egress', db });
 
   // ── Sandbox metrics route ──────────────────────────────
   if (opts.containerManager) {

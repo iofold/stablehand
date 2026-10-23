@@ -10,6 +10,7 @@ import { ensureAgentWorkspace as ensureAgentWorkspaceShared } from '../../../wor
 import {
   extractManifestRuntimeFields,
   parseStoredHarnessConfig,
+  resolveAgentEgress,
   resolveResourceLimits,
 } from '../../agent-definition.js';
 import { validateAgentHttpToolsConfig } from '../../http-tools.js';
@@ -18,6 +19,7 @@ import type { AgentHttpToolDefinition, AgentRouteOptions, StoredAgent } from './
 
 export const AGENT_MANAGED_METADATA_FIELDS: ReadonlySet<string> = new Set([
   'builtinToolPolicy',
+  'egress',
   'httpTools',
   'mcpServers',
   'mode',
@@ -152,6 +154,7 @@ export function toAgentResponse(agent: StoredAgent): Agent {
     // Canonical resolution (metadata override ?? manifest spec.resources.sandbox) so the API
     // reports the limits the runtime actually enforces.
     resourceLimits: resolveResourceLimits(agent) ?? null,
+    egress: resolveAgentEgress(agent) ?? null,
   });
 }
 

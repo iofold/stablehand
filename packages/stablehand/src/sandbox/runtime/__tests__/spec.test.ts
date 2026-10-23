@@ -6,6 +6,7 @@ import {
   buildSandboxOtelEnv,
   buildSandboxEgressEnv,
   SANDBOX_EGRESS_DEFAULT_NO_PROXY,
+  sandboxProxyUrl,
   resolveSandboxRuntimeDefaults,
   runtimeLabelsToContainerInfo,
   sanitizeKubernetesName,
@@ -196,6 +197,88 @@ describe('sandbox runtime spec builders', () => {
       if (previous.url === undefined) delete process.env.STABLEHAND_SANDBOX_EGRESS_PROXY_URL;
       else process.env.STABLEHAND_SANDBOX_EGRESS_PROXY_URL = previous.url;
       if (previous.noProxy !== undefined) process.env.STABLEHAND_SANDBOX_NO_PROXY = previous.noProxy;
+    }
+  });
+
+  it('puts the session lease in the proxy URL (ctx-3aef)', () => {
+    expect(sandboxProxyUrl('http://egress:8081', { sessionId: 'run-001', token: 'YWdlbnQ.c2ln-_' }))
+      .toBe('http://run-001:YWdlbnQ.c2ln-_@egress:8081');
+    expect(sandboxProxyUrl('http://egress:8081')).toBe('http://egress:8081');
+    expect(sandboxProxyUrl('http://old:creds@egress:8081/', { sessionId: 's', token: 't' }))
+      .toBe('http://s:t@egress:8081');
+    expect(sandboxProxyUrl('egress:8081', { sessionId: 's', token: 't' })).toBe('egress:8081');
+    expect(buildSandboxEgressEnv({ STABLEHAND_SANDBOX_EGRESS_PROXY_URL: 'http://egress:8081' }, {
+      sessionId: 'run-001',
+      token: 'tok',
+    }).slice(0, 4)).toEqual([
+      'HTTP_PROXY=http://run-001:tok@egress:8081',
+      'HTTPS_PROXY=http://run-001:tok@egress:8081',
+      'http_proxy=http://run-001:tok@egress:8081',
+      'https_proxy=http://run-001:tok@egress:8081',
+    ]);
+  });
+
+  it('gives each Docker sandbox its lease and keeps it out of Kubernetes Job env', () => {
+    const previous = process.env.STABLEHAND_SANDBOX_EGRESS_PROXY_URL;
+    process.env.STABLEHAND_SANDBOX_EGRESS_PROXY_URL = 'http://egress:8081';
+    try {
+      const options = { ...createOptions, egressLeaseToken: 'lease-token' };
+      const docker = buildDockerContainerSpec({
+        options,
+        imagePrefix: 'stablehand/harness',
+        scopeId: 'scope-1',
+        networkName: 'stablehand-agents',
+        defaults,
+        startupGraceMs: 90_000,
+        startedAtIso: '2026-07-08T15:00:00.000Z',
+        orchestratorUrl: 'http://orchestrator:3001',
+        sandboxOtelEnv: [],
+      });
+      expect(docker.createOptions.Env).toContain('HTTPS_PROXY=http://run-001:lease-token@egress:8081');
+      expect(docker.createOptions.Env).toContain('NO_PROXY=' + SANDBOX_EGRESS_DEFAULT_NO_PROXY);
+
+      const kubernetes = buildKubernetesJobSpec({
+        options,
+        namespace: 'stablehand',
+        imagePrefix: 'stablehand/harness',
+        scopeId: 'scope-1',
+        defaults,
+        startupGraceMs: 90_000,
+        startedAtIso: '2026-07-08T15:00:00.000Z',
+        orchestratorUrl: 'http://orchestrator:3001',
+        dataHostPathRoot: '/var/lib/stablehand/data',
+        sandboxOtelEnv: [],
+      });
+      const jobEnv = kubernetes.manifest.spec.template.spec.containers[0]?.env ?? [];
+      expect(JSON.stringify(jobEnv)).not.toContain('lease-token');
+      expect(jobEnv.map((entry) => entry.name)).toContain('NO_PROXY');
+      expect(jobEnv.map((entry) => entry.name)).not.toContain('HTTPS_PROXY');
+      expect(kubernetes.secretManifest?.stringData).toMatchObject({
+        OPENAI_API_KEY: 'sk-test',
+        HTTP_PROXY: 'http://run-001:lease-token@egress:8081',
+        HTTPS_PROXY: 'http://run-001:lease-token@egress:8081',
+        http_proxy: 'http://run-001:lease-token@egress:8081',
+        https_proxy: 'http://run-001:lease-token@egress:8081',
+      });
+
+      const unleased = buildKubernetesJobSpec({
+        options: createOptions,
+        namespace: 'stablehand',
+        imagePrefix: 'stablehand/harness',
+        scopeId: 'scope-1',
+        defaults,
+        startupGraceMs: 90_000,
+        startedAtIso: '2026-07-08T15:00:00.000Z',
+        orchestratorUrl: 'http://orchestrator:3001',
+        dataHostPathRoot: '/var/lib/stablehand/data',
+        sandboxOtelEnv: [],
+      });
+      expect(unleased.manifest.spec.template.spec.containers[0]?.env)
+        .toContainEqual({ name: 'HTTPS_PROXY', value: 'http://egress:8081' });
+      expect(unleased.secretManifest?.stringData).toEqual({ OPENAI_API_KEY: 'sk-test' });
+    } finally {
+      if (previous === undefined) delete process.env.STABLEHAND_SANDBOX_EGRESS_PROXY_URL;
+      else process.env.STABLEHAND_SANDBOX_EGRESS_PROXY_URL = previous;
     }
   });
 

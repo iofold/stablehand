@@ -24,6 +24,7 @@ import {
 } from './grpc-session-client.js';
 import { RUNTIME_INSTANCE_TOKEN_ENV } from '@stablehand/shared';
 import { getGrpcCallbackSandboxSecrets } from '../grpc/callback-auth.js';
+import { mintEgressLeaseToken } from '../egress-lease.js';
 import { sandboxGrpcBaseUrl } from './sandbox-endpoint.js';
 import { applyWorkspaceSetup } from './workspace-setup.js';
 import { nativeToolPolicyToProto } from './native-tool-policy-proto.js';
@@ -184,6 +185,7 @@ export class SessionRuntimeFactory {
         pidsLimit: agentDef.resourceLimits?.pidsLimit,
         timeoutSec: agentDef.resourceLimits?.timeoutSec,
         secrets: stableSandboxSecrets,
+        egressLeaseToken: mintEgressLeaseToken(sessionId, effectiveAgentId),
       });
       createdContainerId = containerInfo.containerId;
 
