@@ -80,7 +80,16 @@ Provide these through the deployment secret store:
   capped per run by the agent's `harnessConfig.limits.maxCostUsd` or the
   remaining headroom of a blocking cost policy, and revoked when the session
   ends, so a run stops mid-flight at its spend cap (ADR 024). Unset, sandboxes
-  share the runtime key and budgets apply when a run starts only.
+  share the runtime key and budgets apply when a run starts only. The admin
+  key also lets an operator create campaign keys
+  (`POST /api/model-gateway/campaign-keys`): gateway keys for tools that are
+  not Stablehand runs, whose spend counts against the budgets that match the
+  campaign's tags (ADR 026).
+
+Stablehand reads spend only for the keys it issued (the runtime key,
+per-session keys and campaign keys). Another workload can share this gateway
+with its own virtual keys: Stablehand neither stores nor quarantines its calls.
+Do not give another workload a key alias that starts with `stablehand-`.
 - Provider credentials for the configured inventory: `OPENAI_API_KEY`,
   `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, plus
   `CLOUDFLARE_ACCOUNT_ID` and a durable Workers AI API token in
