@@ -52,10 +52,19 @@ export interface TurnOutcome {
 }
 
 export interface TurnRunnerOptions {
+  /** Longest a turn may run once it has started (queue time does not count). */
   timeoutSec: number;
   pollMs?: number;
   /** How long to wait for the gateway to price a finished turn. */
   costSettleMs?: number;
+  /**
+   * How long to keep retrying a start the agent's session limit refused.
+   * Each task run gets its own sandbox, and a finished sandbox stays warm
+   * until the idle timeout (5 minutes by default) frees it.
+   */
+  sessionWaitSec?: number;
+  /** Called while a start waits for a free sandbox session. */
+  onWait?: (message: string) => void;
 }
 
 function messageText(content: unknown): string {
@@ -89,8 +98,9 @@ export async function runTurn(
   options: TurnRunnerOptions,
 ): Promise<TurnOutcome> {
   const pollMs = options.pollMs ?? 2000;
+  const waitUntil = Date.now() + (options.sessionWaitSec ?? 900) * 1000;
   let turnId: string | null = null;
-  for (let attempt = 0; turnId === null; attempt += 1) {
+  while (turnId === null) {
     try {
       const started = await api.post<{ turnId: string }>(`/api/agents/${agentId}/turns`, { task, tags }, { 'Idempotency-Key': idempotencyKey });
       turnId = started.turnId;
@@ -98,8 +108,9 @@ export async function runTurn(
       if (error instanceof ApiError && error.code === 'budget_exceeded') {
         return { turnId: null, status: 'BLOCKED', answer: '', error: error.message, usage: ZERO_USAGE };
       }
-      if (error instanceof ApiError && (error.status === 429 || error.status === 503) && attempt < 20) {
-        await sleep(Math.max(1, error.retryAfterSec ?? 5) * 1000);
+      if (error instanceof ApiError && (error.status === 429 || error.status === 503) && Date.now() < waitUntil) {
+        options.onWait?.(error.code ?? `HTTP ${error.status}`);
+        await sleep(Math.max(10, (error.retryAfterSec ?? 5) * 1000));
         continue;
       }
       throw error;
@@ -107,13 +118,15 @@ export async function runTurn(
   }
 
   const path = `/api/agents/${agentId}/turns/${turnId}`;
-  const deadline = Date.now() + options.timeoutSec * 1000;
+  let deadline: number | null = null;
   let detail: { turn: ApiTurn; messages: ApiMessage[] };
   for (;;) {
     await sleep(pollMs);
     detail = await api.get(path);
     if (detail.turn.status !== 'QUEUED' && detail.turn.status !== 'RUNNING') break;
-    if (Date.now() > deadline) {
+    // A queued turn waits for a container; the orchestrator fails it if the queue times out.
+    if (detail.turn.status === 'RUNNING' && deadline === null) deadline = Date.now() + options.timeoutSec * 1000;
+    if (deadline !== null && Date.now() > deadline) {
       await api.post(`${path}/cancel`, {});
       return { turnId, status: 'TIMEOUT', answer: '', error: `no answer within ${options.timeoutSec}s`, usage: toUsage(detail.turn) };
     }
@@ -201,6 +214,15 @@ function idempotencyKey(context: RunContext, suffix: string): string {
 export function createStablehandDeps(options: StablehandDepsOptions): LoopDeps {
   const { api } = options;
   const productionName = options.productionManifest.metadata.name;
+  let lastWaitLog = 0;
+  const turn: TurnRunnerOptions = {
+    ...options.turn,
+    onWait: (reason) => {
+      if (Date.now() - lastWaitLog < 60_000) return;
+      lastWaitLog = Date.now();
+      options.log(`[${options.campaignId}] waiting for a free sandbox session (${reason}); finished sandboxes free up after the idle timeout`);
+    },
+  };
   return {
     async applyCandidate(config: CandidateConfig) {
       const manifest = candidateManifest(options.productionManifest, config, options.campaignTag);
@@ -214,7 +236,7 @@ export function createStablehandDeps(options: StablehandDepsOptions): LoopDeps {
           renderTaskPrompt(task),
           runTags(options.campaignTag, context, task.id),
           idempotencyKey(context, task.id),
-          options.turn,
+          turn,
         );
         return { taskId: task.id, ...outcome };
       });
@@ -226,7 +248,7 @@ export function createStablehandDeps(options: StablehandDepsOptions): LoopDeps {
         prompt,
         runTags(options.campaignTag, context),
         idempotencyKey(context, 'proposal'),
-        options.turn,
+        turn,
       );
       return { turnId: outcome.turnId, status: outcome.status, text: outcome.answer, usage: outcome.usage, ...(outcome.error ? { error: outcome.error } : {}) };
     },

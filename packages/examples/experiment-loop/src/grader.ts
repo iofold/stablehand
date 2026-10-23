@@ -67,7 +67,11 @@ export function extractJsonObject(answer: string): Record<string, unknown> | nul
   return null;
 }
 
-/** The first formula (a line or inline code span starting with "=") in an answer. */
+/**
+ * The first formula in an answer: a line or inline code span starting with
+ * "=", or a JSON string value starting with "=". The grader is lenient about
+ * the wrapping and strict about the formula itself.
+ */
 export function extractFormula(answer: string): string | null {
   const fenced = [...answer.matchAll(/```[a-z]*\s*([\s\S]*?)```/gi)].map((match) => match[1] ?? '');
   for (const block of [...fenced, answer]) {
@@ -77,7 +81,10 @@ export function extractFormula(answer: string): string | null {
     }
   }
   const inline = /`(=[^`\n]+)`/.exec(answer);
-  return inline?.[1]?.trim() ?? null;
+  if (inline?.[1]) return inline[1].trim();
+  const object = extractJsonObject(answer);
+  const value = object ? Object.values(object).find((entry) => typeof entry === 'string' && entry.trim().startsWith('=')) : undefined;
+  return typeof value === 'string' ? value.trim() : null;
 }
 
 function checkValue(name: string, expected: unknown, got: unknown): Check {

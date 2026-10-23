@@ -59,6 +59,9 @@ export function decide(
   if (diffs.length === 0) {
     return { keep: false, reason: 'discarded: no tasks to compare', comparison };
   }
+  if (comparison.meanGain < -EPSILON) {
+    return { keep: false, reason: `discarded: mean change ${gain} per task, worse than the best configuration (${counts})`, comparison };
+  }
   if (comparison.meanGain <= margin + EPSILON) {
     return {
       keep: false,

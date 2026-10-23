@@ -25,6 +25,7 @@ describe('decide', () => {
     });
     expect(decide(best, new Map([['a', 0], ['b', 1], ['c', 0.5]]), 0.05).reason).toContain('within the 0.050 noise margin');
     expect(decide(best, new Map([['a', 1], ['b', 0.5], ['c', 0]]), 0.05)).toMatchObject({ keep: false });
+    expect(decide(best, new Map([['a', 0], ['b', 0], ['c', 0.5]]), 0.05).reason).toContain('worse than the best configuration');
   });
 
   it('measures noise as the average spread of a task across repeats', () => {

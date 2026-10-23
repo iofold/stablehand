@@ -32,6 +32,18 @@ describe('Stablehand adapter', () => {
     expect(start.json).toEqual({ task: 'do the task', tags: { campaign: 'c' } });
   });
 
+  it('waits for a free sandbox session when the agent is at its session limit', async () => {
+    const limit = { status: 429, body: { error: 'Concurrent session limit (20) reached', code: 'concurrency_limit_reached' }, headers: { 'retry-after': '0' } };
+    fake.turnStartRefusals.push(limit, limit);
+    const waits: string[] = [];
+    const outcome = await runTurn(api, 'agent-x', 'task', {}, 'key-3', { ...FAST, onWait: (reason) => waits.push(reason) });
+    expect(outcome.status).toBe('COMPLETED');
+    expect(waits).toEqual(['concurrency_limit_reached', 'concurrency_limit_reached']);
+
+    fake.turnStartRefusals.push(limit);
+    await expect(runTurn(api, 'agent-x', 'task', {}, 'key-4', { ...FAST, sessionWaitSec: 0 })).rejects.toThrow('concurrency_limit_reached');
+  });
+
   it('reports a run the tag budget refused as BLOCKED', async () => {
     fake.turnStartError = { status: 429, body: { error: 'Budget "x" exhausted', code: 'budget_exceeded' } };
     const outcome = await runTurn(api, 'agent-x', 'task', {}, 'key-2', FAST);

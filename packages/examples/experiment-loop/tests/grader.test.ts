@@ -125,6 +125,7 @@ describe('grader', () => {
     expect(extractFormula('Use this:\n\n```excel\n=SUM(A1:A3)\n```')).toBe('=SUM(A1:A3)');
     expect(extractFormula('The formula is `=INDEX(C2:C9,3)`.')).toBe('=INDEX(C2:C9,3)');
     expect(extractFormula('=MAX(B2:B9)')).toBe('=MAX(B2:B9)');
+    expect(extractFormula('{"formula":"=VLOOKUP(\\"P-1043\\",A2:D9,3,FALSE)"}')).toBe('=VLOOKUP("P-1043",A2:D9,3,FALSE)');
     expect(extractFormula('I cannot do that')).toBeNull();
   });
 

@@ -28,6 +28,8 @@ export class FakeApi {
   turnScripts: FakeTurnScript[] = [];
   /** Respond to turn starts with this error instead (e.g. budget_exceeded). */
   turnStartError: { status: number; body: unknown } | null = null;
+  /** Errors returned once each, in order, before turn starts succeed. */
+  turnStartRefusals: Array<{ status: number; body: unknown; headers?: Record<string, string> }> = [];
   private turns = new Map<string, { script: FakeTurnScript; polls: number; agentId: string }>();
   private nextId = 1;
   private readonly extra: Handler[] = [];
@@ -84,6 +86,8 @@ export class FakeApi {
     }
     if ((match = /^\/api\/agents\/([^/]+)\/turns$/.exec(path)) && method === 'POST') {
       if (this.turnStartError) return this.turnStartError;
+      const refusal = this.turnStartRefusals.shift();
+      if (refusal) return refusal;
       const script = this.turnScripts.shift() ?? { statuses: ['COMPLETED'], answer: 'ok' };
       const turnId = this.id('turn');
       this.turns.set(turnId, { script, polls: 0, agentId: match[1]! });
