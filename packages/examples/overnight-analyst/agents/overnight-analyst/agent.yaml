@@ -45,3 +45,10 @@ spec:
     - ref: screenshot
     - ref: artifact_upload
   mode: background
+  # Read-only access to any public web page, for this agent only: pages pull images and
+  # styles from many hosts. Narrow it to your sources, e.g. "GET news.ycombinator.com/**".
+  egress:
+    mode: allow
+    rules:
+      - "GET *"
+      - "HEAD *"

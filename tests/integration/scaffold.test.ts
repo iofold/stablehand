@@ -296,7 +296,12 @@ describe('create-stablehand templates', () => {
 
     const env = readFileSync(join(dir, '.env'), 'utf-8');
     expect(env).toContain('OPENAI_API_KEY=sk-test-key');
-    expect(env).toContain('STABLEHAND_EGRESS_EXTRA_ALLOW="GET *;HEAD *"');
+    // Web access is the analyst's own egress setting, not a server-wide allowance (ctx-3aef).
+    expect(env).not.toContain('STABLEHAND_EGRESS_EXTRA_ALLOW="GET *;HEAD *"');
+    expect(validateManifest(parseManifestString(manifest)).spec.egress).toEqual({
+      mode: 'allow',
+      rules: ['GET *', 'HEAD *'],
+    });
     expect(env).toContain('COMPOSE_PROFILES=gallery');
 
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')) as { scripts: Record<string, string> };

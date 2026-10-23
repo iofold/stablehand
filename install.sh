@@ -136,8 +136,6 @@ env_default STABLEHAND_MODEL_GATEWAY_METERING_KEY "$(env_get LITELLM_MASTER_KEY)
 env_default STABLEHAND_MODEL_GATEWAY_ADMIN_KEY "$(env_get LITELLM_MASTER_KEY)"
 env_default STABLEHAND_MODEL_GATEWAY_REVISION "local-1"
 env_default GALLERY_WEBHOOK_SECRET "$(random_hex 24)"
-# The analyst reads public web pages. GET and HEAD only; see .env.example to narrow it.
-env_default STABLEHAND_EGRESS_EXTRA_ALLOW '"GET *;HEAD *"'
 if [ -n "$changed" ]; then
   note "set:$changed"
 else

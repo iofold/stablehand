@@ -21,7 +21,7 @@ The manifest has no `apiKeyRef`. With the model gateway on (the default stack), 
 
 ## Web access
 
-Sandboxes can only reach the hosts in [packages/egress-proxy/rules.default.txt](../../egress-proxy/rules.default.txt), which does not include news sites. The installer sets `STABLEHAND_EGRESS_EXTRA_ALLOW="GET *;HEAD *"`, read-only access to any public host, because pages load images and styles from many CDNs. To allow only your sources, list them instead, for example `STABLEHAND_EGRESS_EXTRA_ALLOW="GET news.ycombinator.com/**"`, and restart the `egress` service.
+Sandboxes can only reach the hosts in [packages/egress-proxy/rules.default.txt](../../egress-proxy/rules.default.txt), which does not include news sites. The analyst's manifest opens read-only access to any public host for this agent alone (`egress: { mode: allow, rules: ["GET *", "HEAD *"] }`), because pages load images and styles from many CDNs; other agents keep the default list. To allow only your sources, list them instead, for example `"GET news.ycombinator.com/**"`, and seed the agent again. See [docs/sandbox-egress.md](../../../docs/sandbox-egress.md).
 
 ## Seed it
 

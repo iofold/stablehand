@@ -38,10 +38,6 @@ export const TEMPLATES: readonly TemplateDefinition[] = [
     description: 'A scheduled agent that browses your sources and publishes a one-page brief to a gallery',
     env: [
       '',
-      '# The analyst reads public web pages: GET and HEAD to any public host.',
-      '# Narrow it to your sources, for example "GET news.ycombinator.com/**".',
-      'STABLEHAND_EGRESS_EXTRA_ALLOW="GET *;HEAD *"',
-      '',
       '# Artifact gallery: `npm run seed` prints GALLERY_API_KEY; paste it here.',
       'COMPOSE_PROFILES=gallery',
       'GALLERY_API_KEY=',

@@ -67,8 +67,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # The sandboxes' only route out: an allowlist proxy. Add rules in .env with
-  # STABLEHAND_EGRESS_EXTRA_ALLOW.
+  # The sandboxes' only route out: an allowlist proxy. Give one agent more (or less) with
+  # `egress:` in its manifest; add rules for every agent in .env with STABLEHAND_EGRESS_EXTRA_ALLOW.
   egress:
     image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-egress:${STABLEHAND_IMAGE_TAG:-{{imageTag}}}
     environment:
