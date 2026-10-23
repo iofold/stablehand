@@ -112,6 +112,14 @@ export interface CampaignGatewayKeyServiceDeps {
   now?: () => number;
 }
 
+/** Exact names, or LiteLLM wildcard entries such as `openai/*`. */
+function runtimeAllows(runtimeModels: readonly string[], model: string): boolean {
+  return runtimeModels.some((allowed) => (
+    allowed === model
+    || (allowed.endsWith('*') && model.startsWith(allowed.slice(0, -1)))
+  ));
+}
+
 function gatewayFailure(operation: string, err: unknown): CampaignKeyError {
   // LiteLLMKeyAdminError messages are already stripped of key material.
   const detail = err instanceof Error ? err.message : String(err);
@@ -173,8 +181,7 @@ export class CampaignGatewayKeyService {
     }
     // An empty list is LiteLLM's "all models".
     if (runtimeModels.length > 0 && !runtimeModels.includes(ALL_PROXY_MODELS)) {
-      const allowed = new Set(runtimeModels);
-      const refused = input.models.filter((model) => !allowed.has(model));
+      const refused = input.models.filter((model) => !runtimeAllows(runtimeModels, model));
       if (refused.length > 0) {
         throw new CampaignKeyError(
           400,

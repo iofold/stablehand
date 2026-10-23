@@ -146,6 +146,15 @@ describe('CampaignGatewayKeyService.create', () => {
     expect(client.generateKey).not.toHaveBeenCalled();
   });
 
+  it('honours wildcard entries in the runtime key\'s model list', async () => {
+    const { service } = createDeps({ runtimeModels: ['openai/*', 'claude-haiku-4-5'] });
+
+    await expect(service.create({ ...INPUT, models: ['openai/gpt-5.6-sol', 'claude-haiku-4-5'] }, 'master'))
+      .resolves.toMatchObject({ models: ['openai/gpt-5.6-sol', 'claude-haiku-4-5'] });
+    await expect(service.create({ ...INPUT, models: ['anthropic/claude-opus-5'] }, 'master'))
+      .rejects.toMatchObject({ code: 'model_not_allowed' });
+  });
+
   it('accepts any model when the runtime key allows all models', async () => {
     for (const runtimeModels of [[], ['all-proxy-models']]) {
       const { service } = createDeps({ runtimeModels });
