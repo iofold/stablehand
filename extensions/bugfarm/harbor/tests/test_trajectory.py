@@ -42,7 +42,7 @@ def _detail() -> dict:
                     {
                         "type": "tool_call",
                         "id": "call_b",
-                        "name": "task_read",
+                        "name": "mcp__stablehand__task_read",
                         "args": '{"path": "pkg/mod.py"}',
                         "status": "complete",
                     },
@@ -92,6 +92,7 @@ def test_groups_parts_into_steps_and_keeps_full_tool_output():
     first = steps[2]
     assert first["message"] == "Looking."
     assert [call["function_name"] for call in first["tool_calls"]] == ["task_bash", "task_read"]
+    assert first["tool_calls"][1]["extra"] == {"status": "complete", "harnessToolName": "mcp__stablehand__task_read"}
     assert first["tool_calls"][0]["arguments"] == {"command": "ls"}
     results = first["observation"]["results"]
     assert results[0] == {"source_call_id": "call_a", "content": "exit_code: 0\npkg"}

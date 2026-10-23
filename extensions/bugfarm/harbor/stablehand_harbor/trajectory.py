@@ -25,6 +25,11 @@ from harbor.models.trajectories import (
     Trajectory,
 )
 
+# Claude Agents exposes Stablehand tools through an in-process MCP server, so the
+# model sees them as `mcp__stablehand__<name>`. Strip that so a tool has one name
+# across harnesses; the harness's own name stays in the call's `extra`.
+STABLEHAND_MCP_PREFIX = "mcp__stablehand__"
+
 TRAJECTORY_NOTES = (
     "Converted from Stablehand turn messages. A step is one run of assistant text plus the tool calls"
     " that followed it; model-call boundaries and per-step token counts are not recorded by Stablehand."
@@ -75,6 +80,24 @@ def _parts(message: dict[str, Any]) -> list[dict[str, Any]]:
     return collected
 
 
+def _tool_call(call: dict[str, Any], index: int) -> ToolCall:
+    raw_name = str(call.get("name") or "unknown")
+    name = raw_name.removeprefix(STABLEHAND_MCP_PREFIX) or raw_name
+    extra = {
+        key: call[key]
+        for key in ("status", "durationMs", "parentToolCallId", "agentName")
+        if call.get(key) is not None
+    }
+    if name != raw_name:
+        extra["harnessToolName"] = raw_name
+    return ToolCall(
+        tool_call_id=str(call.get("id") or f"call_{index}"),
+        function_name=name,
+        arguments=_arguments(call.get("args")),
+        extra=extra or None,
+    )
+
+
 def _assistant_steps(
     message: dict[str, Any],
     tool_results: dict[str, str],
@@ -106,20 +129,7 @@ def _assistant_steps(
         if model_name:
             step["model_name"] = model_name
         if calls:
-            step["tool_calls"] = [
-                ToolCall(
-                    tool_call_id=str(call.get("id") or f"call_{index}"),
-                    function_name=str(call.get("name") or "unknown"),
-                    arguments=_arguments(call.get("args")),
-                    extra={
-                        key: call[key]
-                        for key in ("status", "durationMs", "parentToolCallId", "agentName")
-                        if call.get(key) is not None
-                    }
-                    or None,
-                )
-                for index, call in enumerate(calls)
-            ]
+            step["tool_calls"] = [_tool_call(call, index) for index, call in enumerate(calls)]
             step["observation"] = Observation(
                 results=[
                     ObservationResult(
