@@ -75,6 +75,7 @@ import {
   mergeSandboxSecrets,
   resolveModelGatewayConfig,
 } from '../cost-control/model-gateway-config.js';
+import { createIssuedGatewayKeys } from '../cost-control/issued-gateway-keys.js';
 import { LiteLLMSpendClient } from '../cost-control/litellm-spend-client.js';
 import { ModelGatewayReconciler } from '../cost-control/model-gateway-reconciler.js';
 import { LiteLLMKeyClient } from '../cost-control/litellm-key-client.js';
@@ -716,6 +717,11 @@ export async function createContainer(
         baseUrl: modelGatewayConfig.baseUrl,
         meteringKey: modelGatewayConfig.meteringKey,
         explicitFreeModels: modelGatewayConfig.explicitFreeModels,
+      }),
+      // ctx-gfp8: fetch only the spend of keys Stablehand issued; another
+      // workload sharing the gateway is counted and skipped, not quarantined.
+      resolveIssuedKeys: async () => createIssuedGatewayKeys({
+        runtimeKey: modelGatewayConfig.runtimeKey,
       }),
       onUsageReconciled: (change) =>
         budgetEnforcer.onTurnUsageReconciled(change),

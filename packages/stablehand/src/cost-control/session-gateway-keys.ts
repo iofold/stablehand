@@ -6,7 +6,10 @@ import {
 } from '@stablehand/contracts';
 
 import type { PolicyCostHeadroom } from '../orchestrator/budget-enforcer.js';
+import { SESSION_KEY_ALIAS_PREFIX } from './issued-gateway-keys.js';
 import type { LiteLLMKeyClient } from './litellm-key-client.js';
+
+export { SESSION_KEY_ALIAS_PREFIX };
 
 interface Logger {
   info(msg: string, ...args: unknown[]): void;
@@ -29,7 +32,6 @@ export interface GatewayBudgetRefusalReport {
   capUsd: number | null;
 }
 
-export const SESSION_KEY_ALIAS_PREFIX = 'stablehand-session-';
 const DEFAULT_KEY_LIFETIME = '24h';
 // Runs that never reach finalization (crashes, lost delivery) leave a cap
 // record behind; bound the map rather than grow it for the process lifetime.

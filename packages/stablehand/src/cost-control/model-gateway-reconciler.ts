@@ -4,6 +4,7 @@ import type { TurnUsage } from '@stablehand/contracts';
 
 import type { DatabaseRepository } from '../database/repository.js';
 import { unrefTimer } from '../util/timing.js';
+import type { IssuedGatewayKeys } from './issued-gateway-keys.js';
 import type { LiteLLMSpendClient } from './litellm-spend-client.js';
 
 const DEFAULT_LEASE_MS = 60_000;
@@ -21,6 +22,12 @@ const DEFAULT_INITIAL_LOOKBACK_MS = 15 * 60_000;
  * systemic ingestion failure is still caught by the watermark-lag arm.
  */
 const DEFAULT_ABANDONED_GRACE_MS = 10 * 60_000;
+/**
+ * How often the count of skipped rows from keys Stablehand did not issue is
+ * logged. Polls run every few seconds and overlap, so per-poll lines would
+ * only be noise.
+ */
+const FOREIGN_SKIP_LOG_INTERVAL_MS = 10 * 60_000;
 const TAG = '[ModelGatewayReconciler]';
 
 type ModelGatewayReconciliationStore = Pick<
@@ -48,6 +55,13 @@ interface UsageChange {
 interface ModelGatewayReconcilerDeps {
   db: ModelGatewayReconciliationStore;
   spendClient: Pick<LiteLLMSpendClient, 'listSpend'>;
+  /**
+   * The gateway keys Stablehand issued, resolved once per run (ctx-gfp8).
+   * When set, only those keys' spend is fetched and rows from any other key
+   * are counted and skipped instead of quarantined. When absent, every row
+   * is treated as Stablehand's.
+   */
+  resolveIssuedKeys?: () => Promise<IssuedGatewayKeys>;
   onUsageReconciled?: (change: UsageChange) => Promise<void>;
   logger: Logger;
 }
@@ -77,6 +91,8 @@ export type ModelGatewayReconciliationResult =
       affectedTurnIds: string[];
       watermarkMs: number;
       truncated: boolean;
+      /** Rows from keys Stablehand did not issue: counted, not stored. */
+      skippedForeign: number;
     }
   | { status: 'failed'; error: string };
 
@@ -122,6 +138,11 @@ export class ModelGatewayReconciler {
   private consecutiveFailures = 0;
 
   private backoffUntilMs = 0;
+
+  /** Foreign rows skipped since the last summary line, and when it was written. */
+  private foreignSkippedSinceLog = 0;
+
+  private lastForeignSkipLogMs = 0;
 
   constructor(
     private readonly deps: ModelGatewayReconcilerDeps,
@@ -284,11 +305,15 @@ export class ModelGatewayReconciler {
       const startMs = lease.watermarkMs > 0
         ? Math.max(0, lease.watermarkMs - this.overlapMs)
         : Math.max(0, processedThroughMs - this.initialLookbackMs);
+      const issuedKeys = await this.deps.resolveIssuedKeys?.();
       const spend = await this.deps.spendClient.listSpend({
         startMs,
         endMs: processedThroughMs,
         signal: runAbort.signal,
+        ...(issuedKeys ? { issuedKeys } : {}),
       });
+      const skippedForeign = spend.skippedForeign ?? 0;
+      this.noteForeignSkips(skippedForeign, nowMs);
       // (b) Truncated pagination commits the safe prefix: the watermark
       // advances to the fetch boundary instead of stalling forever once the
       // backlog outgrows one window. Settlement must not outrun coverage.
@@ -353,6 +378,7 @@ export class ModelGatewayReconciler {
         affectedTurnIds: committed.affectedTurnIds,
         watermarkMs: committed.watermarkMs,
         truncated: spend.truncatedAtMs !== undefined,
+        skippedForeign,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -379,5 +405,26 @@ export class ModelGatewayReconciler {
       clearInterval(heartbeat);
       clearTimeout(fetchTimeout);
     }
+  }
+
+  /**
+   * Count rows from keys Stablehand did not issue and log a summary at most
+   * once per interval. The window overlaps between polls, so the count is of
+   * rows seen, not distinct calls.
+   */
+  private noteForeignSkips(count: number, nowMs: number): void {
+    this.foreignSkippedSinceLog += count;
+    if (
+      this.foreignSkippedSinceLog === 0
+      || nowMs - this.lastForeignSkipLogMs < FOREIGN_SKIP_LOG_INTERVAL_MS
+    ) {
+      return;
+    }
+    this.deps.logger.info(
+      `${TAG} skipped ${this.foreignSkippedSinceLog} spend row(s) from gateway keys`
+      + ' Stablehand did not issue (another workload sharing the gateway); not stored',
+    );
+    this.foreignSkippedSinceLog = 0;
+    this.lastForeignSkipLogMs = nowMs;
   }
 }

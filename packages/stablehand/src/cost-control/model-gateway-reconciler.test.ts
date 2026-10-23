@@ -1,6 +1,7 @@
 import type { TurnUsage } from '@stablehand/contracts';
 import { describe, expect, it, vi } from 'vitest';
 
+import { createIssuedGatewayKeys } from './issued-gateway-keys.js';
 import { ModelGatewayReconciler } from './model-gateway-reconciler.js';
 
 const NOW = Date.UTC(2026, 6, 23, 12, 0, 0);
@@ -84,6 +85,7 @@ describe('ModelGatewayReconciler', () => {
       affectedTurnIds: ['turn-1'],
       watermarkMs: NOW - 10_000,
       truncated: false,
+      skippedForeign: 0,
     });
     expect(deps.spendClient.listSpend).toHaveBeenCalledWith({
       startMs: NOW - 90_000,
@@ -358,5 +360,74 @@ describe('ModelGatewayReconciler', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe('keys Stablehand did not issue (ctx-gfp8)', () => {
+    it('reads only issued keys and reports foreign rows as skipped, never committed', async () => {
+      const deps = createDeps();
+      const issuedKeys = createIssuedGatewayKeys({ runtimeKey: 'sk-runtime' });
+      deps.spendClient.listSpend.mockResolvedValue({
+        records: [],
+        campaignRecords: [],
+        invalid: [],
+        skippedForeign: 3,
+      });
+      const reconciler = new ModelGatewayReconciler({
+        ...deps,
+        resolveIssuedKeys: async () => issuedKeys,
+      }, {
+        profile: 'default',
+        revision: 'dev1-r1',
+        ownerId: 'worker-1',
+        now: () => NOW,
+      });
+
+      await expect(reconciler.runOnce()).resolves.toMatchObject({
+        status: 'success',
+        skippedForeign: 3,
+      });
+      expect(deps.spendClient.listSpend).toHaveBeenCalledWith(
+        expect.objectContaining({ issuedKeys }),
+      );
+      expect(deps.db.reconcileModelGatewaySpend).toHaveBeenCalledWith(
+        expect.objectContaining({ records: [], invalid: [] }),
+      );
+    });
+
+    it('logs the skipped count at most once per interval', async () => {
+      const deps = createDeps();
+      let nowMs = NOW;
+      deps.spendClient.listSpend.mockResolvedValue({
+        records: [],
+        campaignRecords: [],
+        invalid: [],
+        skippedForeign: 2,
+      });
+      const reconciler = new ModelGatewayReconciler({
+        ...deps,
+        resolveIssuedKeys: async () => createIssuedGatewayKeys({ runtimeKey: 'sk-runtime' }),
+      }, {
+        profile: 'default',
+        revision: 'dev1-r1',
+        ownerId: 'worker-1',
+        now: () => nowMs,
+      });
+      const skipLines = () => deps.logger.info.mock.calls
+        .filter(([line]) => String(line).includes('did not issue'));
+
+      await reconciler.runOnce();
+      expect(skipLines()).toHaveLength(1);
+      expect(String(skipLines()[0]?.[0])).toContain('skipped 2 spend row(s)');
+
+      nowMs = NOW + 5_000;
+      await reconciler.runOnce();
+      expect(skipLines()).toHaveLength(1);
+
+      nowMs = NOW + 11 * 60_000;
+      await reconciler.runOnce();
+      expect(skipLines()).toHaveLength(2);
+      // The second line carries everything skipped since the first.
+      expect(String(skipLines()[1]?.[0])).toContain('skipped 4 spend row(s)');
+    });
   });
 });

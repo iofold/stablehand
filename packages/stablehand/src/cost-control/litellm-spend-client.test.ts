@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { createIssuedGatewayKeys } from './issued-gateway-keys.js';
+import { liteLLMKeyHash } from './litellm-key-client.js';
 import { LiteLLMSpendClient } from './litellm-spend-client.js';
 
 function jsonResponse(value: unknown, status = 200): Response {
@@ -403,5 +405,212 @@ describe('LiteLLMSpendClient', () => {
       startMs: 0,
       endMs: Date.now(),
     })).rejects.toThrow(/envelope/);
+  });
+
+  describe('issued keys (ctx-gfp8)', () => {
+    const RUNTIME_KEY = 'sk-runtime-secret';
+    const RUNTIME_HASH = liteLLMKeyHash(RUNTIME_KEY);
+    const SESSION_HASH = 'a'.repeat(64);
+    const FOREIGN_HASH = 'f'.repeat(64);
+    const CAMPAIGN_HASH = 'c'.repeat(64);
+
+    const spendRow = (input: {
+      requestId: string;
+      keyHash: string;
+      alias?: string;
+      correlationId?: string;
+      startTime?: string;
+      spend?: number;
+    }) => ({
+      request_id: input.requestId,
+      spend: input.spend ?? 0.01,
+      prompt_tokens: 10,
+      completion_tokens: 2,
+      total_tokens: 12,
+      startTime: input.startTime ?? '2026-10-23T10:00:00.000Z',
+      endTime: '2026-10-23T10:00:01.000Z',
+      model: 'openai/gpt-5.4-mini',
+      model_group: 'gpt-5.4-mini',
+      custom_llm_provider: 'openai',
+      ...(input.correlationId ? { session_id: input.correlationId } : {}),
+      status: 'success',
+      api_key: input.keyHash,
+      metadata: input.alias ? { user_api_key_alias: input.alias } : {},
+    });
+
+    /** A /spend/logs/v2 fake that honours LiteLLM 1.93's api_key and key_alias filters. */
+    function fakeSpendLogs(rows: Array<ReturnType<typeof spendRow>>) {
+      return vi.fn().mockImplementation((input: string) => {
+        const params = new URL(String(input)).searchParams;
+        const apiKey = params.get('api_key');
+        const keyAlias = params.get('key_alias');
+        const matched = rows.filter((row) => (
+          (apiKey === null || row.api_key === apiKey)
+          && (keyAlias === null || String(
+            (row.metadata as { user_api_key_alias?: string }).user_api_key_alias ?? '',
+          ).includes(keyAlias))
+        ));
+        return Promise.resolve(jsonResponse({
+          data: matched,
+          page: 1,
+          page_size: 100,
+          total: matched.length,
+          total_pages: matched.length > 0 ? 1 : 0,
+        }));
+      });
+    }
+
+    const window = {
+      startMs: Date.parse('2026-10-23T09:00:00.000Z'),
+      endMs: Date.parse('2026-10-23T11:00:00.000Z'),
+    };
+
+    it('asks LiteLLM only for issued keys and counts foreign rows instead of quarantining them', async () => {
+      const fetchImpl = fakeSpendLogs([
+        spendRow({ requestId: 'tx-runtime', keyHash: RUNTIME_HASH, alias: 'ops-runtime', correlationId: 'ct_00000000000000000000000000000000' }),
+        spendRow({ requestId: 'tx-runtime-uncorrelated', keyHash: RUNTIME_HASH, alias: 'ops-runtime' }),
+        spendRow({ requestId: 'tx-session', keyHash: SESSION_HASH, alias: 'stablehand-session-s1', correlationId: 'ct_11111111111111111111111111111111' }),
+        // Another workload sharing the gateway. Never requested by a filter.
+        spendRow({ requestId: 'tx-other-workload', keyHash: FOREIGN_HASH, alias: 'research-lane' }),
+        // Matched by the substring alias filter but not one of ours.
+        spendRow({ requestId: 'tx-lookalike', keyHash: FOREIGN_HASH, alias: 'copy-of-stablehand-session-x' }),
+      ]);
+      const client = new LiteLLMSpendClient({
+        baseUrl: 'http://litellm:4000',
+        meteringKey: 'metering-key',
+        fetchImpl,
+      });
+
+      const result = await client.listSpend({
+        ...window,
+        issuedKeys: createIssuedGatewayKeys({ runtimeKey: RUNTIME_KEY }),
+      });
+
+      const requested = fetchImpl.mock.calls.map(([url]) => {
+        const params = new URL(String(url)).searchParams;
+        return { apiKey: params.get('api_key'), keyAlias: params.get('key_alias') };
+      });
+      expect(requested).toEqual([
+        { apiKey: RUNTIME_HASH, keyAlias: null },
+        { apiKey: null, keyAlias: 'stablehand-session-' },
+        { apiKey: null, keyAlias: 'stablehand-campaign-' },
+      ]);
+      expect(result.records.map((record) => record.transactionId)).toEqual(['tx-runtime', 'tx-session']);
+      // Uncorrelated spend on Stablehand's own key is still quarantined.
+      expect(result.invalid).toEqual([expect.objectContaining({
+        transactionId: 'tx-runtime-uncorrelated',
+        reason: 'missing_correlation',
+      })]);
+      expect(result.skippedForeign).toBe(1);
+      expect(JSON.stringify(result)).not.toContain('tx-other-workload');
+      expect(JSON.stringify(result)).not.toContain('tx-lookalike');
+      // Key hashes and aliases are classification inputs only.
+      expect(JSON.stringify(result)).not.toContain(RUNTIME_HASH);
+      expect(JSON.stringify(result)).not.toContain('stablehand-session-s1');
+    });
+
+    it('attributes campaign-key rows to the campaign without needing a turn correlation', async () => {
+      const fetchImpl = fakeSpendLogs([
+        spendRow({ requestId: 'tx-campaign', keyHash: CAMPAIGN_HASH, alias: 'stablehand-campaign-gck_1', spend: 0.25 }),
+        // A campaign-shaped alias Stablehand has no record of: minted elsewhere.
+        spendRow({ requestId: 'tx-unknown-campaign', keyHash: FOREIGN_HASH, alias: 'stablehand-campaign-gck_other' }),
+      ]);
+      const client = new LiteLLMSpendClient({
+        baseUrl: 'http://litellm:4000',
+        meteringKey: 'metering-key',
+        fetchImpl,
+      });
+
+      const result = await client.listSpend({
+        ...window,
+        issuedKeys: createIssuedGatewayKeys({
+          runtimeKey: RUNTIME_KEY,
+          campaignKeys: [{ id: 'gck_1', keyHash: CAMPAIGN_HASH }],
+        }),
+      });
+
+      expect(result.records).toEqual([]);
+      expect(result.invalid).toEqual([]);
+      expect(result.campaignRecords).toEqual([{
+        transactionId: 'tx-campaign',
+        campaignKeyId: 'gck_1',
+        requestedModel: 'gpt-5.4-mini',
+        resolvedModel: 'openai/gpt-5.4-mini',
+        provider: 'openai',
+        status: 'success',
+        inputTokens: 10,
+        outputTokens: 2,
+        totalTokens: 12,
+        costUsd: 0.25,
+        costState: 'priced',
+        startedAt: Date.parse('2026-10-23T10:00:00.000Z'),
+        endedAt: Date.parse('2026-10-23T10:00:01.000Z'),
+      }]);
+      expect(result.skippedForeign).toBe(1);
+    });
+
+    it('lists a transaction once when two filters both return it', async () => {
+      // A runtime key whose alias happens to carry the session prefix.
+      const fetchImpl = fakeSpendLogs([
+        spendRow({
+          requestId: 'tx-both',
+          keyHash: RUNTIME_HASH,
+          alias: 'stablehand-session-runtime',
+          correlationId: 'ct_00000000000000000000000000000000',
+        }),
+      ]);
+      const client = new LiteLLMSpendClient({
+        baseUrl: 'http://litellm:4000',
+        meteringKey: 'metering-key',
+        fetchImpl,
+      });
+
+      const result = await client.listSpend({
+        ...window,
+        issuedKeys: createIssuedGatewayKeys({ runtimeKey: RUNTIME_KEY }),
+      });
+
+      expect(result.records.map((record) => record.transactionId)).toEqual(['tx-both']);
+    });
+
+    it('reports the earliest boundary when one filter stream truncates', async () => {
+      const fetchImpl = vi.fn().mockImplementation((input: string) => {
+        const params = new URL(String(input)).searchParams;
+        const page = Number(params.get('page'));
+        if (params.get('api_key') === RUNTIME_HASH) {
+          return Promise.resolve(jsonResponse({
+            data: [spendRow({
+              requestId: `tx-runtime-${page}`,
+              keyHash: RUNTIME_HASH,
+              correlationId: 'ct_00000000000000000000000000000000',
+              startTime: page === 1 ? '2026-10-23T09:10:00.000Z' : '2026-10-23T09:20:00.000Z',
+            })],
+            page,
+            page_size: 1,
+            total: 9,
+            total_pages: 9,
+          }));
+        }
+        return Promise.resolve(jsonResponse({
+          data: [], page: 1, page_size: 1, total: 0, total_pages: 0,
+        }));
+      });
+      const client = new LiteLLMSpendClient({
+        baseUrl: 'http://litellm:4000',
+        meteringKey: 'metering-key',
+        pageSize: 1,
+        maxPages: 2,
+        fetchImpl,
+      });
+
+      const result = await client.listSpend({
+        ...window,
+        issuedKeys: createIssuedGatewayKeys({ runtimeKey: RUNTIME_KEY }),
+      });
+
+      expect(result.truncatedAtMs).toBe(Date.parse('2026-10-23T09:20:00.000Z'));
+      // Two pages from the runtime stream, one each from the alias streams.
+      expect(fetchImpl).toHaveBeenCalledTimes(4);
+    });
   });
 });
