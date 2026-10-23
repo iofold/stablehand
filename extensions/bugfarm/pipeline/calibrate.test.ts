@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { toAtifV17 } from './calibrate-atif.ts';
-import { jobConfig, judge } from './calibrate-harbor.ts';
+import { jobConfig, judge, labelsCompose } from './calibrate-harbor.ts';
 import { defaultPanel, panelSha, validatePanel } from './calibrate-panel.ts';
 import { BudgetPool, CostModel, calibrationToml, itemKeyFor, readBugfarmMetadata, readTaskInfo, writeTaskCalibration } from './calibrate.ts';
 
@@ -96,6 +96,7 @@ describe('harbor job', () => {
       gatewayUrl: 'http://localhost:4400/',
       gatewayKey: 'sk-secret',
       processTimeoutMs: 1000,
+      runId: 'cal-v1-test',
     });
     const text = JSON.stringify(cfg);
     expect(text).not.toContain('sk-secret');
@@ -105,6 +106,12 @@ describe('harbor job', () => {
     expect(kwargs.api_base).toBe('http://localhost:4400/v1');
     const headers = (kwargs.llm_call_kwargs as { extra_headers: Record<string, string> }).extra_headers;
     expect(JSON.parse(headers['x-litellm-spend-logs-metadata'])).toEqual({ bugfarm_attempt: 'task:cal-v1:abc:gpt-6-luna:1' });
+    expect((cfg.environment as { extra_docker_compose: string[] }).extra_docker_compose).toEqual(['/jobs/j.labels.yaml']);
+  });
+
+  it('labels the trial main service with the run and attempt', () => {
+    const text = labelsCompose({ runId: 'cal-v1-abc', jobName: 'task__m-t01__ff' });
+    expect(text).toContain('  main:\n    labels:\n      bugfarm.run: "cal-v1-abc"\n      bugfarm.attempt: "task__m-t01__ff"');
   });
 
   it('judges a trial by its verifier reward', () => {

@@ -11,7 +11,6 @@
 import { copyFileSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { HARBOR_CMD } from './lib/config.ts';
-import { cleanupHarborProjects } from './lib/docker.ts';
 import { ensureDir, fileExists, isDir, log, readJson, run, secs, writeText } from './lib/util.ts';
 import { toAtifV17 } from './calibrate-atif.ts';
 import type { AttemptResult } from './calibrate-ladder.ts';
@@ -51,6 +50,61 @@ export interface AttemptSpec {
   spendMetadata?: Record<string, string>;
   /** Hard wall-clock limit for the whole Harbor process. */
   processTimeoutMs: number;
+  /**
+   * Calibration run id. The trial's main container is labelled `bugfarm.run=<runId>` and
+   * `bugfarm.attempt=<jobName>`, and cleanup only ever touches this attempt's own containers.
+   */
+  runId: string;
+}
+
+export const RUN_LABEL = 'bugfarm.run';
+export const ATTEMPT_LABEL = 'bugfarm.attempt';
+
+export function labelsComposePath(spec: Pick<AttemptSpec, 'jobsDir' | 'jobName'>): string {
+  return join(spec.jobsDir, `${spec.jobName}.labels.yaml`);
+}
+
+/** A compose override (passed as Harbor's `extra_docker_compose`) that labels the trial's main service. */
+export function labelsCompose(spec: Pick<AttemptSpec, 'runId' | 'jobName'>): string {
+  return [
+    '# Written by calibrate.ts: run-scoped labels, so cleanup never touches containers other jobs started.',
+    'services:',
+    '  main:',
+    '    labels:',
+    `      ${RUN_LABEL}: ${JSON.stringify(spec.runId)}`,
+    `      ${ATTEMPT_LABEL}: ${JSON.stringify(spec.jobName)}`,
+    '',
+  ].join('\n');
+}
+
+async function lines(cmd: string[]): Promise<string[][]> {
+  const r = await run('docker', cmd);
+  if (r.code !== 0) return [];
+  return r.stdout.split('\n').filter(Boolean).map((l) => l.split('\t'));
+}
+
+/**
+ * Remove what this attempt started, and nothing else: the compose projects of the containers that
+ * carry this attempt's label, plus the projects named after this job's own trials (Harbor names
+ * them `<trial>__env` and `<trial>__verifier__...`; the egress sidecar and the verifier env do not
+ * carry the label). Containers first, then those projects' networks. Images are left to Harbor's
+ * own `--rmi local`, because task images can be shared with other jobs on the host.
+ */
+export async function cleanupAttempt(spec: Pick<AttemptSpec, 'jobName'>, trialNames: string[]): Promise<{ containers: number; networks: number }> {
+  const projects = new Set<string>();
+  for (const [, project] of await lines(['ps', '-a', '--filter', `label=${ATTEMPT_LABEL}=${spec.jobName}`, '--format', '{{.ID}}\t{{.Label "com.docker.compose.project"}}'])) {
+    if (project) projects.add(project);
+  }
+  const prefixes = trialNames.map((t) => `${t.toLowerCase()}__`);
+  const mine = (project: string | undefined) => Boolean(project) && (projects.has(project as string) || prefixes.some((p) => (project as string).startsWith(p)));
+  const cids = (await lines(['ps', '-a', '--format', '{{.ID}}\t{{.Label "com.docker.compose.project"}}'])).filter(([, p]) => mine(p)).map(([id]) => id);
+  if (cids.length) await run('docker', ['rm', '-f', ...cids]);
+  let networks = 0;
+  for (const [id] of (await lines(['network', 'ls', '--format', '{{.ID}}\t{{.Label "com.docker.compose.project"}}'])).filter(([, p]) => mine(p))) {
+    if ((await run('docker', ['network', 'rm', id])).code === 0) networks++;
+  }
+  if (cids.length + networks > 0) log('docker', `${spec.jobName}: removed ${cids.length} containers, ${networks} networks it left`);
+  return { containers: cids.length, networks };
 }
 
 export interface AttemptOutcome {
@@ -129,7 +183,7 @@ export function jobConfig(spec: AttemptSpec): Record<string, unknown> {
     n_attempts: 1,
     n_concurrent_trials: 1,
     quiet: true,
-    environment: { type: 'docker', delete: true },
+    environment: { type: 'docker', delete: true, extra_docker_compose: [labelsComposePath(spec)] },
     agents: [agent],
     tasks: [{ path: spec.taskDir }],
   };
@@ -181,6 +235,7 @@ export function keepTrajectories(trialDir: string | undefined, outDir: string, a
 export async function runAttempt(spec: AttemptSpec, keep: { trajectoryDir: string; attemptSlug: string }): Promise<AttemptOutcome> {
   ensureDir(spec.jobsDir);
   const cfgPath = join(spec.jobsDir, `${spec.jobName}.config.json`);
+  writeText(labelsComposePath(spec), labelsCompose(spec));
   writeText(cfgPath, JSON.stringify(jobConfig(spec), null, 2) + '\n');
   const jobDir = join(spec.jobsDir, spec.jobName);
   const t0 = Date.now();
@@ -194,9 +249,9 @@ export async function runAttempt(spec: AttemptSpec, keep: { trajectoryDir: strin
     exit = r.code;
     writeText(join(spec.jobsDir, `${spec.jobName}.out`), (r.timedOut ? '[killed: process timeout]\n' : '') + r.stdout + '\n' + r.stderr);
   } finally {
-    // Harbor leaks containers and networks when it is killed; clean every project this job started.
+    // Harbor leaks containers and networks when it is killed; clean what this attempt started.
     const trialNames = isDir(jobDir) ? readdirSync(jobDir).filter((d) => isDir(join(jobDir, d))) : [];
-    await cleanupHarborProjects(trialNames).catch((e: unknown) => log('docker', `cleanup failed for ${spec.jobName}: ${String(e)}`));
+    await cleanupAttempt(spec, trialNames).catch((e: unknown) => log('docker', `cleanup failed for ${spec.jobName}: ${String(e)}`));
   }
   const { trialDir, res } = readTrial(jobDir);
   const verdict = judge(res);

@@ -20,7 +20,7 @@ import { BoardClient, NullBoard } from './calibrate-board.ts';
 import type { BoardRow, BoardSink } from './calibrate-board.ts';
 import { SpendLog, checkRoutes, getCampaignKey, mintCampaignKey, readCampaignKey, readDotenv } from './calibrate-gateway.ts';
 import type { CampaignKeyFile, StablehandAdmin } from './calibrate-gateway.ts';
-import { judge, readTrial, keepTrajectories, runAttempt } from './calibrate-harbor.ts';
+import { RUN_LABEL, judge, readTrial, keepTrajectories, runAttempt } from './calibrate-harbor.ts';
 import { toAtifV17 } from './calibrate-atif.ts';
 import { decide, familyState, plan, stageFits, tally, wilson } from './calibrate-ladder.ts';
 import type { AttemptResult, Decision, Family, FamilyView, Tally } from './calibrate-ladder.ts';
@@ -377,6 +377,8 @@ export interface CalibrateOptions {
   skipScreen?: boolean;
   /** How long to wait at the end for the gateway to price this task's attempts (default 180 s). */
   settleTimeoutMs?: number;
+  /** Labels every trial container this call starts (`bugfarm.run`); default: panel id plus a timestamp. */
+  runId?: string;
   /** Called after every finished attempt (e.g. to update a campaign's spend on the board). */
   onAttempt?: (rec: AttemptRecord) => void | Promise<void>;
 }
@@ -528,6 +530,7 @@ export async function calibrate(taskDir: string, panel: FrozenPanel, budget: num
   const own = new BudgetPool(budget);
   const pools = [own, ...(opts.pools ?? [])];
   const jobsDir = join(panelDir(panel.id), 'jobs');
+  const runId = opts.runId ?? `${panel.id}-${Date.now().toString(36)}`;
   const cells = new Map<string, string>();
   const cellOf = (model: string) => {
     let c = cells.get(model);
@@ -600,6 +603,7 @@ export async function calibrate(taskDir: string, panel: FrozenPanel, budget: num
               gatewayKey: opts.gateway.key.key,
               spendMetadata: { bugfarm_panel: panel.id, bugfarm_item: task.item },
               processTimeoutMs: (panel.agent_timeout_sec + 3600) * 1000,
+              runId,
             },
             { trajectoryDir: store.trajectoryDir, attemptSlug: slug },
           ),
@@ -816,7 +820,9 @@ export async function calibrateMany(taskDirs: string[], panel: FrozenPanel, opts
     lastCampaignWrite = Date.now();
     await board.write([campaignRow(opts.campaign, campaign.spentUsd())]);
   };
-  const base = { ...opts, slots, costModel, pools: [campaign], onAttempt };
+  const runId = opts.runId ?? `${panel.id}-${Date.now().toString(36)}`;
+  const base = { ...opts, slots, costModel, pools: [campaign], onAttempt, runId };
+  log('cal', `run ${runId}: trial containers carry ${RUN_LABEL}=${runId}`);
 
   // Prior spend on these tasks under this panel counts against the campaign budget.
   for (const d of taskDirs) {
