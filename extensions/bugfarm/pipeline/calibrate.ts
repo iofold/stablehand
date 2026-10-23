@@ -525,8 +525,11 @@ export function itemRowFor(panel: FrozenPanel, task: TaskInfo, store: AttemptSto
     }
     const expectedPath = join(task.dir, 'tests', 'expected.json');
     if (fileExists(expectedPath)) payload.failing_tests = (readJson<{ fail_to_pass?: string[] }>(expectedPath).fail_to_pass ?? []).slice(0, 500);
-    if (!final) payload.stage = 'calibrating';
-    else if (final.decision === 'accept') {
+    if (!final) {
+      payload.stage = 'calibrating';
+      payload.reject_reason = null;
+      payload.reject_detail = null;
+    } else if (final.decision === 'accept') {
       payload.stage = 'accepted';
       payload.reject_reason = null;
       payload.reject_detail = null;
