@@ -41,6 +41,8 @@ interface MockState {
   artifacts: Array<{ id: string; name: string; agentId: string; turnId?: string }>;
   /** Turn states returned in order on each poll after the event fires. */
   turnStates: Array<Record<string, unknown>>;
+  /** Pending approvals, keyed by the poll from which they show. */
+  pendingApprovals?: Array<{ fromPoll: number; untilPoll: number; row: Record<string, unknown> }>;
 }
 
 function freshState(): MockState {
@@ -127,6 +129,12 @@ async function runScript(
       const turnState = state.turnStates[Math.min(polls, state.turnStates.length - 1)];
       polls += 1;
       return send(response, 200, { turn: { id: 'turn-1', queuedAt: emittedAt, startedAt: emittedAt, ...turnState }, messages: [] });
+    }
+    if (method === 'GET' && path === '/api/interrupts') {
+      const shown = (state.pendingApprovals ?? [])
+        .filter((entry) => polls >= entry.fromPoll && polls < entry.untilPoll)
+        .map((entry) => entry.row);
+      return send(response, 200, { interrupts: shown });
     }
     if (method === 'GET' && path === '/api/artifacts') {
       const turnId = url.searchParams.get('turnId');
@@ -320,6 +328,30 @@ describe('overnight-analyst run-once', () => {
     });
     expect(stdout).toContain('cost     $0.0123');
     expect(stdout).toContain('RESULT status=COMPLETED turn=turn-1 brief=brief-1 cost_usd=0.0123 coverage=complete gallery=none');
+  });
+
+  it('says once that the run is waiting for approval, then follows it to the end', async () => {
+    const state = seededState();
+    state.artifacts.push({ id: 'brief-1', name: 'overnight-brief.html', agentId: 'agent-1', turnId: 'turn-1' });
+    state.turnStates = [
+      { status: 'RUNNING', completedAt: null, error: null, usage: null, gatewayMode: null },
+      { status: 'RUNNING', completedAt: null, error: null, usage: null, gatewayMode: null },
+      { status: 'RUNNING', completedAt: null, error: null, usage: null, gatewayMode: null },
+      { status: 'RUNNING', completedAt: null, error: null, usage: null, gatewayMode: null },
+      { status: 'COMPLETED', completedAt: Date.now(), error: null, usage: usage('complete', 0.03, 0.03), gatewayMode: 'gateway_only' },
+    ];
+    state.pendingApprovals = [{
+      fromPoll: 2,
+      untilPoll: 4,
+      row: { id: 'int-1', turnId: 'turn-1', args: { reason: "Publish today's brief to the gallery" } },
+    }];
+    const { code, stdout } = await runScript(runOncePath, state);
+
+    expect(code).toBe(0);
+    const waiting = stdout.split('\n').filter((line) => line.startsWith('waiting for approval:'));
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]).toContain("Publish today's brief to the gallery");
+    expect(stdout).toContain('RESULT status=COMPLETED');
   });
 
   it('starts nothing when asked to skip and a brief exists', async () => {

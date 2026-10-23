@@ -20,6 +20,10 @@
  *   POLL_MS               poll interval         (default 3000)
  *   ANALYST_SKIP_IF_BRIEF 1 = do nothing when the agent already has a brief
  *                         (install.sh uses it so a re-run spends nothing)
+ *
+ * When the agent was seeded with ANALYST_APPROVE_BEFORE_PUBLISH=1 the run
+ * waits for a person before it publishes; this script says so once and keeps
+ * waiting, up to RUN_TIMEOUT_MS.
  */
 
 export {};
@@ -93,6 +97,29 @@ async function getTurn(agentId: string, turnId: string): Promise<Turn> {
   return turn;
 }
 
+interface PendingApproval {
+  id: string;
+  turnId: string;
+  args?: { reason?: unknown };
+}
+
+/** Say once per approval that the run is waiting for a person (ANALYST_APPROVE_BEFORE_PUBLISH). */
+async function announceApprovals(
+  agentId: string,
+  turnId: string,
+  announced: Set<string>,
+  since: number,
+): Promise<void> {
+  const { interrupts } = await api<{ interrupts: PendingApproval[] }>(
+    `/api/interrupts?agentId=${encodeURIComponent(agentId)}&status=pending`,
+  );
+  for (const approval of interrupts.filter((row) => row.turnId === turnId && !announced.has(row.id))) {
+    announced.add(approval.id);
+    const reason = typeof approval.args?.reason === 'string' ? approval.args.reason : 'approval requested';
+    console.log(`waiting for approval: ${reason} (${elapsed(since)}). Approve or reject it in the UI.`);
+  }
+}
+
 async function waitFor<T>(label: string, timeoutMs: number, probe: () => Promise<T | undefined>): Promise<T | undefined> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -140,12 +167,14 @@ async function main(): Promise<number> {
   console.log(`run ${queued.id} queued`);
 
   let lastStatus = queued.status;
+  const announced = new Set<string>();
   const finished = await waitFor('waiting for the run', RUN_TIMEOUT_MS, async () => {
     const turn = await getTurn(agent.id, queued.id);
     if (turn.status !== lastStatus) {
       console.log(`run ${turn.status.toLowerCase()} (${elapsed(firedAt)})`);
       lastStatus = turn.status;
     }
+    if (turn.status === 'RUNNING') await announceApprovals(agent.id, turn.id, announced, firedAt);
     return TERMINAL.has(turn.status) ? turn : undefined;
   });
   if (!finished) return 1;
