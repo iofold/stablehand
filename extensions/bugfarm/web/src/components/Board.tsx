@@ -28,6 +28,11 @@ function entryTime(item: Item, stage: Stage): number {
   return item.stage_times?.[stage] ?? item.updatedAt;
 }
 
+/** A card something is happening to right now (not one waiting its turn); these lead their column. */
+function busy(item: Item): number {
+  return item.activity && !/^Waiting/.test(item.activity) ? 1 : 0;
+}
+
 interface ColumnProps {
   stage: Stage;
   cards: { item: Item; shown: Shown; isNew: boolean }[];
@@ -149,7 +154,7 @@ export function Board({ view, onOpen }: { view: BoardView; onOpen: (key: string)
     columns.get(display.stage)?.push({ item, shown: display, isNew: item.firstSeen > 0 && now - item.firstSeen < NEW_WINDOW_MS });
   }
   for (const [stage, cards] of columns) {
-    cards.sort((a, b) => entryTime(b.item, stage) - entryTime(a.item, stage) || b.item.rowId - a.item.rowId);
+    cards.sort((a, b) => busy(b.item) - busy(a.item) || entryTime(b.item, stage) - entryTime(a.item, stage) || b.item.rowId - a.item.rowId);
   }
 
   const carousel = useRef<HTMLDivElement>(null);
