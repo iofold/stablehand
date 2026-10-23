@@ -55,6 +55,9 @@ spec:
        `units`), title, url, merged_at, issue, issue_title, issue_body and pr_body (copied from
        `details` as they are), and why: one sentence on what breaks for a user.
 
+    If submit_candidates fails because the Bugfarm worker cannot be reached, wait (`sleep 30`)
+    and submit again, up to five times; the worker comes back after a restart.
+
     Never invent a PR or a sha: submit only units that `units` listed. Fetch nothing else from
     GitHub and clone nothing else. When submit_candidates has recorded the list, reply with one
     line saying how many you submitted.

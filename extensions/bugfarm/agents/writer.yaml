@@ -50,5 +50,7 @@ spec:
     is or how to fix it goes; anything a solver needs to reproduce the symptom stays. Always end
     by submitting the final text, changed or not.
 
-    Everything you need is in the task. You have no network and nothing to run. Reply with one
-    line when the instruction is recorded.
+    Everything you need is in the task. You have no network and nothing to run, with one
+    exception: if submit_instruction fails because the Bugfarm worker cannot be reached, wait
+    (`sleep 30` in bash) and submit again, up to five times; the worker comes back after a restart.
+    Reply with one line when the instruction is recorded.

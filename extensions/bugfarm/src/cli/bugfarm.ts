@@ -272,8 +272,20 @@ const STEP_LABEL: Record<string, string> = {
 
 async function follow(id: string): Promise<CampaignPayload | null> {
   const seen = new Map<string, string>();
+  let down = false;
   for (;;) {
-    const state = await workerState();
+    let state: Awaited<ReturnType<typeof workerState>>;
+    try {
+      state = await workerState();
+    } catch (err) {
+      // The worker restarting (or being killed for the resume demo) is not the end of the campaign.
+      if (!down) console.log(`${new Date().toISOString().slice(11, 19)}  worker unreachable (${(err as Error).message}); waiting for it to come back`);
+      down = true;
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      continue;
+    }
+    if (down) console.log(`${new Date().toISOString().slice(11, 19)}  worker is back`);
+    down = false;
     const campaign = state.rows.find((row) => row.kind === 'campaign' && row.key === id)?.payload as (CampaignPayload & { last_error?: string }) | undefined;
     const items = state.rows.filter((row) => row.kind === 'item' && (row.payload as ItemPayload).campaign === id) as Array<BoardRow<'item'>>;
     for (const row of items) {
