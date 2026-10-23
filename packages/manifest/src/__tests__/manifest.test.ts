@@ -127,6 +127,30 @@ describe('strict manifest validation', () => {
     expect(safeValidateManifest(retired).success).toBe(false);
   });
 
+  it('validates the egress block with the agent API rules', () => {
+    for (const egress of [
+      { mode: 'deny' },
+      { mode: 'deny', rules: ['GET pypi.org/simple/**'] },
+      { mode: 'allow', rules: ['GET *', 'HEAD *'] },
+      { mode: 'default' },
+    ]) {
+      const candidate = structuredClone(minimalManifest());
+      (candidate.spec as Record<string, unknown>).egress = egress;
+      expect(validateManifest(candidate).spec.egress).toEqual(egress);
+    }
+    for (const egress of [
+      { mode: 'allow' },
+      { mode: 'default', rules: ['GET *'] },
+      { mode: 'deny', rules: ['* ollama:11434/** !internal'] },
+      { mode: 'block' },
+      ['GET *'],
+    ]) {
+      const candidate = structuredClone(minimalManifest());
+      (candidate.spec as Record<string, unknown>).egress = egress;
+      expect(safeValidateManifest(candidate).success, JSON.stringify(egress)).toBe(false);
+    }
+  });
+
   it('rejects absolute, traversal, backslash, control, and dot workspace paths', () => {
     const invalidPaths = [
       '/etc/passwd',
@@ -239,6 +263,7 @@ describe('canonical agent API conversion', () => {
         sandbox: { cpus: 2, memoryMb: 2048, pidsLimit: 128, timeoutSec: 600 },
       },
       mode: 'background',
+      egress: { mode: 'allow', rules: ['GET *'] },
     });
     const manifest = validateManifest(candidate);
 
@@ -263,6 +288,7 @@ describe('canonical agent API conversion', () => {
       },
       resourceLimits: { cpus: 2, memoryMb: 2048, pidsLimit: 128, timeoutSec: 600 },
       mode: 'background',
+      egress: { mode: 'allow', rules: ['GET *'] },
       manifest,
     });
   });

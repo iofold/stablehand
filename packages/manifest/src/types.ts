@@ -1,4 +1,5 @@
 import type {
+  AgentEgress,
   AgentResourceLimits,
   BuiltinToolPolicy,
   ClaudeAgentsConfig,
@@ -85,6 +86,12 @@ export type ManifestMode = 'interactive' | 'background' | 'both';
 /** A remote MCP server the agent may call; the orchestrator runs the client. */
 export type ManifestMcpServer = McpServerDefinition;
 
+/**
+ * Where the agent's sandboxes may connect: `default` (the server allowlist), `deny` (only the
+ * model provider and runtime services, plus `rules`) or `allow` (the server allowlist plus `rules`).
+ */
+export type ManifestEgress = AgentEgress;
+
 interface ManifestSpecCommon {
   instructions: string;
   tools?: ManifestToolRef[];
@@ -99,6 +106,7 @@ interface ManifestSpecCommon {
   workspace?: ManifestWorkspace;
   resources?: ManifestResources;
   mode?: ManifestMode;
+  egress?: ManifestEgress;
 }
 
 export interface LangGraphManifestSpec extends ManifestSpecCommon {

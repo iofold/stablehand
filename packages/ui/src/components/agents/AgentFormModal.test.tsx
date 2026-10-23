@@ -52,6 +52,7 @@ function makeAgent(
     workspaceContent: null,
     mode: null,
     resourceLimits: null,
+    egress: null,
     ...overrides,
   } as Agent;
 }

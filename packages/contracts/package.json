@@ -34,6 +34,10 @@
       "types": "./dist/budgets.d.ts",
       "import": "./dist/budgets.js"
     },
+    "./egress": {
+      "types": "./dist/egress.d.ts",
+      "import": "./dist/egress.js"
+    },
     "./events": {
       "types": "./dist/events.d.ts",
       "import": "./dist/events.js"

@@ -1,6 +1,7 @@
 export * from './api.js';
 export * from './analytics.js';
 export * from './budgets.js';
+export * from './egress.js';
 export * from './events.js';
 export * from './harness.js';
 export * from './ids.js';

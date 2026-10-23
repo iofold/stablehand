@@ -67,6 +67,7 @@ const validAgent = {
   workspaceContent: null,
   mode: null,
   resourceLimits: null,
+  egress: null,
 };
 
 beforeEach(() => {

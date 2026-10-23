@@ -101,6 +101,7 @@ function toAgentInputCandidate(
     ...(resourceLimits ? { resourceLimits } : {}),
     ...(manifest.spec.mode ? { mode: manifest.spec.mode } : {}),
     ...(manifest.spec.mcpServers ? { mcpServers: manifest.spec.mcpServers } : {}),
+    ...(manifest.spec.egress ? { egress: manifest.spec.egress } : {}),
     manifest,
   };
 }

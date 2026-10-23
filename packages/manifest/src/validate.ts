@@ -1,4 +1,5 @@
 import {
+  AgentEgressSchema,
   AgentResourceLimitsSchema,
   BuiltinToolPolicySchema,
   ClaudeAgentsConfigSchema,
@@ -126,6 +127,7 @@ const manifestSpecCommon = {
   workspace: manifestWorkspaceSchema.optional(),
   resources: manifestResourcesSchema.optional(),
   mode: z.enum(['interactive', 'background', 'both']).optional(),
+  egress: AgentEgressSchema.optional(),
 } as const;
 
 const langGraphManifestSchema = z.strictObject({

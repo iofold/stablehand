@@ -18,6 +18,7 @@ export type {
   ManifestWorkspace,
   ManifestResources,
   ManifestMode,
+  ManifestEgress,
   LangGraphManifestSpec,
   ClaudeAgentsManifestSpec,
   PIAgentManifestSpec,

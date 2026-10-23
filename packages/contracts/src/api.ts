@@ -20,6 +20,7 @@ import {
 } from './harness.js';
 import { TurnUsageSchema } from './usage.js';
 import { TurnStopReasonSchema } from './budgets.js';
+import { AgentEgressSchema } from './egress.js';
 
 const UnknownRecordSchema = z.record(z.string(), z.unknown());
 const StringRecordSchema = z.record(z.string(), z.string());
@@ -276,6 +277,7 @@ export const AgentCreateInputSchema = z.strictObject({
   nativeToolPolicy: NativeToolPolicySchema.optional(),
   workspaceContent: AgentWorkspaceContentSchema.optional(),
   mode: AgentModeSchema.optional(),
+  egress: AgentEgressSchema.optional(),
   manifest: UnknownRecordSchema.optional(),
 });
 
@@ -288,6 +290,7 @@ export const AgentPatchInputSchema = AgentCreateInputSchema
     nativeToolPolicy: NativeToolPolicySchema.nullable().optional(),
     workspaceContent: AgentWorkspaceContentSchema.nullable().optional(),
     mode: AgentModeSchema.nullable().optional(),
+    egress: AgentEgressSchema.nullable().optional(),
     manifest: UnknownRecordSchema.nullable().optional(),
     mcpServers: McpServerListSchema.nullable().optional(),
   })
@@ -381,6 +384,8 @@ export const AgentSchema = z.strictObject({
   workspaceContent: AgentWorkspaceContentSchema.nullable(),
   mode: AgentModeSchema.nullable(),
   resourceLimits: AgentResourceLimitsSchema.nullable(),
+  // null: the agent has no egress setting of its own and uses the server allowlist.
+  egress: AgentEgressSchema.nullable(),
   sseClients: z.number().int().nonnegative().optional(),
   hasPendingInterrupt: z.boolean().optional(),
   conversationCount: z.number().int().nonnegative().optional(),

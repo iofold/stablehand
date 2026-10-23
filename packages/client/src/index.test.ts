@@ -91,6 +91,7 @@ describe('StablehandControlClient', () => {
       workspaceContent: null,
       mode: null,
       resourceLimits: null,
+      egress: null,
     };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(updatedAgent));
     const client = new clientModule.StablehandControlClient({

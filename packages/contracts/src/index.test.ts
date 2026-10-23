@@ -279,6 +279,7 @@ describe('@stablehand/contracts', () => {
       workspaceContent: null,
       mode: null,
       resourceLimits: null,
+      egress: null,
       sseClients: 0,
       hasPendingInterrupt: false,
       conversationCount: 1,

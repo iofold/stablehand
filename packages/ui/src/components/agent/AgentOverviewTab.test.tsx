@@ -33,6 +33,7 @@ const AGENT = {
   workspaceContent: null,
   mode: null,
   resourceLimits: null,
+  egress: null,
 } as unknown as Agent;
 
 function conversation(index: number): ConversationSummary {

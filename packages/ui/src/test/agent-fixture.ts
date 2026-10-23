@@ -23,6 +23,7 @@ export function makeAgentFixture(overrides: AgentFixtureOverrides = {}): Agent {
     workspaceContent: null,
     mode: null,
     resourceLimits: null,
+    egress: null,
     ...overrides,
   });
 }
