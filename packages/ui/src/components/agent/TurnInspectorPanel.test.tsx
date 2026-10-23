@@ -169,6 +169,23 @@ describe('TurnInspectorPanel spend-cap receipt', () => {
     expect(files[1]).toContain('overnight-brief.html');
   });
 
+  it('wraps a task that is one long URL instead of running out of the panel', async () => {
+    const url = `https://earthquake.usgs.gov/earthquakes/browse/significant.php?${'x'.repeat(120)}`;
+    vi.mocked(fetchTurnDetail).mockResolvedValue({
+      turn: TurnSchema.parse({
+        ...stoppedTurn({ code: 'budget_reached', source: 'run_limit', capUsd: 0.05, spentUsd: 0.05 }),
+        taskDescription: `Overnight briefing run. Sources: ${url}`,
+      }),
+      messages: [],
+    });
+
+    await renderPanel();
+
+    const task = container.querySelector('[data-testid="turn-task"]');
+    expect(task?.textContent).toContain(url);
+    expect(task?.className).toContain('[overflow-wrap:anywhere]');
+  });
+
   it('says so when a turn asked for no approvals and made no files', async () => {
     vi.mocked(fetchTurnDetail).mockResolvedValue({
       turn: stoppedTurn({ code: 'budget_reached', source: 'run_limit', capUsd: 0.05, spentUsd: 0.05 }),

@@ -276,7 +276,10 @@ export function TurnInspectorPanel({ agentId, turnId, onClose }: TurnInspectorPa
         ) : (
           <>
             {turn.taskDescription && (
-              <p className="rounded border border-surface-700/30 bg-surface-800/60 px-2.5 py-1.5 text-sm text-surface-300">
+              <p
+                data-testid="turn-task"
+                className="rounded border border-surface-700/30 bg-surface-800/60 px-2.5 py-1.5 text-sm text-surface-300 [overflow-wrap:anywhere]"
+              >
                 {turn.taskDescription}
               </p>
             )}
