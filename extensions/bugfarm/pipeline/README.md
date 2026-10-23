@@ -78,6 +78,7 @@ node --experimental-strip-types cli.ts package fastapi/fastapi
 node --experimental-strip-types cli.ts controls fastapi/fastapi [--tasks fastapi-abc123,fastapi-def456]
 node --experimental-strip-types cli.ts run fastapi/fastapi --limit 30   # scout -> ... -> controls + funnel
 node --experimental-strip-types cli.ts clean                      # remove leftover bugfarm=1 containers
+node --experimental-strip-types cli.ts prune-cache [--all] [--dry-run]   # drop this pipeline's build-cache records
 ```
 
 `npx tsx cli.ts ...` also works. Imports use `.ts` extensions, and the code uses only erasable
@@ -94,6 +95,62 @@ Outputs, all under `.work/` (gitignored):
 | `results/<slug>/` | `candidates.json`, `env.json`, `env-build.log`, `head-suite.json`, `checks/*.json`, `controls.json`, `swebench.jsonl`, `funnel.json` |
 | `tasks/<slug>/` | the Harbor dataset |
 | `jobs/` | Harbor job dirs (always passed as an absolute `--jobs-dir`) |
+
+## Pilot results (2026-10-23, dev1)
+
+**Scout.** Window: 2026-01-01 to HEAD. Suite times are one HEAD run in the env image; dev1's load
+average was about 25 on 8 cores at the time.
+
+| Repo | Units since 2026-01 | Candidates | Suite at HEAD |
+|---|---|---|---|
+| fastapi/fastapi | 1442 | 26 | 116 s, 4713 passed, 0 failed |
+| pydantic/pydantic | 518 | 23 | 79 s including 3 segfault retries; 15 fail at HEAD |
+| Textualize/rich | 48 | 5 | 9 s |
+| python-attrs/attrs | 113 | 3 | 15 s |
+| Textualize/textual | 70 | 2 | 369 s |
+| encode/httpx | 1 | 0 | 8 s |
+
+fastapi is the pilot: the most candidates, a suite under 2 minutes, and a clean HEAD.
+
+**fastapi funnel**, at concurrency 3 for checks and `-n 2` for Harbor:
+
+| Stage | Count |
+|---|---|
+| Commits | 1442 |
+| Fix-like messages | 73 |
+| Touch source and tests | 32 |
+| 5 files or fewer | 30 |
+| 30 non-test lines or fewer | 26 |
+| Checked | 26 |
+| Fail-to-pass | 12 |
+| Packaged | 12 |
+| Controls passed | 12 (oracle 1, nop 0) |
+
+Rejections: `reverse_patch_conflict` 11, `no_fail_to_pass` 2, `import_error_only` 1.
+
+**Time.**
+
+| Stage | Time |
+|---|---|
+| Env build (reused) and collect | 21 s |
+| HEAD baseline | 116 s + 134 s |
+| `check_candidate` | 129 s mean (190–340 s accepted, about 1 s for patch rejects) |
+| Check stage wall | 18.7 min |
+| Package 12 tasks | 23 s |
+| Oracle controls | 19.1 min |
+| Nop controls | 21.2 min |
+| Total wall | 60 min |
+
+A Harbor trial costs about 60 s of overhead (build, sidecar, a second env for the verifier) plus
+the full suite.
+
+**Disk.**
+
+| Item | Size |
+|---|---|
+| `.work/` at peak | 1.33 GB (clones 0.24, trees 0.57, tasks 0.46) |
+| fastapi env image | 780 MB |
+| Build cache per task build | about 62 MB, now pruned automatically |
 
 ## Gotchas hit in the spike
 
@@ -132,6 +189,7 @@ Outputs, all under `.work/` (gitignored):
   from the agent's container to the fresh verifier container. Anything else the agent changes,
   including tests, conftest, `pyproject` and site-packages, is dropped. That is the point, but it
   also means fixes outside the source dirs are invisible.
+- **Harbor leaves build cache.** `--delete` runs `compose down --rmi local`, which removes task images but keeps their build-cache records: a tree-sized COPY layer per task. Task Dockerfiles copy from `environment/bugfarm-repo/`, so `pruneOwnBuildCache` (run after controls, or `cli.ts prune-cache [--all]`) can match records by steps that only this pipeline uses.
 - **Harbor housekeeping.**
   - Harbor names compose projects `<trial>__env` and `<trial>__verifier__trial`. Its sidecar does
     not carry our label, so cleanup matches on the compose project of every trial in the job dir and
