@@ -9,6 +9,13 @@ import { mkdir } from 'node:fs/promises';
  * — a crashed page can never strand a headless Chromium across turns. All
  * page work runs under hard timeouts so an unresponsive site fails the tool
  * call instead of hanging the turn.
+ *
+ * One browser at a time per sandbox: models send a round of browse and
+ * screenshot calls in parallel, and each Chromium runs 100+ threads, so three
+ * at once exhaust the sandbox's default 256-process limit. Chromium then dies
+ * with SIGTRAP ("sigaltstack: Out of memory") and the daemon can no longer
+ * fork. Parallel calls queue instead; each one's hard deadline starts when it
+ * gets the browser.
  */
 
 const NAVIGATION_TIMEOUT_MS = 20_000;
@@ -111,7 +118,22 @@ async function ensureEgressCaTrusted(): Promise<void> {
   }
 }
 
+let browserQueue: Promise<unknown> = Promise.resolve();
+
+function oneBrowserAtATime<T>(task: () => Promise<T>): Promise<T> {
+  const run = browserQueue.then(task, task);
+  browserQueue = run.catch(() => undefined);
+  return run;
+}
+
 async function withPage<T>(
+  run: (page: import('playwright').Page) => Promise<T>,
+  timeouts: { hardCallTimeoutMs: number; closeTimeoutMs: number },
+): Promise<T> {
+  return oneBrowserAtATime(() => launchAndRun(run, timeouts));
+}
+
+async function launchAndRun<T>(
   run: (page: import('playwright').Page) => Promise<T>,
   timeouts: { hardCallTimeoutMs: number; closeTimeoutMs: number },
 ): Promise<T> {

@@ -105,4 +105,40 @@ describe('browser-handler (ctx-lqas)', () => {
       .rejects.toThrow('ERR_NAME_NOT_RESOLVED');
     expect(browser.close).toHaveBeenCalled();
   });
+
+  it('runs parallel calls one browser at a time, and a failed call does not block the next', async () => {
+    const { browser, page } = mockBrowser();
+    let open = 0;
+    let mostOpen = 0;
+    launchMock.mockImplementation(async () => {
+      open += 1;
+      mostOpen = Math.max(mostOpen, open);
+      return browser;
+    });
+    browser.close.mockImplementation(async () => {
+      open -= 1;
+    });
+    page.goto
+      .mockImplementationOnce(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        throw new Error('net::ERR_CONNECTION_RESET');
+      })
+      .mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      });
+    const handlers = createBrowserHandlers({ workspaceDir: WORKSPACE });
+
+    // A model sends a whole round at once: three pages and three screenshots.
+    const calls = ['a', 'b', 'c'].flatMap((site) => [
+      handlers.get('browse')!({ url: `https://${site}.example.com` }),
+      handlers.get('screenshot')!({ url: `https://${site}.example.com`, path: `shots/${site}.png` }),
+    ]);
+    const results = await Promise.allSettled(calls);
+
+    expect(mostOpen).toBe(1);
+    expect(launchMock).toHaveBeenCalledTimes(6);
+    expect(results.map((result) => result.status)).toEqual([
+      'rejected', 'fulfilled', 'fulfilled', 'fulfilled', 'fulfilled', 'fulfilled',
+    ]);
+  });
 });
