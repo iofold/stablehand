@@ -17,13 +17,17 @@ export interface RepoProfile {
   dockerfile: string;
 }
 
-/** Shared prefix: slim Python, git + patch for solve.sh, no pip cache so no stray wheels of the package. */
+/**
+ * Shared prefix: slim Python, git + patch for solve.sh, no pip cache so no stray wheels of the package.
+ * tmux is there for Harbor's terminus-2, which drives the task container over tmux and would otherwise
+ * try to apt-get it inside a container that has no network.
+ */
 function pythonBase(version = '3.12'): string {
   return [
     `FROM python:${version}-slim`,
     'LABEL bugfarm=1',
     'ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1',
-    'RUN apt-get update && apt-get install -y --no-install-recommends git patch && rm -rf /var/lib/apt/lists/* && pip install -U pip',
+    'RUN apt-get update && apt-get install -y --no-install-recommends git patch tmux && rm -rf /var/lib/apt/lists/* && pip install -U pip',
     'WORKDIR /app',
     'COPY . /app',
   ].join('\n');
