@@ -96,6 +96,7 @@ Stablehand lists a server's tools when the agent is saved, when the orchestrator
 
 - Results are capped at 100,000 characters, with a note telling the model to ask for less. Images and audio are described, not inlined.
 - Up to 10 servers per agent and 100 tools per server. Use `tools:` to keep the list short; every tool costs context.
+- Stablehand passes the model's arguments through and cannot pin any of them, so a tool that spends money per call is capped only if the server caps it. Apify's hosted server does not cap what an actor run can charge. To hold each call to a fixed amount, call Apify's API from an HTTP tool with `maxTotalChargeUsd` in the endpoint URL, as the content factory example does (`packages/examples/content-factory/apify-tools.ts`).
 - The MCP SDK in use (1.32) speaks protocol versions up to 2025-11-25. Servers that only speak 2026-07-28 will not connect until the SDK moves to v2.
 
 Still open: Composio as an MCP server, per-user grants, deployment-wide server registrations shared by many agents, and loading tool definitions on demand for servers with many tools.
