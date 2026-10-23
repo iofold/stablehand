@@ -8,12 +8,12 @@ The agents chain through events, run on two schedules and share one campaign bud
 
 | Stage | When | What it does | Reads through | Leaves behind |
 |---|---|---|---|---|
-| Scout | Monday 07:00 | Pulls the week's top LinkedIn and X posts for your keywords and accounts, ranks them by engagement and writes a "what's working" brief | Apify's MCP server | `whats-working-<date>.md` |
+| Scout | Monday 07:00 | Pulls the week's top LinkedIn and X posts for your keywords and accounts, ranks them by engagement and writes a "what's working" brief | Apify's API, capped per call | `whats-working-<date>.md` |
 | Notes miner | after the scout | Reads this week's meeting notes and picks stories, decisions, numbers and opinions worth a post, with names replaced by roles | Granola's MCP server, or the synthetic stand-in | `stories-<date>.md` |
 | Writer | after the notes miner | Writes a LinkedIn post, an X thread and a blog outline in your voice, then runs each one through the deslop check until it passes | your voice samples, `deslop/` | `<channel>-draft-<week>.md` |
 | Editor | once per draft | Puts the draft on a review card: approve, edit and approve, or reject with a note | the review card | `<channel>-<week>.md` (kind `approved-draft`) |
 | Publisher (optional) | after each approval | Schedules LinkedIn and X posts into your next free Typefully slot. Each call asks you first | Typefully's API | a Typefully draft |
-| Measure | Thursday 07:00 | Pulls engagement for your own posts from the last 7 days | Apify's MCP server | `engagement-<date>.md` |
+| Measure | Thursday 07:00 | Pulls engagement for your own posts from the last 7 days | Apify's API, capped per call | `engagement-<date>.md` |
 
 ```
 schedule (Mon) -> scout -> notes miner -> writer -> editor x3 -> publisher (optional)
@@ -48,7 +48,7 @@ You need a running Stablehand from the default install (which routes model calls
    node --experimental-strip-types packages/examples/content-factory/seed.ts
    ```
 
-   The seed stores your Apify token as a tools-only secret: Stablehand sends it to Apify's MCP server for the agent, and it never enters the agent's sandbox. Re-run the seed whenever you change the config or the agents.
+   The seed stores your Apify token as a tools-only secret: Stablehand sends it to Apify on the agent's behalf, and it never enters the agent's sandbox. Re-run the seed whenever you change the config, the agents or the token.
 
 5. Review the drafts. On the dashboard, `factory-editor` shows "Approval needed" when a draft is waiting. Open it, open the waiting run, and the draft is on a card. Change the text if you want, add a note, then Approve or Reject. The card fits a phone screen.
 
@@ -73,7 +73,9 @@ Set `TYPEFULLY_API_KEY` and `TYPEFULLY_SOCIAL_SET_ID` (find it with `GET https:/
 
 Model spend: each agent has a per-run cap in its manifest (`limits.maxCostUsd`, $0.20 to $0.60), and the seed creates one budget for the campaign tag: $3 and 40 runs per rolling 7 days, a warning at 50%, new runs blocked at 100%. The per-run caps stop a run midway through the model gateway, which the default install runs; without it the budget still blocks new runs once spent. A live check of the notes miner's privacy step and one LinkedIn draft on gpt-5.4-mini used about 3,600 tokens, well under one cent.
 
-Apify spend: the scout asks for at most 10 LinkedIn posts and 15 tweets per call and makes at most 6 calls; the measure agent makes at most 3. At the actors' prices (`harvestapi/linkedin-post-search` and `harvestapi/linkedin-profile-posts` at $2 per 1,000 posts, `apidojo/tweet-scraper` at $0.40 per 1,000 tweets) a week costs about $0.10. A test run of 3 LinkedIn posts and 5 tweets cost $0.008.
+Apify spend: Apify bills these actors per item, $0.002 per LinkedIn post (`harvestapi/linkedin-post-search`, `harvestapi/linkedin-profile-posts`; a little less on larger Apify plans) and $0.0004 per X post (`apidojo/tweet-scraper`). Every Apify call carries a charge cap in its request URL (`maxTotalChargeUsd`, set in `apify-tools.ts`). Apify enforces it and the model cannot change it: $0.05 per LinkedIn call and $0.02 per X call. With the shipped config the scout makes 2 LinkedIn searches and 2 X searches a week, so Apify costs at most $0.14 a week. Fill in your own accounts and a few X accounts to watch, and the extra X search and the measure agent's two calls bring it to at most $0.23 a week, plus $0.05 in the first week for your own LinkedIn posts.
+
+The cap exists because instructions alone did not hold the cost. While filming the demo, three LinkedIn searches cost $0.17 to $0.24 each ($0.59 in all), the price of 85 to 120 posts per search where the scout's instructions ask for 10. At two searches a week that is $0.39 a week on LinkedIn alone. Apify's hosted MCP server has no per-call charge cap the model cannot skip, so the factory calls Apify's API directly.
 
 ## Privacy
 
@@ -87,6 +89,7 @@ The notes miner replaces people's names with their roles and customer names with
 | `agents/*/agent.yaml` | one manifest per stage: model, MCP servers, tools, instructions |
 | `agents/writer/voice/samples.md` | your voice samples |
 | `agents/writer/deslop/` | the writing rules and `check.mjs`, condensed from [skill-deslop](https://github.com/stephenturner/skill-deslop) by Stephen D. Turner (MIT, see `LICENSE` there) |
+| `apify-tools.ts` | the scout's and measure agent's Apify tools and their per-call charge caps |
 | `notes-mcp/` | the synthetic notes and the stand-in MCP server (no dependencies) |
 | `seed.ts` | creates or updates everything above in a running Stablehand |
 | `tests/` | manifest, deslop and stand-in server tests; the chain test is `tests/integration/content-factory-chain.test.ts` at the repo root |

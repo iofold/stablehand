@@ -5,7 +5,7 @@ metadata:
   displayName: Content factory scout
   description: >-
     Pulls this week's top posts in your niche from LinkedIn and X through
-    Apify's MCP server and writes a short "what's working" brief.
+    Apify and writes a short "what's working" brief.
   labels:
     example: content-factory
     stage: scout
@@ -24,22 +24,10 @@ spec:
   mode: background
   defaultTags:
     campaign: content-factory
-  mcpServers:
-    - name: apify
-      url: https://mcp.apify.com/?tools=apidojo/tweet-scraper,harvestapi/linkedin-post-search,harvestapi/linkedin-profile-posts
-      description: Apify actors for LinkedIn and X posts
-      auth:
-        type: bearer
-        token: "$secret:APIFY_TOKEN"
-      tools:
-        - apidojo--tweet-scraper
-        - harvestapi--linkedin-post-search
-        - harvestapi--linkedin-profile-posts
-        - get-dataset-items
-      # Scraping is read-only and each call is capped by maxItems/maxPosts in
-      # the instructions, so the weekly run goes unattended.
-      requireApproval: false
-      timeoutMs: 180000
+  # The seed adds three Apify HTTP tools (apify-tools.ts): apify_linkedin_search,
+  # apify_x_posts and apify_linkedin_profile_posts. Apify caps the charge of
+  # every call through the request URL, which the model cannot change, so the
+  # weekly run goes unattended.
   tools:
     - ref: artifact_upload
   instructions: |
@@ -53,16 +41,16 @@ spec:
     Steps:
     1. If /workspace/learning/engagement-latest.md exists, read it. It is the
        report on the owner's own posts from the last measure run.
-    2. For up to 2 keywords, call apify__harvestapi--linkedin-post-search with
+    2. For up to 2 keywords, call apify_linkedin_search with
        searchQueries [keyword], postedLimit "week", sortBy "relevance",
        maxPosts 10.
-    3. For up to 2 keywords, call apify__apidojo--tweet-scraper with
+    3. For up to 2 keywords, call apify_x_posts with
        searchTerms ["<keyword> min_faves:50"], sort "Top", maxItems 15. If
        xAccounts are given, make one more call with twitterHandles (up to 5)
        and maxItems 15.
     4. If there is no engagement report and me.linkedinUrl is set, call
-       apify__harvestapi--linkedin-profile-posts with targetUrls
-       [me.linkedinUrl], postedLimit "month", maxPosts 10.
+       apify_linkedin_profile_posts with targetUrls [me.linkedinUrl],
+       postedLimit "month", maxPosts 10.
     Never make more than 6 Apify calls in one run. If a call fails, note it
     in the brief and move on.
 

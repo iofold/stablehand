@@ -2,8 +2,10 @@
 
 /**
  * Seed the content factory against a running Stablehand: the agents from
- * agents/, their tools-only secrets, the event triggers that chain them, two
- * schedules and one campaign budget. Safe to re-run: it updates what exists.
+ * agents/, their tools-only secrets, the scout's and measure agent's Apify
+ * tools (each call capped by Apify, see apify-tools.ts), the event triggers
+ * that chain them, two schedules and one campaign budget. Safe to re-run: it
+ * updates what exists.
  *
  * Environment:
  *   API_URL                  Stablehand API (default http://localhost:3002)
@@ -27,6 +29,8 @@ import {
   loadManifestProject,
   type LoadedManifestProject,
 } from '@stablehand/manifest/node';
+
+import { APIFY_CHARGE_CAP_USD, MEASURE_APIFY_TOOLS, SCOUT_APIFY_TOOLS, type ApifyHttpTool } from './apify-tools.ts';
 
 interface FactoryConfig {
   campaign: string;
@@ -144,6 +148,12 @@ async function putToolSecret(agent: StageAgent, key: string, value: string): Pro
   console.log(`    ${agent.name}: stored ${key} (tools only, never in the sandbox)`);
 }
 
+/** Attach HTTP tools after the secrets they read are stored: the orchestrator binds secrets when it registers them. */
+async function putApifyTools(agent: StageAgent, tools: ApifyHttpTool[]): Promise<void> {
+  await patch(`/api/agents/${agent.id}`, { httpTools: tools });
+  console.log(`    ${agent.name}: ${tools.map((tool) => tool.name).join(', ')}`);
+}
+
 async function refreshMcp(agent: StageAgent, server: string): Promise<void> {
   const body = await post<{ servers: Array<{ name: string; state: string; message?: string; toolCount: number }> }>(
     `/api/agents/${agent.id}/mcp-servers/${server}/refresh`,
@@ -229,7 +239,7 @@ async function seed(): Promise<void> {
     await putToolSecret(stage('scout'), 'APIFY_TOKEN', APIFY_TOKEN);
     await putToolSecret(stage('measure'), 'APIFY_TOKEN', APIFY_TOKEN);
   } else {
-    console.log('  APIFY_TOKEN not set: the scout and measure agents will report "needs sign-in" until you add it');
+    console.log('  APIFY_TOKEN not set: the scout\'s and measure agent\'s Apify calls fail until you re-run the seed with it');
   }
   if (NOTES_MCP_TOKEN && !USE_GRANOLA) {
     await putToolSecret(stage('notes-miner'), 'NOTES_MCP_TOKEN', NOTES_MCP_TOKEN);
@@ -260,9 +270,11 @@ async function seed(): Promise<void> {
     console.log('    factory-publisher: typefully_create_draft asks for approval on every call');
   }
 
+  console.log(`\nApify tools (Apify stops each call at $${APIFY_CHARGE_CAP_USD.linkedin} on LinkedIn, $${APIFY_CHARGE_CAP_USD.x} on X)`);
+  await putApifyTools(stage('scout'), SCOUT_APIFY_TOOLS);
+  await putApifyTools(stage('measure'), MEASURE_APIFY_TOOLS);
+
   console.log('\nMCP servers');
-  await refreshMcp(stage('scout'), 'apify');
-  await refreshMcp(stage('measure'), 'apify');
   await refreshMcp(stage('notes-miner'), 'notes');
 
   console.log('\nTriggers');

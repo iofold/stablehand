@@ -39,7 +39,7 @@ interface SeededAgent {
   mode: string | null;
   metadata: Record<string, unknown> | null;
   mcpServers?: Array<{ name: string; url: string }>;
-  httpTools: Array<{ name: string; requiresApproval?: boolean }>;
+  httpTools: Array<{ name: string; endpoint: string; requiresApproval?: boolean }>;
 }
 
 describe('content factory', () => {
@@ -89,21 +89,43 @@ describe('content factory', () => {
     return stdout;
   }
 
-  it('seeds the agents, secrets, MCP servers, triggers, schedules and budget, and re-runs in place', async () => {
+  it('seeds the agents, secrets, capped Apify tools, MCP servers, triggers, schedules and budget, and re-runs in place', async () => {
     const first = await runSeed();
     expect(first).toContain('Seed complete');
     expect(first).toContain('factory-notes-miner/notes: ready, 3 tools');
     expect(first).toContain('APIFY_TOKEN not set');
     expect(first).toContain('approved drafts land as artifacts');
 
+    const { app, container } = testApp!;
+
+    // Installs seeded before the charge cap reach Apify through its MCP
+    // server, which runs actors uncapped. Re-seeding must take that route away.
+    const seededScout = (await app.inject({ method: 'GET', url: '/api/agents' }))
+      .json<Array<SeededAgent & { manifest: { spec: Record<string, unknown> } }>>()
+      .find((agent) => agent.name === 'factory-scout')!;
+    const legacyManifest = structuredClone(seededScout.manifest);
+    legacyManifest.spec.mcpServers = [{
+      name: 'apify',
+      url: 'https://mcp.apify.com/?tools=harvestapi/linkedin-post-search',
+      auth: { type: 'bearer', token: '$secret:APIFY_TOKEN' },
+    }];
+    const legacy = await app.inject({
+      method: 'PATCH',
+      url: `/api/agents/${seededScout.id}`,
+      payload: { manifest: legacyManifest },
+    });
+    expect(legacy.statusCode, legacy.body).toBe(200);
+    expect(legacy.json<SeededAgent>().mcpServers).toEqual([expect.objectContaining({ name: 'apify' })]);
+
     const second = await runSeed({
+      APIFY_TOKEN: 'apify-test-token',
       TYPEFULLY_API_KEY: 'typefully-test-key',
       TYPEFULLY_SOCIAL_SET_ID: '4242',
     });
     expect(second).toMatch(/updated factory-scout/);
     expect(second).toContain('created factory-publisher');
+    expect(second).not.toContain('APIFY_TOKEN not set');
 
-    const { app, container } = testApp!;
     const agents = (await app.inject({ method: 'GET', url: '/api/agents' })).json<SeededAgent[]>();
     const factory = agents.filter((agent) => agent.name.startsWith('factory-'));
     expect(factory.map((agent) => agent.name).sort()).toEqual([
@@ -138,11 +160,22 @@ describe('content factory', () => {
         expect.objectContaining({ name: 'notes__get_meeting_transcript' }),
       ],
     });
-    const scoutStatus = await app.inject({ method: 'GET', url: `/api/agents/${byName('factory-scout').id}/mcp-servers` });
-    expect(scoutStatus.json<{ servers: Array<{ state: string; message?: string }> }>().servers[0]).toMatchObject({
-      state: 'needs_auth',
-      message: expect.stringContaining('APIFY_TOKEN'),
-    });
+    // Apify comes in as HTTP tools whose endpoint URL carries Apify's charge
+    // cap, with the token stored tools-only.
+    for (const [name, tools] of [
+      ['factory-scout', ['apify_linkedin_search', 'apify_x_posts', 'apify_linkedin_profile_posts']],
+      ['factory-measure', ['apify_linkedin_profile_posts', 'apify_x_posts']],
+    ] as const) {
+      const agent = byName(name);
+      expect(agent.mcpServers ?? [], name).toEqual([]);
+      expect(agent.httpTools.map((tool) => tool.name), name).toEqual(tools);
+      for (const tool of agent.httpTools) {
+        expect(new URL(tool.endpoint).searchParams.get('maxTotalChargeUsd'), `${name}/${tool.name}`).toMatch(/^0\.0[25]$/);
+      }
+      const secrets = await app.inject({ method: 'GET', url: `/api/agents/${agent.id}/secrets` });
+      expect(secrets.json(), name).toEqual({ keys: [], toolKeys: ['APIFY_TOKEN'] });
+      expect(await readSandboxScopeSecrets(container.secretProvider, agent.id), name).toEqual({});
+    }
 
     const triggers = (await app.inject({ method: 'GET', url: '/api/triggers' }))
       .json<Array<{ agentId: string; eventType: string; enabled: boolean }>>();

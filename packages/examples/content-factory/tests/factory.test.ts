@@ -5,6 +5,12 @@ import { loadManifestProject } from '@stablehand/manifest/node';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { McpServerToolProvider } from '../../../stablehand/src/mcp/provider.js';
+import {
+  APIFY_CHARGE_CAP_USD,
+  APIFY_RUN_TIMEOUT_SECS,
+  MEASURE_APIFY_TOOLS,
+  SCOUT_APIFY_TOOLS,
+} from '../apify-tools.ts';
 import { startNotesServer, type NotesServerHandle } from '../notes-mcp/server.ts';
 
 interface DeslopReport {
@@ -42,13 +48,12 @@ describe('content factory manifests', () => {
   });
 
   it('wires each stage to the tools it needs and nothing that holds a literal token', async () => {
-    const scout = (await loadAgent('scout')).agentCreateInput;
-    expect(scout.mcpServers?.[0]).toMatchObject({
-      name: 'apify',
-      auth: { type: 'bearer', token: '$secret:APIFY_TOKEN' },
-      requireApproval: false,
-    });
-    expect(scout.mcpServers?.[0]?.url).toContain('harvestapi/linkedin-post-search');
+    // Apify comes in as capped HTTP tools from the seed, never through its
+    // MCP server, whose actor tools run without a charge cap.
+    for (const dir of ['scout', 'measure']) {
+      const input = (await loadAgent(dir)).agentCreateInput;
+      expect(input.mcpServers ?? [], dir).toEqual([]);
+    }
 
     const notes = (await loadAgent('notes-miner')).agentCreateInput;
     expect(notes.mcpServers?.[0]).toMatchObject({ name: 'notes', url: 'https://mcp.granola.ai/mcp', auth: { type: 'oauth' } });
@@ -69,6 +74,70 @@ describe('content factory manifests', () => {
       const raw = await readFile(new URL(`../agents/${dir}/agent.yaml`, import.meta.url), 'utf8');
       expect(raw, dir).not.toMatch(/apify_api_|Bearer [A-Za-z0-9]{12,}/);
     }
+  });
+});
+
+describe('Apify tools', () => {
+  const ALL_TOOLS = [...new Set([...SCOUT_APIFY_TOOLS, ...MEASURE_APIFY_TOOLS])];
+
+  it('caps the charge of every call in a URL the model cannot edit', () => {
+    expect(ALL_TOOLS.map((tool) => tool.name).sort()).toEqual([
+      'apify_linkedin_profile_posts',
+      'apify_linkedin_search',
+      'apify_x_posts',
+    ]);
+    const capByActor: Record<string, number> = {
+      'harvestapi~linkedin-post-search': APIFY_CHARGE_CAP_USD.linkedin,
+      'harvestapi~linkedin-profile-posts': APIFY_CHARGE_CAP_USD.linkedin,
+      'apidojo~tweet-scraper': APIFY_CHARGE_CAP_USD.x,
+    };
+    for (const tool of ALL_TOOLS) {
+      const url = new URL(tool.endpoint);
+      const actor = /^\/v2\/acts\/([^/]+)\/run-sync-get-dataset-items$/.exec(url.pathname)?.[1];
+      expect(url.origin, tool.name).toBe('https://api.apify.com');
+      expect(actor, tool.name).toBeDefined();
+      const cap = Number(url.searchParams.get('maxTotalChargeUsd'));
+      expect(cap, tool.name).toBe(capByActor[actor!]);
+      // harvestapi/linkedin-post-search refuses caps under $0.01.
+      expect(cap, tool.name).toBeGreaterThanOrEqual(0.01);
+      expect(cap, tool.name).toBeLessThanOrEqual(0.05);
+      expect(url.searchParams.get('timeout'), tool.name).toBe(String(APIFY_RUN_TIMEOUT_SECS));
+      expect(Number(url.searchParams.get('limit')), tool.name).toBeLessThanOrEqual(20);
+      expect(url.searchParams.get('clean'), tool.name).toBe('true');
+      expect(url.searchParams.get('fields'), tool.name).toBeTruthy();
+      expect(tool.method).toBe('POST');
+      expect(tool.authentication).toEqual({ type: 'bearer', secretName: 'APIFY_TOKEN' });
+      expect(tool.timeoutMs, tool.name).toBeGreaterThan(APIFY_RUN_TIMEOUT_SECS * 1000);
+      expect(tool.description, tool.name).toContain(`stops this call at $${cap}`);
+      // The cap lives only in the URL: the model's input cannot carry run options.
+      expect(Object.keys((tool.inputSchema.properties ?? {}) as object), tool.name).not.toContain('maxTotalChargeUsd');
+    }
+  });
+
+  it('gives the scout and measure agents exactly the Apify tools their instructions call', async () => {
+    for (const [dir, tools] of [['scout', SCOUT_APIFY_TOOLS], ['measure', MEASURE_APIFY_TOOLS]] as const) {
+      const instructions = (await loadAgent(dir)).agentCreateInput.systemPrompt ?? '';
+      const called = [...new Set(instructions.match(/\bapify_[a-z_]+\b/g) ?? [])].sort();
+      expect(called, dir).toEqual(tools.map((tool) => tool.name).sort());
+      expect(instructions, dir).not.toMatch(/apify__/);
+    }
+  });
+
+  it('states the weekly Apify ceiling the caps and the shipped schedule give', async () => {
+    const config = JSON.parse(await readFile(new URL('../factory.config.json', import.meta.url), 'utf8')) as {
+      niche: { keywords: string[] };
+    };
+    const { linkedin, x } = APIFY_CHARGE_CAP_USD;
+    const keywords = Math.min(config.niche.keywords.length, 2);
+    // The scout searches LinkedIn and X once per keyword (up to 2 keywords).
+    const shipped = keywords * (linkedin + x);
+    // Own accounts and watched X accounts add one X handles search and the
+    // measure agent's LinkedIn and X calls.
+    const withAccounts = shipped + x + linkedin + x;
+    const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
+    expect(readme).toContain(`at most $${shipped.toFixed(2)} a week`);
+    expect(readme).toContain(`at most $${withAccounts.toFixed(2)} a week`);
+    expect(readme).toContain(`$${linkedin} per LinkedIn call and $${x} per X call`);
   });
 });
 
