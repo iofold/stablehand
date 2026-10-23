@@ -71,6 +71,8 @@ Turn and conversation lifecycle statuses were always served SCREAMING_CASE by RE
 | POST | `/api/agents/:id/turns/:turnId/cancel` | Cancel a running turn |
 | GET | `/api/agents/:id/turns/:turnId` | Get a turn plus its conversation messages |
 | GET | `/api/agents/:id/turns` | List agent turns |
+| GET | `/api/turns` | Find turns across agents by tag and status |
+| GET | `/api/turns/:turnId` | Get one turn by id, without its agent |
 | **Conversation & Sandbox Lifecycle** |  |  |
 | POST | `/api/agents/:id/sandbox-sessions/:sandboxSessionId/suspend` | Checkpoint a sandbox session |
 | POST | `/api/agents/:id/sandbox-sessions/:sandboxSessionId/restore` | Manually restore a checkpointed sandbox session |
@@ -232,6 +234,8 @@ Also used by specific endpoints:
 ### Pagination
 
 - **Events:** cursor-based via `cursor` / `nextCursor`
+- **Turns across agents (`GET /api/turns`):** opaque cursor via `cursor` / `nextCursor`
+- **Interrupts across agents (`GET /api/interrupts`):** `before` / `nextBefore`
 - **Artifacts:** offset-based via `limit` + `offset`
 - **Everything else:** no pagination
 
@@ -658,6 +662,101 @@ Per-agent sandbox resource limits:
   `CHECKPOINTED` (a proxy for checkpoint time).
 
 ### d. Turns and sandbox lifecycle
+
+#### Turn tags
+
+Tags are string labels on a turn, such as `campaign: bugfarm-1`. Budgets match
+on them and spend is grouped by them, so they decide which budget a turn counts
+against. A turn's tags are fixed when it is created and come from, highest
+precedence first:
+
+1. the `tags` object on `POST /api/agents/:id/message` or
+   `POST /api/agents/:id/turns` (only for a new conversation; a conversation
+   keeps the tags it started with);
+2. the agent's `metadata.defaultTags`.
+
+A turn started by a trigger takes its tags from, highest precedence first:
+
+1. the trigger's own `tags` (see [Triggers](#o-triggers-apitriggers));
+2. the event's tags: the tags of the turn the event belongs to (every event an
+   agent emits carries its turn), plus a `tags` object in the event payload for
+   events posted through `POST /api/triggers/emit` or fired by a schedule.
+   Payload tags cannot replace the tags of the turn that emitted the event, so
+   an agent cannot move its work to a different budget;
+3. the target agent's `metadata.defaultTags`.
+
+So once the first turn of a chain is tagged, every turn the chain triggers
+carries the same tags. One exception: when a trigger's conversation key adds the
+turn to a conversation that already exists, the turn keeps that conversation's
+tags, because a conversation's tags never change. The keys `agent`, `harness` and `mode` are always set by
+Stablehand. Values must be 1 to 256 characters. The APIs reject tags that break
+these rules; tags carried by events are checked the same way and any entry that
+breaks them is dropped.
+
+#### `GET /api/turns`
+
+- **Description:** Lists turns from every agent, newest first. Use it to find
+  all the turns of one campaign or job.
+- **Query params:**
+  - `tag=key:value` (repeatable; every tag must match). Everything after the
+    first `:` is the value, so keys cannot contain `:`.
+  - `status` (repeatable or comma-separated; any listed value matches):
+    `QUEUED`, `RUNNING`, `COMPLETED`, `ERROR`, `CANCELLED`. These are the
+    statuses turns report, so `CANCELLED` and `ERROR` filter exactly as they
+    display.
+  - `agentId` (optional exact filter)
+  - `limit` (default `50`, maximum `200`)
+  - `cursor` (the `nextCursor` from the previous page; treat it as opaque)
+- **Response:**
+
+```json
+{
+  "turns": [
+    {
+      "id": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+      "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+      "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+      "sandboxSessionId": null,
+      "status": "RUNNING",
+      "mode": "background",
+      "taskDescription": "Build the environment for abc123",
+      "queuedAt": 1712139999000,
+      "startedAt": 1712140000000,
+      "completedAt": null,
+      "error": null,
+      "usage": null,
+      "tags": {
+        "campaign": "bugfarm-1",
+        "agent": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+        "harness": "claude-agents",
+        "mode": "background"
+      },
+      "gatewayMode": null
+    }
+  ],
+  "nextCursor": "MTcxMjEzOTk5OTAwMDo3YjNm..."
+}
+```
+
+- **Notes:**
+  - Turns are ordered by `queuedAt`, newest first. `nextCursor` is absent on
+    the last page.
+  - Requires `agents:read`. A key bound to one agent only sees that agent's
+    turns; asking for another agent returns an empty list.
+  - Turns here carry no `conversationMessageCount`; read one agent's turns for
+    that.
+  - The bundled client method is `client.turns.search(...)`, and
+    `client.waitForTurn(turnId, { timeoutMs })` waits for a turn to finish.
+
+#### `GET /api/turns/:turnId`
+
+- **Description:** Returns one turn when you know its id but not its agent.
+- **Query params:** None.
+- **Response:** `{ "turn": { ... } }`, the same turn shape as above.
+- **Notes:** Requires `agents:read`. Returns `404` when the turn does not exist
+  or belongs to another agent than the key's. Unlike
+  `GET /api/agents/:id/turns/:turnId`, it does not return the conversation's
+  messages, so it stays cheap to call repeatedly.
 
 #### `GET /api/agents/:id/turns`
 
@@ -1639,6 +1738,7 @@ The redirect target the provider sends the browser to. Public: the single-use `s
   "eventType": "turn.completed",
   "selector": { "status": "COMPLETED" },
   "taskTemplate": "Review output from turn {{payload.turnId}}",
+  "tags": { "stage": "review", "repo": "{{payload.repo}}" },
   "enabled": true
 }
 ```
@@ -1660,6 +1760,15 @@ The redirect target the provider sends the browser to. Public: the single-use `s
   runs in one conversation take turns. When the event lacks a field the key
   names, or the key renders empty, the firing starts a new conversation. Without
   a key every firing starts a new conversation. At most 512 characters.
+- **Tags (optional):** `tags` gives the turns this trigger starts these tags,
+  which win over the event's tags and the agent's default tags (see
+  [Turn tags](#turn-tags)). Values use the same placeholders as the task
+  template, e.g. `{{payload.repo}}`; if the event lacks the field, that tag is
+  left off and the lower-precedence value applies. Tags follow the usual rules
+  (`agent`, `harness` and `mode` are reserved; values are 1 to 256
+  characters), and a request that breaks them returns `400`. A firing that a
+  conversation key adds to an existing conversation keeps that
+  conversation's tags.
 - **Notes:** Returns `404` if `agentId` does not exist. A matching event starts a
   **background** run on the agent, so its `mode` must be `background` or `both`.
   When the run cannot start, the firing is recorded as failed (see
@@ -1738,14 +1847,16 @@ The redirect target the provider sends the browser to. Public: the single-use `s
 ```json
 {
   "enabled": false,
-  "taskTemplate": "Updated template"
+  "taskTemplate": "Updated template",
+  "tags": { "stage": "review" }
 }
 ```
 
 - **Query params:** None.
 - **Response:** updated trigger object.
 - **Notes:** Returns `404` if not found. `selector: null` clears the selector;
-  `conversationKey: null` (or `""`) clears the conversation key.
+  `conversationKey: null` (or `""`) clears the conversation key; `tags`
+  replaces the trigger's tags and `"tags": null` removes them.
 
 #### `DELETE /api/triggers/:id`
 
@@ -1816,7 +1927,7 @@ The redirect target the provider sends the browser to. Public: the single-use `s
     (`queue_full`, `dispatch_stalled`): `error` is the human sentence,
     `code` the machine token, and `retryAfterSec` mirrors `Retry-After`.
 
-- **Notes:** `type` must match `^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`. `payload` must be a JSON object and may not exceed 256 KiB (262,144 bytes) after UTF-8 JSON serialization (raised from 32 KiB). Larger content, such as a full report or dataset, should not ride on the event: upload it as an artifact owned by the trigger's target agent (`POST /api/artifacts/upload` with that `agentId`) and send `{ "artifactId": "…" }`, which the run can fetch with `artifact_download`, or send an HTTPS URL the run can reach. Every event row stores the payload twice and replays read rows in batches, so references keep the event log small. `agentId` is optional for global trigger events, but must be supplied for delivery to agent-scoped webhook subscriptions. Events are durably persisted before the success response. Bundled clients can call `client.events.emitCustom(...)`.
+- **Notes:** `type` must match `^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`. `payload` must be a JSON object and may not exceed 256 KiB (262,144 bytes) after UTF-8 JSON serialization (raised from 32 KiB). Larger content, such as a full report or dataset, should not ride on the event: upload it as an artifact owned by the trigger's target agent (`POST /api/artifacts/upload` with that `agentId`) and send `{ "artifactId": "…" }`, which the run can fetch with `artifact_download`, or send an HTTPS URL the run can reach. Every event row stores the payload twice and replays read rows in batches, so references keep the event log small. A `tags` object in `payload` (for example `"tags": { "campaign": "bugfarm-1" }`) is passed on to the turns that triggers start for this event, and so is the tag set of the turn named by `payload.turnId`, which wins where both set the same key (see [Turn tags](#turn-tags)). `agentId` is optional for global trigger events, but must be supplied for delivery to agent-scoped webhook subscriptions. Events are durably persisted before the success response. Bundled clients can call `client.events.emitCustom(...)`.
 
 Schedules are clocks over this same custom-event entrypoint. They never start
 runs directly: a scheduled fire is durably emitted, then matching event

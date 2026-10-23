@@ -76,7 +76,7 @@ master-only routes.
 
 | Capability | Scoped routes | Important consequence |
 |---|---|---|
-| `agents:read` | Agent list/detail, conversations and snapshots, turn detail/list, recent/active conversations, active sandbox-session summaries, agent SSE stream | Reads prompts, harness configuration, transcripts, status, and live output across the deployment |
+| `agents:read` | Agent list/detail, conversations and snapshots, turn detail/list, turns across agents by tag (`GET /api/turns`, `GET /api/turns/:turnId`), recent/active conversations, active sandbox-session summaries, agent SSE stream | Reads prompts, harness configuration, transcripts, status, and live output across the deployment |
 | `agents:write` | Create, update, and delete agents | Agent deletion can cascade through agent-owned runtime data |
 | `conversations:write` | Interactive/background turn start, turn cancellation, AG-UI run stream | Runs may invoke the agent's configured tools and secrets and incur model cost |
 | `events:read` | Event list, stats, and type list | Reads persisted event payloads across the deployment |
