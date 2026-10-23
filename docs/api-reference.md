@@ -91,6 +91,7 @@ Turn and conversation lifecycle statuses were always served SCREAMING_CASE by RE
 | GET | `/api/agents/:id/interrupts` | List pending interrupts |
 | POST | `/api/agents/:id/interrupt` | Resolve an interrupt |
 | GET | `/api/interrupts` | List durable interrupts across agents |
+| GET | `/api/interrupts/:id` | Get one interrupt, with who resolved it, why, and the data sent with it |
 | **Files & Workspace** |  |  |
 | GET | `/api/agents/:id/files` | List workspace directory entries |
 | GET | `/api/agents/:id/files/read` | Read a workspace file |
@@ -1089,14 +1090,67 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
       "createdAt": 1712140000000,
       "expiresAt": 1712140300000,
       "resolvedAt": null,
-      "resolvedAction": null
+      "resolvedAction": null,
+      "resolvedBy": null,
+      "resolvedReason": null
     }
   ],
   "nextBefore": 1712140000000
 }
 ```
 
-- **Notes:** Results are ordered newest-first. Pass `nextBefore` as `before` for the next page. The list deliberately excludes `resolvedData`, which is not exposed by the public interrupt APIs because it may be large or sensitive. The bundled client method is `client.interrupts.listAll(...)`.
+- **Notes:** Results are ordered newest-first. Pass `nextBefore` as `before` for the next page. `resolvedBy` and `resolvedReason` say who resolved the interrupt and why (see [Who resolved an approval](#who-resolved-an-approval)). Lists leave out `resolvedData` because it can be large; read one interrupt with `GET /api/interrupts/:id` to get it. The bundled client method is `client.interrupts.listAll(...)`.
+
+#### `GET /api/interrupts/:id`
+
+- **Description:** Returns one durable interrupt, including the `data` sent with its resolution.
+- **Query params:** None.
+- **Response:**
+
+```json
+{
+  "id": "9d7c5b3a-1e2f-4b8c-a4d6-8f0e2c4a6b8d",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "sandboxSessionId": "b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f",
+  "toolCallId": "tc_1",
+  "toolName": "request-approval",
+  "args": { "reason": "Publish batch 3 to the dataset hub" },
+  "status": "resolved",
+  "createdAt": 1712140000000,
+  "expiresAt": 1712140300000,
+  "resolvedAt": 1712140120000,
+  "resolvedAction": "approve",
+  "resolvedBy": { "type": "api_key", "keyId": "key_4f2c", "keyName": "phone-approver" },
+  "resolvedReason": "Receipts reconcile with the gateway ledger.",
+  "resolvedData": null
+}
+```
+
+- **Notes:** Requires `interrupts:read`. Returns `404` when the interrupt does not exist, or when the key is bound to another agent. `resolvedData` is the `data` sent with the resolution, or `null`. The bundled client method is `client.interrupts.get(id)`.
+
+#### Who resolved an approval
+
+Every resolution through `POST /api/agents/:id/interrupt` records who made it,
+when, and why:
+
+- `resolvedBy` is the caller:
+  - `{ "type": "api_key", "keyId": "...", "keyName": "..." }` for a scoped key
+    (the name it had at the time);
+  - `{ "type": "master_token" }` for the master token;
+  - `{ "type": "unauthenticated" }` when authentication is turned off.
+
+  The dashboard signs in with one of these tokens, so approvals made there are
+  recorded the same way. Give each person or device its own scoped key with
+  `interrupts:resolve` if you need to tell them apart.
+- `resolvedAt` is when it was resolved.
+- `resolvedReason` is the `reason` sent with the resolution. Cancelling a turn
+  refuses its pending approval with the reason `Turn cancelled`, recorded
+  against whoever cancelled it.
+
+`resolvedBy` and `resolvedReason` are `null` when Stablehand resolved the
+interrupt itself (for example it expired, or a newer request replaced it) and for
+interrupts resolved before this was recorded.
 
 #### `GET /api/agents/:id/interrupts`
 
@@ -1123,7 +1177,7 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
 }
 ```
 
-- **Notes:** `includeResolved=true` merges in durable pending records that are not currently in memory. `status` is one of `pending`, `resolved`, `resume_failed`, `timed_out`.
+- **Notes:** `includeResolved=true` merges in durable pending records that are not currently in memory. `status` is one of `pending`, `resolved`, `resume_failed`, `timed_out`. A `resume_failed` record has already been resolved, so it also carries `resolvedAt`, `resolvedAction`, `resolvedBy` and `resolvedReason`.
 
 #### `POST /api/agents/:id/interrupt`
 
@@ -1134,7 +1188,8 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
 {
   "action": "approve",
   "interruptId": "9d7c5b3a-1e2f-4b8c-a4d6-8f0e2c4a6b8d",
-  "data": { "comment": "Approved by ops" }
+  "data": { "comment": "Approved by ops" },
+  "reason": "Receipts reconcile with the gateway ledger."
 }
 ```
 
@@ -1142,7 +1197,13 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
 - **Response (`200`):**
 
 ```json
-{ "resolved": true, "action": "approve" }
+{
+  "resolved": true,
+  "action": "approve",
+  "resolvedAt": 1712140120000,
+  "resolvedBy": { "type": "master_token" },
+  "resolvedReason": "Receipts reconcile with the gateway ledger."
+}
 ```
 
 - **Response (`202` when the sandbox session is being resumed asynchronously):**
@@ -1152,13 +1213,17 @@ and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
   "accepted": true,
   "resuming": true,
   "action": "approve",
-  "resumeAttemptId": "9c1d3e5f-7a2b-4c8d-9e0f-1a3b5c7d9e2f"
+  "resumeAttemptId": "9c1d3e5f-7a2b-4c8d-9e0f-1a3b5c7d9e2f",
+  "resolvedAt": 1712140120000,
+  "resolvedBy": { "type": "master_token" },
+  "resolvedReason": "Receipts reconcile with the gateway ledger."
 }
 ```
 
 - **Notes:**
   - Allowed actions: `approve`, `reject`
-  - An already-resolved interrupt returns `{ "alreadyResolved": true, "action": <recorded action or null> }`; the recorded `resolvedAction` vocabulary is `approve | reject | suspend | timeout`
+  - `data` is passed back to the agent (for example form values). `reason` is optional, 1 to 2,000 characters, and is stored with the resolution; the agent does not see it. Every response echoes the stored `resolvedAt`, `resolvedBy` and `resolvedReason` (see [Who resolved an approval](#who-resolved-an-approval)).
+  - An already-resolved interrupt returns `{ "alreadyResolved": true, "action": <recorded action or null> }` with the first resolution's `resolvedAt`, `resolvedBy` and `resolvedReason`; a repeated request does not overwrite them. The recorded `resolvedAction` vocabulary is `approve | reject | suspend | timeout`
   - Returns `404` when the interrupt does not belong to that agent
 
 ### h. Files & Workspace
@@ -2665,6 +2730,24 @@ execution time (`completedAt − startedAt`).
   "timestamp": 1712140000200
 }
 ```
+
+`interrupt.resolved` example payload:
+
+```json
+{
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+  "interruptId": "9d7c5b3a-1e2f-4b8c-a4d6-8f0e2c4a6b8d",
+  "action": "approve",
+  "resolvedBy": { "type": "api_key", "keyId": "key_4f2c", "keyName": "phone-approver" },
+  "reason": "Receipts reconcile with the gateway ledger.",
+  "timestamp": 1712140120000
+}
+```
+
+`resolvedBy` and `reason` are left out when Stablehand resolved the interrupt
+itself, or when no reason was given.
 
 `message.committed` example payload:
 

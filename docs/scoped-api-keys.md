@@ -80,7 +80,7 @@ master-only routes.
 | `agents:write` | Create, update, and delete agents | Agent deletion can cascade through agent-owned runtime data |
 | `conversations:write` | Interactive/background turn start, turn cancellation, AG-UI run stream | Runs may invoke the agent's configured tools and secrets and incur model cost |
 | `events:read` | Event list, stats, and type list | Reads persisted event payloads across the deployment |
-| `interrupts:read` | Global and per-agent interrupt lists | Reads tool names, arguments, and resolution state |
+| `interrupts:read` | Global and per-agent interrupt lists, one interrupt by id (`GET /api/interrupts/:id`) | Reads tool names, arguments, and resolution state |
 | `interrupts:resolve` | Resolve an agent interrupt | Can approve side effects and resume agent execution |
 | `feedback:write` | Submit agent-message feedback | Can attach ratings and comments to messages |
 | `artifacts:read` | Artifact list/metadata, direct download, signed download URL | Signed URLs remain usable until their own expiry |
