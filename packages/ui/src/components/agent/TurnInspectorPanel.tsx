@@ -1,10 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { X, Copy, Check, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
+import { X, Copy, Check, ChevronDown, ChevronRight, ExternalLink, Download } from 'lucide-react';
 import { formatSpendUsd, type AgentBudgetStatus, type Turn } from '@stablehand/contracts';
-import { fetchTurnDetail, fetchAgentBudgetStatuses } from '@/lib/api';
+import {
+  fetchTurnDetail,
+  fetchAgentBudgetStatuses,
+  fetchAgent,
+  fetchTurnApprovals,
+  fetchArtifacts,
+  downloadArtifact,
+  type Artifact,
+  type TurnApproval,
+} from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { formatDurationBetween, formatCompactNumber } from '@/lib/format';
+import { formatDurationBetween, formatCompactNumber, formatBytes } from '@/lib/format';
+import { humanizeIdentifier } from '@/lib/tool-display';
 import { describeTurnCost } from '@/lib/usage-cost';
 import { TurnStatusBadge } from './TurnStatusBadge';
 import { ErrorDisplay } from '@/components/session/ErrorDisplay';
@@ -77,6 +87,66 @@ function CopyableId({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** The configured model, when the agent's harness config names one. */
+function configuredModel(harnessConfig: Record<string, unknown> | undefined): string | null {
+  const model = harnessConfig?.model;
+  return typeof model === 'string' && model.trim() ? model : null;
+}
+
+function approvalSummary(approval: TurnApproval): string {
+  const reason = approval.args?.reason;
+  if (typeof reason === 'string' && reason.trim()) return reason.trim();
+  return approval.toolName === 'request-approval'
+    ? 'Approval requested'
+    : humanizeIdentifier(approval.toolName);
+}
+
+function ApprovalRow({ approval }: { approval: TurnApproval }) {
+  const outcome = approval.resolvedAction === 'approve'
+    ? { label: 'Approved', classes: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' }
+    : approval.resolvedAction === 'reject'
+      ? { label: 'Rejected', classes: 'border-red-500/30 bg-red-500/10 text-red-300' }
+      : approval.status === 'pending'
+        ? { label: 'Waiting', classes: 'border-amber-500/30 bg-amber-500/10 text-amber-300' }
+        : { label: humanizeIdentifier(approval.status), classes: 'border-surface-600 bg-surface-700/30 text-surface-400' };
+  return (
+    <div data-testid="turn-approval" className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <p className="text-xs text-surface-200">{approvalSummary(approval)}</p>
+        {approval.resolvedAt != null && (
+          <p className="text-[11px] text-surface-500">{formatAbsoluteTime(approval.resolvedAt)}</p>
+        )}
+      </div>
+      <span className={cn('flex-shrink-0 rounded-full border px-2 py-0.5 text-[11px]', outcome.classes)}>
+        {outcome.label}
+      </span>
+    </div>
+  );
+}
+
+function FileRow({ artifact }: { artifact: Artifact }) {
+  return (
+    <div data-testid="turn-file" className="flex items-center justify-between gap-3">
+      <span className="min-w-0 truncate font-mono text-[11px] text-surface-200" title={artifact.name}>
+        {artifact.name}
+      </span>
+      <span className="flex flex-shrink-0 items-center gap-2">
+        <span className="text-[11px] tabular-nums text-surface-500">{formatBytes(artifact.sizeBytes, 1)}</span>
+        <button
+          type="button"
+          onClick={() => {
+            downloadArtifact(artifact.id, artifact.name).catch(() => undefined);
+          }}
+          aria-label={`Download ${artifact.name}`}
+          className="rounded p-0.5 text-surface-400 transition-colors hover:text-surface-100"
+        >
+          <Download className="h-3.5 w-3.5" />
+        </button>
+      </span>
+    </div>
+  );
+}
+
 function budgetStateClasses(state: 'ok' | 'warning' | 'blocked'): string {
   if (state === 'blocked') return 'border-red-500/30 bg-red-500/10 text-red-300';
   if (state === 'warning') return 'border-amber-500/30 bg-amber-500/10 text-amber-300';
@@ -101,6 +171,9 @@ export function TurnInspectorPanel({ agentId, turnId, onClose }: TurnInspectorPa
   const [budgetStatus, setBudgetStatus] = useState<AgentBudgetStatus | null>(null);
   const [budgetUnavailable, setBudgetUnavailable] = useState(false);
   const [rawExpanded, setRawExpanded] = useState(false);
+  const [model, setModel] = useState<string | null>(null);
+  const [approvals, setApprovals] = useState<TurnApproval[] | null>(null);
+  const [files, setFiles] = useState<Artifact[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,6 +191,26 @@ export function TurnInspectorPanel({ agentId, turnId, onClose }: TurnInspectorPa
         setLoadError(err instanceof Error ? err.message : String(err));
       });
 
+    return () => { cancelled = true; };
+  }, [agentId, turnId]);
+
+  // The rest of the receipt: the model, what was approved and the files the
+  // turn produced. Each part loads on its own; a failure leaves it out.
+  useEffect(() => {
+    let cancelled = false;
+    setApprovals(null);
+    setFiles(null);
+    fetchAgent(agentId)
+      .then((agent) => { if (!cancelled) setModel(configuredModel(agent.harnessConfig)); })
+      .catch(() => undefined);
+    fetchTurnApprovals(agentId, turnId)
+      .then((rows) => { if (!cancelled) setApprovals(rows); })
+      .catch(() => undefined);
+    fetchArtifacts(agentId, turnId)
+      .then(({ artifacts }) => {
+        if (!cancelled) setFiles([...artifacts].sort((a, b) => a.createdAt - b.createdAt));
+      })
+      .catch(() => undefined);
     return () => { cancelled = true; };
   }, [agentId, turnId]);
 
@@ -219,6 +312,7 @@ export function TurnInspectorPanel({ agentId, turnId, onClose }: TurnInspectorPa
 
             <Section title="Cost & tokens">
               <div className="space-y-1.5">
+                {model && <DetailRow label="Model"><span className="font-mono">{model}</span></DetailRow>}
                 <DetailRow label="Model cost">
                   <span
                     className={cn(
@@ -265,6 +359,30 @@ export function TurnInspectorPanel({ agentId, turnId, onClose }: TurnInspectorPa
                 )}
               </div>
             </Section>
+
+            {approvals && (
+              <Section title="Approvals">
+                {approvals.length === 0 ? (
+                  <p className="text-xs text-surface-500">None asked for.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {approvals.map((approval) => <ApprovalRow key={approval.id} approval={approval} />)}
+                  </div>
+                )}
+              </Section>
+            )}
+
+            {files && (
+              <Section title="Files">
+                {files.length === 0 ? (
+                  <p className="text-xs text-surface-500">No files from this turn.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {files.map((artifact) => <FileRow key={artifact.id} artifact={artifact} />)}
+                  </div>
+                )}
+              </Section>
+            )}
 
             <Section title="Budget">
               {budgetUnavailable ? (

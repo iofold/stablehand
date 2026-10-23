@@ -324,6 +324,28 @@ export async function fetchInterrupts(agentId: string): Promise<PendingInterrupt
   return Array.isArray(data.interrupts) ? data.interrupts : [];
 }
 
+/** One approval asked for during a turn, pending or decided. */
+export type TurnApproval = {
+  id: string;
+  turnId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  status: string;
+  createdAt: number;
+  resolvedAt: number | null;
+  resolvedAction: 'approve' | 'reject' | null;
+};
+
+/** Every approval a turn asked for, oldest first. */
+export async function fetchTurnApprovals(agentId: string, turnId: string): Promise<TurnApproval[]> {
+  const data = await apiFetch<{ interrupts?: TurnApproval[] }>(
+    withQuery(`${API_BASE}/interrupts`, { agentId, status: 'all', limit: 100 }),
+  );
+  return (Array.isArray(data.interrupts) ? data.interrupts : [])
+    .filter((interrupt) => interrupt.turnId === turnId)
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
 export function createSSEConnection(
   agentId: string,
   eventCursor?: string,
