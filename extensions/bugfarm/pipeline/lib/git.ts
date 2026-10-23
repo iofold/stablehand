@@ -58,8 +58,41 @@ export async function ensureClone(repo: string): Promise<{ dir: string; head: st
 export async function listCommits(dir: string, since: string): Promise<CommitRecord[]> {
   const out = await runOk('git', [
     '-C', dir, 'log', '--first-parent', '--diff-merges=first-parent', '--no-renames', `--since=${since}`,
-    '--format=%x1e%H%x1f%P%x1f%aI%x1f%an%x1f%s%x1f%b%x1d', '--name-status', 'HEAD',
+    `--format=${LOG_FORMAT}`, '--name-status', 'HEAD',
   ], { timeoutMs: 5 * 60_000 });
+  return parseLogRecords(out);
+}
+
+const LOG_FORMAT = '%x1e%H%x1f%P%x1f%aI%x1f%an%x1f%s%x1f%b%x1d';
+
+/**
+ * One unit of change (a squash commit, or a merge's net diff against its first parent titled by
+ * the PR title), with its changed paths. This is how a pull request the Scout picked becomes a
+ * candidate.
+ */
+export async function describeUnit(dir: string, sha: string): Promise<CommitRecord> {
+  const out = await runOk('git', [
+    '-C', dir, 'log', '-1', '--diff-merges=first-parent', '--no-renames', `--format=${LOG_FORMAT}`, '--name-status', sha,
+  ], { timeoutMs: 5 * 60_000 });
+  const [unit] = parseLogRecords(out);
+  if (!unit) throw new Error(`no commit ${sha} in ${dir}`);
+  return unit;
+}
+
+/** Make sure `sha` is in the clone, fetching once when a newer merge is missing. False if it never arrives. */
+export async function ensureCommit(dir: string, sha: string): Promise<boolean> {
+  const has = async () => (await run('git', ['-C', dir, 'cat-file', '-e', `${sha}^{commit}`])).code === 0;
+  if (await has()) return true;
+  await run('git', ['-C', dir, 'fetch', '--quiet', '--filter=blob:none', 'origin'], { timeoutMs: 10 * 60_000 });
+  return has();
+}
+
+/** True when `sha` is an ancestor of (or equal to) `head`. */
+export async function isAncestor(dir: string, sha: string, head: string): Promise<boolean> {
+  return (await run('git', ['-C', dir, 'merge-base', '--is-ancestor', sha, head])).code === 0;
+}
+
+function parseLogRecords(out: string): CommitRecord[] {
   const commits: CommitRecord[] = [];
   for (const rec of out.split('\x1e')) {
     if (!rec.trim()) continue;

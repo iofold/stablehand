@@ -1,6 +1,7 @@
 // Step 2: build one environment image per repo at HEAD and confirm pytest collects.
 // `buildEnvFromDockerfile` is the seam for the Env-builder agent: Dockerfile text in, logs + verdict out.
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { RESULTS_DIR, TREES_DIR } from './config.ts';
 import { dockerBuild, imageExists, imageSize } from './docker.ts';
@@ -26,8 +27,10 @@ export interface EnvBuildResult {
   dockerfile: string;
 }
 
-export function envTag(slug: string, head: string): string {
-  return `bugfarm/env-${slug}:${head.slice(0, 12)}`;
+export function envTag(slug: string, head: string, dockerfile?: string): string {
+  const base = `bugfarm/env-${slug}:${head.slice(0, 12)}`;
+  // An agent-written Dockerfile gets its own tag, so every attempt is a separate, cacheable image.
+  return dockerfile === undefined ? base : `${base}-${createHash('sha256').update(dockerfile).digest('hex').slice(0, 8)}`;
 }
 
 export function headTreeDir(slug: string): string {
@@ -91,8 +94,9 @@ export async function buildEnvFromDockerfile(opts: {
 export async function buildEnv(repo: string, opts: { dockerfileText?: string; force?: boolean } = {}): Promise<EnvBuildResult> {
   const profile = profileFor(repo);
   const head = await ensureHeadTree(repo);
-  const tag = envTag(profile.slug, head.head);
+  const custom = opts.dockerfileText !== undefined && opts.dockerfileText !== profile.dockerfile;
   const dockerfile = opts.dockerfileText ?? profile.dockerfile;
+  const tag = envTag(profile.slug, head.head, custom ? dockerfile : undefined);
   log('env', `${repo}: building ${tag}`);
   const r = await buildEnvFromDockerfile({
     dockerfileText: dockerfile,
@@ -122,4 +126,49 @@ export async function buildEnv(repo: string, opts: { dockerfileText?: string; fo
   writeJson(join(RESULTS_DIR, profile.slug, 'env.json'), result);
   log('env', `${repo}: ${r.ok ? 'ok' : r.reason} build=${secs(r.buildMs)}s size=${Math.round(r.sizeBytes / 1e6)}MB collected=${r.collected} errors=${r.collectionErrors.length}`);
   return result;
+}
+
+const CONTEXT_FILES = ['pyproject.toml', 'setup.cfg', 'setup.py', 'tox.ini', 'noxfile.py', '.python-version', 'pytest.ini', 'Makefile'];
+const MAX_CONTEXT_FILE_CHARS = 6000;
+
+export interface EnvContext {
+  repo: string;
+  head: string;
+  top_level: string[];
+  files: Record<string, string>;
+  test_dirs: Record<string, string[]>;
+  suite_args: string[];
+  source_dirs: string[];
+}
+
+/**
+ * What an Env-builder agent needs to write a Dockerfile without network or a checkout: the HEAD
+ * tree's top level, its packaging and test config, requirement files and the test layout.
+ */
+export async function envContext(repo: string): Promise<EnvContext> {
+  const profile = profileFor(repo);
+  const tree = await ensureHeadTree(repo);
+  const root = tree.dir;
+  const topLevel = readdirSync(root, { withFileTypes: true }).map((e) => (e.isDirectory() ? `${e.name}/` : e.name)).sort();
+  const files: Record<string, string> = {};
+  const wanted = [...CONTEXT_FILES, ...topLevel.filter((n) => /^requirements.*\.txt$/.test(n))];
+  for (const sub of ['requirements', 'reqs']) {
+    if (topLevel.includes(`${sub}/`)) {
+      for (const n of readdirSync(join(root, sub))) if (n.endsWith('.txt') || n.endsWith('.in')) wanted.push(`${sub}/${n}`);
+    }
+  }
+  for (const name of wanted) {
+    const path = join(root, name);
+    if (!fileExists(path)) continue;
+    const text = readFileSync(path, 'utf8');
+    files[name] = text.length > MAX_CONTEXT_FILE_CHARS ? `${text.slice(0, MAX_CONTEXT_FILE_CHARS)}\n[...truncated...]` : text;
+  }
+  const testDirs: Record<string, string[]> = {};
+  for (const d of profile.testDirs) {
+    const path = join(root, d);
+    if (!fileExists(path)) continue;
+    const entries = readdirSync(path, { withFileTypes: true }).map((e) => (e.isDirectory() ? `${e.name}/` : e.name)).sort();
+    testDirs[d] = entries.length > 40 ? [...entries.slice(0, 40), `... and ${entries.length - 40} more`] : entries;
+  }
+  return { repo, head: tree.head, top_level: topLevel, files, test_dirs: testDirs, suite_args: profile.suiteArgs, source_dirs: profile.sourceDirs };
 }

@@ -17,7 +17,11 @@ export interface PytestRun {
   timedOut: boolean;
   ms: number;
   tail: string;
+  /** The last run's combined output, capped at OUTPUT_KEEP_BYTES from the end. */
+  output: string;
 }
+
+const OUTPUT_KEEP_BYTES = 64 * 1024;
 
 /**
  * Flags for every run. Output-rewriting plugins (sugar, pretty) are blocked so the format is stable;
@@ -120,6 +124,7 @@ export async function runPytest(opts: { image: string; treeDir: string; args: st
     timedOut: last?.r.timedOut ?? false,
     ms,
     tail: text.split('\n').slice(-40).join('\n'),
+    output: text.length > OUTPUT_KEEP_BYTES ? text.slice(-OUTPUT_KEEP_BYTES) : text,
   };
 }
 

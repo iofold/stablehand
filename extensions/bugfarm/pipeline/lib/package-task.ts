@@ -1,7 +1,7 @@
 // Step 4: write a Harbor 0.24 task (plus a SWE-bench-style row) from an accepted check.
 //
 // <task>/
-//   instruction.md            canary comment + placeholder issue text (a Writer agent replaces it)
+//   instruction.md            canary comment + issue-style text from the Writer (or a placeholder)
 //   task.toml                 [metadata.bugfarm] provenance, separate verifier, no network
 //   environment/Dockerfile    FROM the env image, buggy tree at /app, no .git
 //   environment/docker-compose.yaml   forces network_mode: none (Harbor's no-network leaks DNS/ICMP)
@@ -13,9 +13,8 @@ import { chmodSync, cpSync, readFileSync, rmSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { PIPELINE_DIR, PIPELINE_VERSION, TASKS_DIR } from './config.ts';
-import { suiteArgsFor } from './check-candidate.ts';
-import type { CheckResult, HeadBaseline } from './check-candidate.ts';
-import { headTreeDir } from './build-env.ts';
+import { fixedTreeOf } from './check-candidate.ts';
+import type { CheckResult } from './check-candidate.ts';
 import { commitMessage, cloneDir } from './git.ts';
 import { PYTEST_FLAGS } from './pytest.ts';
 import { profileFor } from './repos.ts';
@@ -94,18 +93,36 @@ cd /app
 git apply --whitespace=nowarn --verbose /solution/fix.patch
 `;
 
-export async function packageTask(check: CheckResult, cand: Candidate, base: HeadBaseline): Promise<PackagedTask> {
+export interface PackageOptions {
+  /** Issue-style instruction from the Writer. Without it, the commit message becomes a placeholder. */
+  instruction?: string;
+  /** Provenance for `[metadata.bugfarm]`: the pull request and the issue it closed. */
+  pr?: number | null;
+  issue?: number | null;
+  url?: string | null;
+  /** Where the dataset lives; default TASKS_DIR. */
+  tasksDir?: string;
+}
+
+/** Verifier time-box: a generous multiple of the slowest subset run, at least five minutes. */
+export function verifierTimeoutSec(check: Pick<CheckResult, 'subset_seconds' | 'buggy_suite'>): number {
+  const seconds = Math.max(check.subset_seconds ?? 0, check.buggy_suite?.seconds ?? 0);
+  return Math.max(300, Math.ceil(seconds * 6 + 120));
+}
+
+export async function packageTask(check: CheckResult, cand: Candidate, opts: PackageOptions = {}): Promise<PackagedTask> {
   if (!check.accepted) throw new Error(`refusing to package rejected candidate ${check.sha}`);
+  if (check.suite_modules.length === 0) throw new Error(`check for ${check.sha} has no verifier modules; re-run check_candidate`);
   const profile = profileFor(check.repo);
   const dirName = `${profile.slug}-${check.sha.slice(0, 10)}`;
   const name = `bugfarm/${dirName}`;
-  const dir = join(TASKS_DIR, profile.slug, dirName);
+  const dir = join(opts.tasksDir ?? TASKS_DIR, profile.slug, dirName);
   rmSync(dir, { recursive: true, force: true });
   ensureDir(dir);
 
-  const suiteSeconds = Math.max(...base.runs.map((r) => r.seconds), check.buggy_suite?.seconds ?? 0);
-  const verifierTimeout = Math.max(600, Math.ceil(suiteSeconds * 3 + 120));
+  const verifierTimeout = verifierTimeoutSec(check);
   const message = await commitMessage(cloneDir(check.repo), check.sha);
+  const suiteArgs = [...check.suite_modules, ...check.deselect.flatMap((id) => ['--deselect', id])];
 
   // environment/
   cpSync(join(check.workdir, 'agent'), join(dir, 'environment', 'bugfarm-repo'), { recursive: true });
@@ -131,12 +148,12 @@ export async function packageTask(check: CheckResult, cand: Candidate, base: Hea
 
   // tests/
   for (const f of check.hidden_test_files) {
-    cpSync(join(headTreeDir(profile.slug), f), join(dir, 'tests', 'hidden', f));
+    cpSync(join(fixedTreeOf(check), f), join(dir, 'tests', 'hidden', f));
   }
   writeText(join(dir, 'tests', 'deleted_tests.txt'), check.deleted_test_files.map((f) => `${f}\n`).join(''));
   writeJson(join(dir, 'tests', 'expected.json'), { fail_to_pass: check.fail_to_pass, pass_to_pass: check.pass_to_pass });
   writeText(join(dir, 'tests', 'grade.py'), readFileSync(join(PIPELINE_DIR, 'templates', 'grade.py'), 'utf8'));
-  writeText(join(dir, 'tests', 'test.sh'), testSh(suiteArgsFor(check.repo, base), verifierTimeout - 60));
+  writeText(join(dir, 'tests', 'test.sh'), testSh(suiteArgs, verifierTimeout - 60));
   chmodSync(join(dir, 'tests', 'test.sh'), 0o755);
 
   // solution/
@@ -147,7 +164,9 @@ export async function packageTask(check: CheckResult, cand: Candidate, base: Hea
   chmodSync(join(dir, 'solution', 'solve.sh'), 0o755);
 
   // instruction.md
-  const instruction = placeholderInstruction(check.repo, message, profile.sourceDirs);
+  const instruction = opts.instruction
+    ? `<!-- bugfarm-canary GUID ${randomUUID()} -->\n${opts.instruction.trim()}\n`
+    : placeholderInstruction(check.repo, message, profile.sourceDirs);
   writeText(join(dir, 'instruction.md'), instruction);
 
   // task.toml (root keys must precede tables)
@@ -163,7 +182,7 @@ export async function packageTask(check: CheckResult, cand: Candidate, base: Hea
     '',
     '[metadata]',
     'category = "bugfix"',
-    'instruction_status = "placeholder"',
+    `instruction_status = ${q(opts.instruction ? 'writer' : 'placeholder')}`,
     '',
     '[metadata.bugfarm]',
     `pipeline_version = ${q(PIPELINE_VERSION)}`,
@@ -172,8 +191,15 @@ export async function packageTask(check: CheckResult, cand: Candidate, base: Hea
     `fix_parent = ${q(cand.parent)}`,
     `fix_date = ${q(cand.date)}`,
     `fix_subject = ${q(cand.subject)}`,
-    `buggy_base = ${q(check.head)}`,
-    'buggy_recipe = "buggy_base with the fix source diff reverted; the agent view also has the fix test diff reverted"',
+    ...(opts.pr ? [`pr = ${opts.pr}`] : []),
+    ...(opts.issue ? [`issue = ${opts.issue}`] : []),
+    ...(opts.url ? [`url = ${q(opts.url)}`] : []),
+    `env_head = ${q(check.head)}`,
+    `buggy_from = ${q(check.buggy_base ?? 'head')}`,
+    `buggy_base = ${q(check.buggy_base === 'parent' ? cand.parent : check.head)}`,
+    check.buggy_base === 'parent'
+      ? 'buggy_recipe = "the fix\'s parent tree, run on the env built at env_head; the fixed state is the fix commit"'
+      : 'buggy_recipe = "buggy_base with the fix source diff reverted; the agent view also has the fix test diff reverted"',
     `revert_method = ${q(check.revert_method ? `source:${check.revert_method.source},tests:${check.revert_method.tests}` : 'unknown')}`,
     `env_image = ${q(check.env_image)}`,
     `source_files = ${qArr(cand.source_files)}`,
@@ -181,6 +207,8 @@ export async function packageTask(check: CheckResult, cand: Candidate, base: Hea
     `non_test_lines = ${cand.non_test_lines}`,
     `fail_to_pass = ${qArr(check.fail_to_pass)}`,
     `pass_to_pass_count = ${check.pass_to_pass.length}`,
+    'pass_to_pass_scope = "subset: the fix\'s test modules plus related modules"',
+    `verifier_modules = ${qArr(check.suite_modules)}`,
     `pass_to_pass = ${qArr(check.pass_to_pass)}`,
     `packaged_at = ${q(new Date().toISOString())}`,
     '',
@@ -204,7 +232,7 @@ export async function packageTask(check: CheckResult, cand: Candidate, base: Hea
   const swebench: Record<string, unknown> = {
     instance_id: `${check.repo.replace('/', '__')}-${check.sha.slice(0, 12)}`,
     repo: check.repo,
-    base_commit: check.head,
+    base_commit: check.buggy_base === 'parent' ? check.sha : check.head,
     fix_commit: check.sha,
     created_at: cand.date,
     problem_statement: instruction.replace(/^<!--.*?-->\n/, ''),
@@ -215,9 +243,10 @@ export async function packageTask(check: CheckResult, cand: Candidate, base: Hea
     PASS_TO_PASS: check.pass_to_pass,
     image_name: check.env_image,
     environment_setup_commit: check.head,
-    // Unlike SWE-bench, the buggy state is not a commit: it is base_commit minus `patch` (and minus
-    // `test_patch` for what the solver sees). Apply `test_patch` then `patch` to reach base_commit.
-    buggy_state: 'base_commit with patch and test_patch reverse-applied',
+    // Unlike SWE-bench, the buggy state is not always a commit: it is base_commit minus `patch` (and
+    // minus `test_patch` for what the solver sees). Apply `test_patch` then `patch` to reach base_commit.
+    buggy_state: check.buggy_base === 'parent' ? 'the parent of fix_commit' : 'base_commit with patch and test_patch reverse-applied',
+    test_modules: check.suite_modules,
     harbor_task: name,
   };
   return { name, dirName, dir, repo: check.repo, sha: check.sha, fail_to_pass: check.fail_to_pass.length, pass_to_pass: check.pass_to_pass.length, swebench };

@@ -4,7 +4,7 @@ import { MAX_FILES, MAX_NON_TEST_LINES, RESULTS_DIR, SINCE } from './config.ts';
 import { buildEnv } from './build-env.ts';
 import type { EnvBuildResult } from './build-env.ts';
 import { headBaseline } from './check-candidate.ts';
-import { ensureClone, listCommits, numstat } from './git.ts';
+import { describeUnit, ensureClone, ensureCommit, listCommits, numstat } from './git.ts';
 import type { CommitRecord } from './git.ts';
 import { classify, isTestModule, looksLikeFix, profileFor, touchesSkipPath } from './repos.ts';
 import { log, secs, writeJson } from './util.ts';
@@ -21,6 +21,69 @@ export interface Candidate {
   other_files: string[];
   doc_files: string[];
   non_test_lines: number;
+  /** The pull request this unit came from, when known (the Scout mines at PR level). */
+  pr?: number;
+}
+
+/** Why a picked unit cannot become a candidate, in the board's reject vocabulary. */
+export type UnitRejectReason = 'not_found' | 'no_test_targets' | 'out_of_scope' | 'too_large';
+
+export type UnitCheck = { ok: true; candidate: Candidate } | { ok: false; reason: UnitRejectReason; detail: string };
+
+/**
+ * Turn one unit the Scout picked (a squash commit or a merge) into a candidate with the same
+ * file and size rules the mining pass uses, minus the fix-like-title test: the Scout already
+ * judged the PR. Fetches the commit when the clone is older than the merge.
+ */
+export async function candidateFromUnit(repo: string, sha: string, opts: { pr?: number } = {}): Promise<UnitCheck> {
+  const profile = profileFor(repo);
+  const clone = await ensureClone(repo);
+  if (!(await ensureCommit(clone.dir, sha))) return { ok: false, reason: 'not_found', detail: `commit ${sha} is not in ${repo}` };
+  const unit = await describeUnit(clone.dir, sha);
+  if (unit.parents.length === 0) return { ok: false, reason: 'out_of_scope', detail: 'root commit' };
+  const source: string[] = [];
+  const tests: string[] = [];
+  const other: string[] = [];
+  const docs: string[] = [];
+  for (const f of unit.files) {
+    if (touchesSkipPath(profile, f.path)) return { ok: false, reason: 'out_of_scope', detail: `touches ${f.path}, which the env cannot rebuild` };
+    const kind = classify(profile, f.path);
+    if (kind === 'source') source.push(f.path);
+    else if (kind === 'test') tests.push(f.path);
+    else if (kind === 'doc') docs.push(f.path);
+    else other.push(f.path);
+  }
+  if (!source.some((p) => /\.pyi?$/.test(p))) return { ok: false, reason: 'out_of_scope', detail: 'changes no package source' };
+  if (!tests.some(isTestModule)) return { ok: false, reason: 'no_test_targets', detail: 'changes no test module' };
+  if (source.length + tests.length + other.length > MAX_FILES) {
+    return { ok: false, reason: 'too_large', detail: `changes ${source.length + tests.length + other.length} files (limit ${MAX_FILES})` };
+  }
+  const stats = (await numstat(clone.dir, [unit.sha])).get(unit.sha) ?? [];
+  let lines = 0;
+  for (const e of stats) {
+    const kind = classify(profile, e.path);
+    if (kind === 'test' || kind === 'doc') continue;
+    if (e.binary) return { ok: false, reason: 'out_of_scope', detail: `binary change in ${e.path}` };
+    lines += e.added + e.deleted;
+  }
+  if (lines > MAX_NON_TEST_LINES) return { ok: false, reason: 'too_large', detail: `${lines} non-test lines changed (limit ${MAX_NON_TEST_LINES})` };
+  return {
+    ok: true,
+    candidate: {
+      repo,
+      sha: unit.sha,
+      parent: unit.parents[0],
+      date: unit.date,
+      author: unit.author,
+      subject: unit.title,
+      source_files: source,
+      test_files: tests,
+      other_files: other,
+      doc_files: docs,
+      non_test_lines: lines,
+      ...(opts.pr ? { pr: opts.pr } : {}),
+    },
+  };
 }
 
 export interface SuiteMeasure {

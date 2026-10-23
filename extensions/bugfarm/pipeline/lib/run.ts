@@ -2,10 +2,10 @@
 // and write the funnel. Each step is also callable on its own (see cli.ts).
 import { readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { HEAD_SUITE_REPEATS, MAX_CONTAINERS, RESULTS_DIR, TASKS_DIR, WORK_DIR } from './config.ts';
+import { MAX_CONTAINERS, RESULTS_DIR, TASKS_DIR, WORK_DIR } from './config.ts';
 import { buildEnv } from './build-env.ts';
-import { checkCandidate, headBaseline } from './check-candidate.ts';
-import type { CheckResult, HeadBaseline } from './check-candidate.ts';
+import { checkCandidate } from './check-candidate.ts';
+import type { CheckResult } from './check-candidate.ts';
 import { judgeControls, runHarborAgent } from './controls.ts';
 import type { ControlTrial, ControlsVerdict } from './controls.ts';
 import { imageSize, pruneOwnBuildCache, removeLabelledContainers } from './docker.ts';
@@ -16,8 +16,8 @@ import { mineCandidates } from './scout.ts';
 import type { Candidate } from './scout.ts';
 import { StageTimer, duBytes, ensureDir, fileExists, isDir, log, mapLimit, readJson, run, writeJson } from './util.ts';
 
-const DEFAULT_SUITE_TIMEOUT_MS = 10 * 60_000;
 const TARGET_TIMEOUT_MS = 5 * 60_000;
+const SUBSET_TIMEOUT_MS = 5 * 60_000;
 
 function slugOf(repo: string): string {
   return profileFor(repo).slug;
@@ -35,29 +35,18 @@ async function loadCandidates(repo: string): Promise<{ candidates: Candidate[]; 
   return { candidates: mined.candidates, funnel: mined.funnel };
 }
 
-/** Suite time-box: generous multiple of the measured HEAD suite, at least 5 minutes. */
-function suiteTimeout(base: HeadBaseline | undefined): number {
-  const measured = base?.runs.filter((r) => !r.timed_out).map((r) => r.seconds) ?? [];
-  if (measured.length === 0) return DEFAULT_SUITE_TIMEOUT_MS;
-  return Math.max(5 * 60_000, Math.ceil(Math.max(...measured) * 4) * 1000);
-}
-
 export async function checkRepo(repo: string, opts: { limit: number; shas?: string[]; concurrency: number; timer?: StageTimer }): Promise<CheckResult[]> {
   const timer = opts.timer ?? new StageTimer();
   const { candidates } = await timer.time('scout', () => loadCandidates(repo));
   const selected = opts.shas ? candidates.filter((c) => opts.shas?.some((s) => c.sha.startsWith(s))) : candidates.slice(0, opts.limit);
   const env = await timer.time('build_env', () => buildEnv(repo));
-  const base = env.ok
-    ? await timer.time('head_baseline', () => headBaseline(repo, env, { repeats: HEAD_SUITE_REPEATS, timeoutMs: DEFAULT_SUITE_TIMEOUT_MS }))
-    : undefined;
-  const baseline: HeadBaseline = base ?? { format: 0, repo, head: env.head, env_image: env.tag, deselect: [], runs: [] };
   log('check', `${repo}: checking ${selected.length} candidates, concurrency ${opts.concurrency} (max ${MAX_CONTAINERS} containers)`);
   // check_candidate sums per-candidate time; check_wall is the stage's elapsed time under concurrency.
   const results = await timer.time('check_wall', () => mapLimit(selected, opts.concurrency, (c) => {
     const t0 = Date.now();
-    return checkCandidate(c, env, baseline, { suiteTimeoutMs: suiteTimeout(base), targetTimeoutMs: TARGET_TIMEOUT_MS }).finally(() => timer.add('check_candidate', Date.now() - t0));
+    return checkCandidate(c, env, { targetTimeoutMs: TARGET_TIMEOUT_MS, subsetTimeoutMs: SUBSET_TIMEOUT_MS }).finally(() => timer.add('check_candidate', Date.now() - t0));
   }));
-  writeJson(join(RESULTS_DIR, slugOf(repo), 'checks.json'), results.map((r) => ({ sha: r.sha, subject: r.subject, accepted: r.accepted, reason: r.reason, detail: r.detail?.split('\n')[0], f2p: r.fail_to_pass.length, p2p: r.pass_to_pass.length, timings: r.timings })));
+  writeJson(join(RESULTS_DIR, slugOf(repo), 'checks.json'), results.map((r) => ({ sha: r.sha, subject: r.subject, accepted: r.accepted, reason: r.reason, detail: r.detail?.split('\n')[0], buggy_base: r.buggy_base, f2p: r.fail_to_pass.length, p2p: r.pass_to_pass.length, timings: r.timings })));
   return results;
 }
 
@@ -70,14 +59,12 @@ function acceptedChecks(repo: string): CheckResult[] {
 export async function packageAccepted(repo: string, onlyShas?: string[]): Promise<PackagedTask[]> {
   const slug = slugOf(repo);
   const { candidates } = await loadCandidates(repo);
-  const basePath = join(RESULTS_DIR, slug, 'head-suite.json');
-  const base = readJson<HeadBaseline>(basePath);
   const checks = acceptedChecks(repo).filter((c) => !onlyShas || onlyShas.includes(c.sha));
   const tasks: PackagedTask[] = [];
   for (const check of checks) {
     const cand = candidates.find((c) => c.sha === check.sha);
     if (!cand) continue;
-    tasks.push(await packageTask(check, cand, base));
+    tasks.push(await packageTask(check, cand));
   }
   ensureDir(join(RESULTS_DIR, slug));
   writeFileSync(join(RESULTS_DIR, slug, 'swebench.jsonl'), tasks.map((t) => JSON.stringify(t.swebench)).join('\n') + (tasks.length ? '\n' : ''));
