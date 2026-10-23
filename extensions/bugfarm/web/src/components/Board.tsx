@@ -1,5 +1,5 @@
 import { LayoutGroup, motion, useReducedMotion } from 'motion/react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type RefObject } from 'react';
 import { STAGES, STAGE_HINTS, STAGE_LABELS, familyLabel, type Stage } from '../../../src/shared/board';
 import type { BoardView, Item } from '../lib/derive';
 import { useMediaQuery } from '../lib/hooks';
@@ -36,14 +36,54 @@ interface ColumnProps {
   columnRef?: (node: HTMLElement | null) => void;
 }
 
+/**
+ * Columns never scroll on their own: a scrolling column would clip cards
+ * flying in from a neighbour. Long columns show their newest cards and fold
+ * the rest behind a button.
+ */
+const COMPACT: ReadonlySet<Stage> = new Set(['rejected', 'published']);
+const MOBILE_CAP = 8;
+
+/**
+ * How many cards fit between the top of this column and the bottom of the
+ * window (desktop), so the board reads as one screen at 1920×1080.
+ */
+function useFit(list: RefObject<HTMLOListElement | null>, compact: boolean, enabled: boolean): number {
+  const [fit, setFit] = useState(compact ? 6 : 5);
+  const [, onResize] = useReducer((n: number) => n + 1, 0);
+  // Measured after every render: the banner, the header strip and the fonts
+  // all move the column's top edge after mount. Setting an equal value is a no-op.
+  useLayoutEffect(() => {
+    const node = list.current;
+    if (!enabled || !node) return;
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const top = node.getBoundingClientRect().top + window.scrollY;
+    const available = window.innerHeight - top - 1.5 * rem - 2.75 * rem;
+    const perCard = (compact ? 8 : 9.6) * rem;
+    setFit(Math.max(3, Math.floor(available / perCard)));
+  });
+  useEffect(() => {
+    if (!enabled) return undefined;
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [enabled]);
+  return fit;
+}
+
 function Column({ stage, cards, onOpen, mobile, columnRef }: ColumnProps) {
+  const [expanded, setExpanded] = useState(false);
+  const list = useRef<HTMLOListElement>(null);
+  const fit = useFit(list, COMPACT.has(stage), !mobile);
   const dot = STAGE_DOT[stage];
+  const cap = mobile ? MOBILE_CAP : fit;
+  const visible = expanded ? cards : cards.slice(0, cap);
+  const folded = cards.length - visible.length;
   return (
     <section
       ref={columnRef}
       aria-label={`${STAGE_LABELS[stage]}: ${cards.length}`}
       data-stage={stage}
-      className={`flex min-h-0 flex-col ${mobile ? 'w-[84vw] max-w-[360px] shrink-0 snap-start' : 'min-w-0'} ${stage === 'accepted' && !mobile ? 'ml-1.5 2xl:ml-3' : ''}`}
+      className={`flex flex-col ${mobile ? 'w-[84vw] max-w-[360px] shrink-0 snap-start' : 'min-w-0'}`}
     >
       <header className="flex items-end justify-between gap-2 px-1.5 pb-2" title={STAGE_HINTS[stage]}>
         <h2 className="wdth-condensed flex min-w-0 items-center gap-2 truncate text-[1.18rem] font-bold leading-none tracking-tight">
@@ -57,14 +97,22 @@ function Column({ stage, cards, onOpen, mobile, columnRef }: ColumnProps) {
           className="wdth-wide text-[1.35rem] font-semibold leading-none text-ink-2 tnum"
         />
       </header>
-      <motion.ol
-        layoutScroll
-        className={`flex flex-1 flex-col gap-2 rounded-well p-2 ${STAGE_WELL[stage] ?? 'bg-well'} ${mobile ? 'min-h-[12rem]' : 'min-h-0 overflow-y-auto overflow-x-hidden scrollbar-thin'}`}
-      >
-        {cards.map(({ item, shown, isNew }) => (
+      <ol ref={list} className={`flex flex-1 flex-col gap-2 rounded-well p-2 ${STAGE_WELL[stage] ?? 'bg-well'} ${mobile ? 'min-h-[12rem]' : 'min-h-[24rem]'}`}>
+        {visible.map(({ item, shown, isNew }) => (
           <ItemCard key={item.key} item={item} shown={shown} isNew={isNew} onOpen={onOpen} />
         ))}
-      </motion.ol>
+        {(folded > 0 || (expanded && cards.length > cap)) && (
+          <motion.li layout="position" className="list-none">
+            <button
+              type="button"
+              onClick={() => setExpanded(!expanded)}
+              className="w-full rounded-card border border-line/80 px-3 py-2 text-[0.88rem] font-semibold text-ink-2 hover:bg-card hover:text-ink"
+            >
+              {expanded ? 'Show the newest only' : `${folded} more`}
+            </button>
+          </motion.li>
+        )}
+      </ol>
     </section>
   );
 }
@@ -126,7 +174,7 @@ export function Board({ view, onOpen }: { view: BoardView; onOpen: (key: string)
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex flex-1 flex-col">
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 pb-3 pt-4 sm:px-6">
         <Legend />
         <div role="radiogroup" aria-label="Which candidates to show" className="flex rounded-full bg-well p-1 text-[0.85rem] font-semibold">
@@ -169,7 +217,7 @@ export function Board({ view, onOpen }: { view: BoardView; onOpen: (key: string)
             className={
               mobile
                 ? 'flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-px-4 px-4 pb-6 scrollbar-none'
-                : 'grid min-h-0 flex-1 grid-cols-8 gap-2.5 px-4 pb-4 sm:px-6 2xl:gap-3'
+                : 'grid flex-1 grid-cols-8 gap-2.5 px-4 pb-6 sm:px-6 2xl:gap-3'
             }
           >
             {STAGES.map((stage) => (

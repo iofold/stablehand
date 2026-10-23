@@ -43,8 +43,12 @@ function ItemCardBase({ item, shown, isNew, onOpen }: ItemCardProps) {
       layout="position"
       layoutId={`card-${item.key}`}
       initial={isNew && !reduced ? { opacity: 0, scale: 0.55, y: -18 } : false}
-      animate={{ opacity: 1, scale: 1, y: 0, ...shakeFor(shown, reduced) }}
-      transition={{ layout: SPRING, default: { type: 'spring', stiffness: 460, damping: 24 } }}
+      animate={{ opacity: 1, y: 0, scale: glowing && !reduced ? [1, 1.045, 1] : 1, ...shakeFor(shown, reduced) }}
+      transition={{
+        layout: SPRING,
+        scale: glowing && !reduced ? { duration: 0.6, ease: 'easeOut', delay: 0.15 } : { type: 'spring', stiffness: 460, damping: 24 },
+        default: { type: 'spring', stiffness: 460, damping: 24 },
+      }}
       className="list-none"
     >
       <button
@@ -67,16 +71,26 @@ function ItemCardBase({ item, shown, isNew, onOpen }: ItemCardProps) {
               glowing && !reduced
                 ? {
                     boxShadow: [
-                      '0 0 0 0 rgb(var(--sprout) / 0)',
-                      '0 0 0 4px rgb(var(--sprout) / 0.45), 0 0 28px 6px rgb(var(--sprout) / 0.35)',
-                      '0 0 0 1px rgb(var(--sprout) / 0.25), 0 0 10px 0 rgb(var(--sprout) / 0.12)',
-                      '0 0 0 4px rgb(var(--sprout) / 0.4), 0 0 24px 4px rgb(var(--sprout) / 0.3)',
-                      '0 0 0 1px rgb(var(--sprout) / 0.25), 0 0 14px 0 rgb(var(--sprout) / 0.16)',
+                      '0 0 0 0 rgb(var(--sprout) / 0), 0 0 0 0 rgb(var(--sprout) / 0)',
+                      '0 0 0 3px rgb(var(--sprout) / 0.75), 0 0 42px 10px rgb(var(--sprout) / 0.45)',
+                      '0 0 0 1px rgb(var(--sprout) / 0.35), 0 0 16px 2px rgb(var(--sprout) / 0.18)',
+                      '0 0 0 3px rgb(var(--sprout) / 0.6), 0 0 34px 8px rgb(var(--sprout) / 0.38)',
+                      '0 0 0 1px rgb(var(--sprout) / 0.3), 0 0 16px 0 rgb(var(--sprout) / 0.18)',
                     ],
                   }
-                : { boxShadow: '0 0 0 1px rgb(var(--sprout) / 0.25), 0 0 14px 0 rgb(var(--sprout) / 0.16)' }
+                : { boxShadow: '0 0 0 1px rgb(var(--sprout) / 0.3), 0 0 16px 0 rgb(var(--sprout) / 0.18)' }
             }
-            transition={{ duration: 2.4, ease: 'easeInOut', times: [0, 0.22, 0.5, 0.72, 1] }}
+            transition={{ duration: 2.6, ease: 'easeInOut', times: [0, 0.18, 0.45, 0.68, 1] }}
+          />
+        )}
+        {glowing && !reduced && (
+          <motion.span
+            key={`wash-${shown.beat}`}
+            aria-hidden
+            className="pointer-events-none absolute inset-0 rounded-card bg-sprout/15"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: [0, 1, 0] }}
+            transition={{ duration: 1.4, ease: 'easeOut' }}
           />
         )}
         {shaking && !reduced && (
@@ -97,7 +111,7 @@ function ItemCardBase({ item, shown, isNew, onOpen }: ItemCardProps) {
         </span>
 
         <span
-          className={`relative mt-1 block font-semibold leading-snug text-ink ${compact ? 'line-clamp-2 text-[0.92rem]' : 'line-clamp-3 text-[1rem]'} ${stage === 'rejected' ? 'text-ink-2' : ''}`}
+          className={`relative mt-1 font-semibold leading-snug text-ink ${compact ? 'line-clamp-2 text-[0.92rem]' : 'line-clamp-3 text-[1rem]'} ${stage === 'rejected' ? 'text-ink-2' : ''}`}
         >
           {item.title ?? item.key}
         </span>

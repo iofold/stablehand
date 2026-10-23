@@ -7,9 +7,6 @@ import { useNow } from '../lib/hooks';
 import { AnimatedNumber } from './AnimatedNumber';
 import { SpendRing } from './SpendRing';
 
-/** A running batch's share is noise until a few candidates are decided. */
-const MIN_DECIDED = 4;
-
 function Delta({ value, good, children }: { value: number; good: boolean; children: ReactNode }) {
   if (!Number.isFinite(value) || Math.abs(value) < 1e-9) return null;
   const Icon = value > 0 ? ArrowUpRight : ArrowDownRight;
@@ -42,17 +39,30 @@ export function StatsStrip({ view }: { view: BoardView }) {
   const current = view.batches.find((batch) => batch.n === currentN) ?? null;
   const done = view.batches.filter((batch) => batch.status === 'done' && batch.n <= currentN);
 
-  // Compare this batch with the last finished one. While this batch is too
-  // young to say anything, show the last finished batch against the one before.
-  const currentReady = current !== null && (current.status === 'done' || decidedOf(current) >= MIN_DECIDED);
-  const shown = currentReady ? current : done.filter((batch) => batch.n !== currentN).at(-1) ?? null;
-  const baseline = shown ? done.filter((batch) => batch.n < shown.n).at(-1) ?? null : null;
-  const shownLabel = shown === current ? 'this batch' : shown ? `in batch ${shown.n}` : 'this batch';
+  // Rejects land early in a batch and accepts late, so accepted-of-decided
+  // swings low mid-batch. A running batch shows accepted out of all its
+  // candidates instead: it only counts up and ends at the final share.
+  const running = current !== null && current.status !== 'done';
+  const lastDone = done.filter((batch) => batch.n !== currentN || current?.status === 'done').at(-1) ?? null;
+  const before = (batch: Batch | null) => (batch ? done.filter((entry) => entry.n < batch.n).at(-1) ?? null : null);
+
+  const shareBatch = current ?? lastDone;
+  const share = running && current?.candidates
+    ? (current.accepted ?? 0) / current.candidates
+    : shareBatch?.share ?? null;
+  const shareBaseline = running ? lastDone : before(shareBatch);
+  const shareLabel = running ? 'accepted this batch so far' : shareBatch === current ? 'accepted this batch' : `accepted in batch ${shareBatch?.n ?? ''}`;
+  // While running, only an improvement is certain (the share can still rise).
+  const showShareDelta = share !== null && shareBaseline?.share != null && (!running || share > shareBaseline.share);
+
+  // Dollars per accepted task are only meaningful for a finished batch.
+  const costBatch = running ? lastDone : current ?? lastDone;
+  const perAccepted = costBatch?.usdPerAccepted ?? null;
+  const costBaseline = before(costBatch);
+  const costLabel = costBatch && costBatch !== current ? `per accepted task in batch ${costBatch.n}` : 'per accepted task';
 
   const spent = campaign?.spend_usd ?? 0;
   const cap = campaign?.cap_usd ?? 0;
-  const share = shown?.share ?? null;
-  const perAccepted = shown?.usdPerAccepted ?? null;
   const unattendedSince = campaign?.unattended_since ?? null;
   const recovered = campaign?.recovered_from_crash ?? 0;
 
@@ -74,11 +84,13 @@ export function StatsStrip({ view }: { view: BoardView }) {
       <Stat
         className="order-3 xl:order-2"
         value={share === null ? '—' : <AnimatedNumber value={share} from={0} format={(v) => pct(v)} />}
-        label={`accepted ${shownLabel}`}
-        detail={baseline?.share != null && share !== null ? (
+        label={shareLabel}
+        detail={shareBaseline?.share != null && share !== null ? (
           <>
-            <span>was {pct(baseline.share)}</span>
-            <Delta value={share - baseline.share} good={share >= baseline.share}>{signedPts((share - baseline.share) * 100)}</Delta>
+            <span>{pct(shareBaseline.share)} in batch {shareBaseline.n}</span>
+            {showShareDelta && (
+              <Delta value={share - shareBaseline.share} good={share >= shareBaseline.share}>{signedPts((share - shareBaseline.share) * 100)}</Delta>
+            )}
           </>
         ) : undefined}
       />
@@ -86,11 +98,11 @@ export function StatsStrip({ view }: { view: BoardView }) {
       <Stat
         className="order-4 xl:order-3"
         value={perAccepted === null ? '—' : <AnimatedNumber value={perAccepted} from={0} format={(v) => usd(v)} />}
-        label="per accepted task"
-        detail={baseline?.usdPerAccepted != null && perAccepted !== null ? (
+        label={costLabel}
+        detail={costBaseline?.usdPerAccepted != null && perAccepted !== null ? (
           <>
-            <span>was {usd(baseline.usdPerAccepted)}</span>
-            <Delta value={perAccepted - baseline.usdPerAccepted} good={perAccepted <= baseline.usdPerAccepted}>{signedUsd(perAccepted - baseline.usdPerAccepted)}</Delta>
+            <span>{usd(costBaseline.usdPerAccepted)} in batch {costBaseline.n}</span>
+            <Delta value={perAccepted - costBaseline.usdPerAccepted} good={perAccepted <= costBaseline.usdPerAccepted}>{signedUsd(perAccepted - costBaseline.usdPerAccepted)}</Delta>
           </>
         ) : undefined}
       />

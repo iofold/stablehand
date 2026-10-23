@@ -49,7 +49,7 @@ export function App() {
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className={`flex flex-col ${route.tab === 'board' ? 'min-h-dvh lg:h-dvh' : 'min-h-dvh'}`}>
+      <div className="flex min-h-dvh flex-col">
         <TopBar
           view={view}
           tab={route.tab}
@@ -61,7 +61,7 @@ export function App() {
         {view.simulated && <SimBanner />}
         {error && connection === 'offline' && <ErrorNotice message={error} />}
         <StatsStrip view={view} />
-        <main className="flex min-h-0 flex-1 flex-col">
+        <main className="flex flex-1 flex-col">
           {route.tab === 'board' && <Board view={view} onOpen={openItem} />}
           {route.tab === 'leaderboard' && <Leaderboard view={view} />}
           {route.tab === 'learning' && <Learning view={view} />}

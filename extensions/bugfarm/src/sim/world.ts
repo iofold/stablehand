@@ -295,7 +295,8 @@ export class SimWorld {
 
   /** Fates get kinder as the factory learns: each batch rejects less. */
   private decideFate(batch: number): Fate {
-    const learned = Math.pow(0.88, batch - 1);
+    // Gains flatten out after a few batches, as real filters do.
+    const learned = Math.max(0.62, Math.pow(0.88, batch - 1));
     const roll = this.random();
     const table: [number, Fate][] = [
       [0.12 * learned, { kind: 'reject', at: 'mined', reason: 'env_build_failed' }],

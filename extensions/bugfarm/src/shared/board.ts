@@ -52,12 +52,12 @@ export const REJECT_REASONS: Record<string, string> = {
   no_fail_to_pass: 'No failing test',
   flaky: 'Flaky tests',
   reverse_patch_conflict: 'Patch conflict',
-  oracle_failed: 'Fix fails its own tests',
+  oracle_failed: 'Reference fix fails',
   nop_passed: 'Passes without a fix',
-  instruction_leaks_fix: 'Instruction leaks the fix',
+  instruction_leaks_fix: 'Leaks the fix',
   too_easy: 'Too easy',
   unsolved_broken: 'Unsolvable',
-  out_of_band: 'Out of band',
+  out_of_band: 'Wrong difficulty',
   over_budget: 'Over budget',
 };
 
