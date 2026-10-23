@@ -1,9 +1,18 @@
 // Docker helpers. Every container and image we create carries the bugfarm=1 label, and cleanup
 // only ever touches labelled objects or Harbor compose projects we started.
 import { randomBytes } from 'node:crypto';
+import { hostname } from 'node:os';
 import { LABEL, LABEL_KEY, MAX_CONTAINERS } from './config.ts';
 import { Semaphore, log, run, runOk } from './util.ts';
 import type { ExecResult } from './util.ts';
+
+/**
+ * Containers this process starts also carry `bugfarm.owner=<OWNER>`. Task images carry
+ * `bugfarm=1` too, so Harbor trial containers (calibration, benchmarks) inherit that label;
+ * cleanup goes by the owner label so one run never removes another run's containers.
+ */
+export const OWNER_KEY = 'bugfarm.owner';
+export const OWNER = process.env.BUGFARM_OWNER ?? `${hostname()}-${process.pid}-${randomBytes(3).toString('hex')}`;
 
 /** Global gate so no stage, alone or combined, runs more than MAX_CONTAINERS containers. */
 export const containerSlots = new Semaphore(MAX_CONTAINERS);
@@ -55,7 +64,7 @@ export async function runInTree(opts: {
   return containerSlots.use(async () => {
     const name = `bugfarm-${randomBytes(5).toString('hex')}`;
     const args = [
-      'run', '--rm', '--name', name, '--label', LABEL, '--network', 'none',
+      'run', '--rm', '--name', name, '--label', LABEL, '--label', `${OWNER_KEY}=${OWNER}`, '--network', 'none',
       '--cpus', String(opts.cpus ?? 2), '--memory', opts.memory ?? '4g',
       '-e', 'PYTHONDONTWRITEBYTECODE=1',
       '-v', `${opts.treeDir}:/src:ro`, '-w', '/', opts.image,
@@ -119,9 +128,14 @@ export async function pruneOwnBuildCache(ownSteps: string[], opts: { dryRun?: bo
   return { records, bytes };
 }
 
-/** Remove any container we labelled (a crashed or killed run can leave some behind). */
-export async function removeLabelledContainers(): Promise<number> {
-  const ids = (await runOk('docker', ['ps', '-aq', '--filter', `label=${LABEL_KEY}=1`])).split('\n').filter(Boolean);
+/**
+ * Remove containers this process started. With `all`, remove every container any pipeline run
+ * started (a crashed or killed run can leave some behind). Containers without the owner label,
+ * such as Harbor trials of our task images, are never touched.
+ */
+export async function removeLabelledContainers(opts: { all?: boolean } = {}): Promise<number> {
+  const filter = opts.all ? `label=${OWNER_KEY}` : `label=${OWNER_KEY}=${OWNER}`;
+  const ids = (await runOk('docker', ['ps', '-aq', '--filter', `label=${LABEL_KEY}=1`, '--filter', filter])).split('\n').filter(Boolean);
   if (ids.length) await run('docker', ['rm', '-f', ...ids]);
   return ids.length;
 }
