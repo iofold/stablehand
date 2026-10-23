@@ -32,6 +32,13 @@ export interface TurnDeliveryContext {
   capabilityVersion?: number;
   /** Called (grace mode only) when the capability expires instead of aborting. */
   onCapabilityExpired?: () => void;
+  /**
+   * Called (grace mode only) when an orchestrator callback gives up. Aborts
+   * the delivery, as the orphan timer would, when no live orchestrator is
+   * attached to it, and returns true; returns false when one is attached and
+   * the failure is the callback's own (ctx-2jp0).
+   */
+  abandonIfOrphaned?: (reason: string) => boolean;
   capabilityWaiters?: Set<() => void>;
 }
 

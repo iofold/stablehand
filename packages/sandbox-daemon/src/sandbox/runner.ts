@@ -673,6 +673,7 @@ function createActiveTurnDelivery(
   context.onCapabilityExpired = () => {
     startOrphanTimer(delivery, 'delivery capability expired without renewal');
   };
+  context.abandonIfOrphaned = (reason) => abandonOrphanedDelivery(delivery, reason);
   return delivery;
 }
 
@@ -1044,14 +1045,43 @@ function startOrphanTimer(delivery: ActiveTurnDelivery, reason: string): void {
     console.error(
       `[sandbox] turn ${turnId}: no orchestrator re-attached within ${graceMs}ms; abandoning the turn`,
     );
-    // A plain Error keeps the user-facing copy free of a "[deadline_exceeded]"
-    // transport prefix; this text becomes the turn's error.
-    abortTurnDelivery(delivery, new Error(
-      `The orchestrator went away and did not reconnect within ${Math.round(graceMs / 1000)}s `
-      + `(${reason}), so the sandbox stopped this turn. Messages saved before then are kept; retry to continue.`,
-    ));
+    abortTurnDelivery(delivery, orphanedDeliveryError(graceMs, reason));
   }, graceMs);
   delivery.orphanTimer.unref();
+}
+
+/**
+ * The turn's error when no orchestrator came back for it. A plain Error keeps
+ * the user-facing copy free of a "[deadline_exceeded]" transport prefix.
+ */
+function orphanedDeliveryError(graceMs: number, reason: string): Error {
+  return new Error(
+    `The orchestrator went away and did not reconnect within ${Math.round(graceMs / 1000)}s `
+    + `(${reason}), so the sandbox stopped this turn. Messages saved before then are kept; retry to continue.`,
+  );
+}
+
+/**
+ * An orchestrator callback gave up after the grace window (ctx-2jp0). With no
+ * live orchestrator attached, the turn is stopped the way the orphan timer
+ * stops it instead of letting the harness carry on from a tool failure that
+ * only means "nobody is listening": a model answering that failure would
+ * complete the turn here while it is still parked on the orchestrator side,
+ * and the late continuation would then be acknowledged as a duplicate.
+ */
+function abandonOrphanedDelivery(delivery: ActiveTurnDelivery, reason: string): boolean {
+  if (delivery.context.abortController.signal.aborted) return true;
+  if (delivery.settlement) return false;
+  if (delivery.consumer && !isTurnDeliveryCapabilityExpired(delivery.context)) {
+    return false;
+  }
+  clearOrphanTimer(delivery);
+  console.error(
+    `[sandbox] turn ${delivery.context.identity.turnId}: ${reason} within ${delivery.orphanGraceMs}ms `
+    + 'and no orchestrator is attached; abandoning the turn',
+  );
+  abortTurnDelivery(delivery, orphanedDeliveryError(delivery.orphanGraceMs, reason));
+  return true;
 }
 
 function attachDeliveryConsumer(delivery: ActiveTurnDelivery): DeliveryConsumer {

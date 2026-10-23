@@ -132,6 +132,56 @@ describe('callWithinOrchestratorWindow (ADR 025)', () => {
     })).rejects.toThrow(/could not reach a live orchestrator within 60ms/);
   });
 
+  it('opens the window when the orchestrator first fails, not when a long call started (ctx-2jp0)', async () => {
+    const target = context({ graceMs: 60 });
+    const call = vi.fn()
+      // A parked approval: the call stays open far longer than the window,
+      // then its orchestrator dies.
+      .mockImplementationOnce(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        throw new ConnectError('[aborted] socket hang up', Code.Aborted);
+      })
+      .mockResolvedValue('answered by the successor');
+
+    await expect(callWithinOrchestratorWindow(target, 'tool "request-approval"', call, {
+      attemptTimeoutMs: 1_000,
+      log: quiet,
+    })).resolves.toBe('answered by the successor');
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it('abandons an orphaned delivery instead of failing the call into the harness (ctx-2jp0)', async () => {
+    const target = context({ graceMs: 60 });
+    const abandonIfOrphaned = vi.fn((reason: string) => {
+      target.abortController.abort(new Error(`turn stopped: ${reason}`));
+      return true;
+    });
+    target.abandonIfOrphaned = abandonIfOrphaned;
+    const call = vi.fn(async () => {
+      throw new ConnectError('connect ECONNREFUSED', Code.Unavailable);
+    });
+
+    await expect(callWithinOrchestratorWindow(target, 'tool "request-approval"', call, {
+      attemptTimeoutMs: 1_000,
+      log: quiet,
+    })).rejects.toThrow('turn stopped: tool "request-approval" could not reach a live orchestrator');
+    expect(abandonIfOrphaned).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails the call itself when a live orchestrator is still attached', async () => {
+    const target = context({ graceMs: 60 });
+    target.abandonIfOrphaned = vi.fn(() => false);
+    const call = vi.fn(async () => {
+      throw new ConnectError('connect ECONNREFUSED', Code.Unavailable);
+    });
+
+    await expect(callWithinOrchestratorWindow(target, 'tool "search"', call, {
+      attemptTimeoutMs: 1_000,
+      log: quiet,
+    })).rejects.toThrow(/could not reach a live orchestrator within 60ms/);
+    expect(target.abortController.signal.aborted).toBe(false);
+  });
+
   it('passes fatal errors through without retrying', async () => {
     const target = context({ graceMs: 5_000 });
     const call = vi.fn(async () => {

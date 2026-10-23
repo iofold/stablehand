@@ -105,6 +105,16 @@ async function attemptWithTimeout<T>(
  * Run `call` with the delivery's current capability, retrying transport
  * failures with backoff and waiting for a rotated capability after a stale
  * authority refusal, until the window closes or the delivery aborts.
+ *
+ * The window opens when the orchestrator first fails to answer, not when the
+ * call starts: a callback that legitimately waits a long time (an approval
+ * parked for minutes) still gets the full window to reach a successor after
+ * a restart (ctx-2jp0). A successor's capability reopens it.
+ *
+ * When the window closes while no orchestrator is attached to the delivery,
+ * the delivery is abandoned exactly as the orphan timer would abandon it, and
+ * the callback rejects with that reason. The harness never receives a made-up
+ * tool failure it could answer and complete the turn with.
  */
 export async function callWithinOrchestratorWindow<T>(
   context: TurnDeliveryContext,
@@ -116,7 +126,17 @@ export async function callWithinOrchestratorWindow<T>(
   const log = options.log ?? ((message: string) => console.error(message));
   const signal = context.abortController.signal;
   const windowMs = options.windowMs ?? context.orphanGraceMs ?? 0;
-  const deadline = now() + Math.max(0, windowMs);
+  let deadline: number | undefined;
+  const openWindow = (): number => {
+    deadline ??= now() + Math.max(0, windowMs);
+    return deadline;
+  };
+  /** The error a callback whose window closed rejects with. */
+  const windowClosed = (error: ConnectError): Error => (
+    context.abandonIfOrphaned?.(`${label} could not reach a live orchestrator`)
+      ? abortReasonError(signal)
+      : error
+  );
   let delayMs = INITIAL_RETRY_DELAY_MS;
   let attempt = 0;
 
@@ -126,14 +146,15 @@ export async function callWithinOrchestratorWindow<T>(
     if (isTurnDeliveryCapabilityExpired(context, now())) {
       const version = context.capabilityVersion ?? 0;
       log(`[callback-window] ${label}: delivery capability expired; waiting for the orchestrator to re-attach`);
-      const changed = await waitForTurnDeliveryCapabilityChange(context, version, deadline);
+      const changed = await waitForTurnDeliveryCapabilityChange(context, version, openWindow());
       if (signal.aborted) throw abortReasonError(signal);
       if (!changed || isTurnDeliveryCapabilityExpired(context, now())) {
-        throw new ConnectError(
+        throw windowClosed(new ConnectError(
           `${label} could not reach a live orchestrator within ${windowMs}ms (delivery capability expired)`,
           Code.Unavailable,
-        );
+        ));
       }
+      deadline = undefined;
     }
 
     const version = context.capabilityVersion ?? 0;
@@ -150,33 +171,35 @@ export async function callWithinOrchestratorWindow<T>(
       const kind = classifyCallbackFailure(error);
       const message = error instanceof Error ? error.message : String(error);
       if (kind === 'fatal') throw error;
-      if (now() >= deadline) {
-        throw new ConnectError(
+      const windowCloses = openWindow();
+      if (now() >= windowCloses) {
+        throw windowClosed(new ConnectError(
           `${label} could not reach a live orchestrator within ${windowMs}ms after ${attempt} attempt(s): ${message}`,
           Code.Unavailable,
           undefined,
           undefined,
           error,
-        );
+        ));
       }
       if (kind === 'stale_authority') {
         log(`[callback-window] ${label}: orchestrator refused the current capability (${message}); waiting for re-attach`);
-        const changed = await waitForTurnDeliveryCapabilityChange(context, version, deadline);
+        const changed = await waitForTurnDeliveryCapabilityChange(context, version, windowCloses);
         if (signal.aborted) throw abortReasonError(signal);
         if (!changed) {
-          throw new ConnectError(
+          throw windowClosed(new ConnectError(
             `${label} was refused by the orchestrator and no successor re-attached within ${windowMs}ms: ${message}`,
             Code.FailedPrecondition,
             undefined,
             undefined,
             error,
-          );
+          ));
         }
+        deadline = undefined;
         delayMs = INITIAL_RETRY_DELAY_MS;
         continue;
       }
       log(`[callback-window] ${label}: attempt ${attempt} failed (${message}); retrying in ${delayMs}ms`);
-      await sleep(Math.min(delayMs, Math.max(0, deadline - now())), signal);
+      await sleep(Math.min(delayMs, Math.max(0, windowCloses - now())), signal);
       delayMs = Math.min(delayMs * 2, MAX_RETRY_DELAY_MS);
     }
   }
