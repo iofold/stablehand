@@ -49,9 +49,9 @@ export interface RepoScout {
 function treeFilter(repo: string, c: CommitRecord, funnel: Record<string, number>): Candidate | null {
   const profile = profileFor(repo);
   const bump = (k: string) => (funnel[k] = (funnel[k] ?? 0) + 1);
-  if (c.parents.length !== 1 || /^revert\b/i.test(c.subject)) return null;
-  bump('not_merge_or_revert');
-  if (!looksLikeFix(c.subject)) return null;
+  if (c.parents.length === 0 || /^revert\b/i.test(c.title)) return null;
+  bump('not_revert');
+  if (!looksLikeFix(c.title)) return null;
   bump('fix_like_message');
   const source: string[] = [];
   const tests: string[] = [];
@@ -75,7 +75,7 @@ function treeFilter(repo: string, c: CommitRecord, funnel: Record<string, number
     parent: c.parents[0],
     date: c.date,
     author: c.author,
-    subject: c.subject,
+    subject: c.title,
     source_files: source,
     test_files: tests,
     other_files: other,

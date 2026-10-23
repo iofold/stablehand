@@ -59,7 +59,7 @@ export function placeholderInstruction(repo: string, message: string, sourceDirs
     `The \`${repo}\` repository is checked out at \`/app\` (no git history, no network).`,
     '',
     body ? `${body}\n` : '',
-    `Fix the bug in the library source (${sourceDirs.map((d) => `\`${d}/\``).join(', ')}) so the behaviour described above is correct.`,
+    `Find and fix this bug in the library source (${sourceDirs.map((d) => `\`${d}/\``).join(', ')}).`,
     'Hidden tests exercise the fix, and the existing test suite must keep passing.',
     '',
   ].join('\n').replace(/\n{3,}/g, '\n\n');
