@@ -1,0 +1,61 @@
+# Bugfarm as a compose overlay, beside Stablehand. Add it to COMPOSE_FILE in
+# .env, or by hand:
+#   docker compose -f docker-compose.yml -f extensions/bugfarm/docker-compose.yml up -d bugfarm
+# Paths are relative to the repository root, like every overlay here.
+#
+# The worker keeps its board in its own Postgres (bugfarm-db), never in
+# Stablehand's database. It talks to Stablehand on a scoped key with
+# webhooks:manage only. See extensions/bugfarm/README.md for every setting.
+services:
+  bugfarm:
+    build:
+      context: .
+      dockerfile: extensions/bugfarm/Dockerfile
+    image: ${STABLEHAND_IMAGE_REGISTRY:-ghcr.io/iofold}/stablehand-bugfarm:${STABLEHAND_IMAGE_TAG:-latest}
+    environment:
+      BUGFARM_DATABASE_URL: postgres://bugfarm:${BUGFARM_DB_PASSWORD:-bugfarm}@bugfarm-db:5432/bugfarm
+      # The pipeline writes the board with this token. Empty turns ingest off.
+      BUGFARM_INGEST_TOKEN: ${BUGFARM_INGEST_TOKEN:-}
+      # Optional: makes the board private; open it once with ?key=<token>.
+      BUGFARM_VIEW_TOKEN: ${BUGFARM_VIEW_TOKEN:-}
+      STABLEHAND_BASE_URL: http://orchestrator:3001
+      STABLEHAND_API_KEY: ${BUGFARM_API_KEY:-}
+      BUGFARM_WEBHOOK_SECRET: ${BUGFARM_WEBHOOK_SECRET:-}
+      # Where Stablehand delivers webhooks, on the compose network.
+      BUGFARM_PUBLIC_URL: http://bugfarm:8095
+      # Comma-separated ids of the floor agents (Scout, Env builder, Writer, Reviewer, Publisher).
+      BUGFARM_AGENT_IDS: ${BUGFARM_AGENT_IDS:-}
+      BUGFARM_CAMPAIGN: ${BUGFARM_CAMPAIGN:-main}
+      # Development only: 1 fills the board with simulated rows.
+      BUGFARM_SIM: ${BUGFARM_SIM:-0}
+    ports:
+      - "${BUGFARM_PORT:-8095}:8095"
+    depends_on:
+      bugfarm-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  bugfarm-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: bugfarm
+      POSTGRES_PASSWORD: ${BUGFARM_DB_PASSWORD:-bugfarm}
+      POSTGRES_DB: bugfarm
+    volumes:
+      - bugfarm-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bugfarm -d bugfarm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  orchestrator:
+    environment:
+      # Webhook delivery refuses private addresses unless allowlisted; the
+      # worker is one. With the gallery overlay too, set
+      # STABLEHAND_EGRESS_ALLOWLIST=gallery,bugfarm in .env.
+      STABLEHAND_EGRESS_ALLOWLIST: ${STABLEHAND_EGRESS_ALLOWLIST:-bugfarm}
+
+volumes:
+  bugfarm-pgdata:
