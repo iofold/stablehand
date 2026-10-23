@@ -138,6 +138,7 @@ export class SimWorld {
   private publishQueue: string[] = [];
   private trialRuleKey: string | null = null;
   private trialIndex = 0;
+  private fateDeck: Fate[] = [];
   private previousShare = 3 / 10;
   private previousUsdPerAccepted = 30.3 / 3;
   private nextBenchAt = 0;
@@ -254,6 +255,7 @@ export class SimWorld {
     this.batchStartedAt = now;
     this.nextSpawnAt = now;
     this.nextBenchAt = now + this.ms(4);
+    this.fateDeck = this.dealFates(this.batch);
     rows.push(this.startTrialRule());
     rows.push(this.batchRow(now));
     rows.push(this.campaignRow({
@@ -296,11 +298,17 @@ export class SimWorld {
     };
   }
 
-  /** Fates get kinder as the factory learns: each batch rejects less. */
-  private decideFate(batch: number): Fate {
-    // Gains flatten out after a few batches, as real filters do.
+  /**
+   * Deal a batch's fates up front. The number of accepts follows the
+   * learning curve (10%, 25%, 35%, 40%, 44%, then flattening near 50%,
+   * as real filters do), give or take one; the rejects are drawn from the
+   * usual reasons, early-stage failures shrinking as the rules take hold.
+   */
+  private dealFates(batch: number): Fate[] {
+    const acceptShare = 0.5 - 0.4 * Math.pow(0.62, batch - 1);
+    const jitter = this.random() < 0.2 ? -1 : 0;
+    const accepts = Math.max(1, Math.round(BATCH_SIZE * acceptShare) + jitter);
     const learned = Math.max(0.62, Math.pow(0.88, batch - 1));
-    const roll = this.random();
     const table: [number, Fate][] = [
       [0.12 * learned, { kind: 'reject', at: 'mined', reason: 'env_build_failed' }],
       [0.18 * learned, { kind: 'reject', at: 'env_ready', reason: 'no_fail_to_pass' }],
@@ -312,12 +320,18 @@ export class SimWorld {
       [0.14, { kind: 'calibrate', outcome: 'too_easy' }],
       [0.08 * learned, { kind: 'calibrate', outcome: 'unsolved_broken' }],
     ];
-    let edge = 0;
-    for (const [p, fate] of table) {
-      edge += p;
-      if (roll < edge) return fate;
+    const total = table.reduce((sum, [weight]) => sum + weight, 0);
+    const deck: Fate[] = Array.from({ length: accepts }, () => ({ kind: 'calibrate', outcome: 'accept' }) as Fate);
+    while (deck.length < BATCH_SIZE) {
+      let roll = this.random() * total;
+      const pick = table.find(([weight]) => (roll -= weight) < 0) ?? table[table.length - 1];
+      deck.push(pick[1]);
     }
-    return { kind: 'calibrate', outcome: 'accept' };
+    for (let i = deck.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(this.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    return deck;
   }
 
   private setSolveRates(item: SimItem, outcome: 'accept' | 'too_easy' | 'unsolved_broken'): void {
@@ -498,7 +512,7 @@ export class SimWorld {
 
     if (this.phase === 'running' && this.spawned < BATCH_SIZE && now >= this.nextSpawnAt) {
       const item = this.newItem(this.batch, now);
-      item.fate = this.decideFate(this.batch);
+      item.fate = this.fateDeck.pop() ?? { kind: 'calibrate', outcome: 'accept' };
       item.nextAt = now + this.ms(this.between(2.5, 5));
       this.spendOn(item, this.between(0.01, 0.03));
       this.items.set(item.key, item);
@@ -650,6 +664,7 @@ export class SimWorld {
     for (const [key, item] of this.items) {
       if (item.stage === 'published' || item.stage === 'rejected') this.items.delete(key);
     }
+    this.fateDeck = this.dealFates(this.batch);
     return [this.startTrialRule(), this.batchRow(now), this.campaignRow({ approval: null })];
   }
 }

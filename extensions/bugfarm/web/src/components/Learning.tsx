@@ -14,6 +14,20 @@ interface ChartProps {
   lowerIsBetter?: boolean;
 }
 
+/** Evenly spaced gridlines on round values: the smallest 1/2/2.5/5 step giving at most five. */
+function ticksFor(max: number): number[] {
+  for (let exp = -2; exp <= 5; exp += 1) {
+    for (const base of [1, 2, 2.5, 5]) {
+      const step = base * 10 ** exp;
+      const count = max / step;
+      if (count <= 5 + 1e-9 && Math.abs(count - Math.round(count)) < 1e-9) {
+        return Array.from({ length: Math.round(count) + 1 }, (_, index) => index * step);
+      }
+    }
+  }
+  return [0, max];
+}
+
 function niceMax(max: number, isShare: boolean): number {
   if (isShare) return Math.min(1, Math.max(0.25, Math.ceil(max * 4 + 0.4) / 4));
   const steps = [1, 2, 2.5, 5, 10];
@@ -29,7 +43,7 @@ function BatchChart({ title, note, batches, value, format, lowerIsBetter = false
   const known = points.filter((point): point is { batch: Batch; v: number } => point.v !== null);
   const isShare = !lowerIsBetter;
   const max = niceMax(Math.max(...known.map((point) => point.v), 0), isShare);
-  const ticks = [0, max / 2, max];
+  const ticks = ticksFor(max);
   const first = known[0];
   const last = known[known.length - 1];
   const finished = known.filter((point) => point.batch.status === 'done');
@@ -51,7 +65,7 @@ function BatchChart({ title, note, batches, value, format, lowerIsBetter = false
         <div className="relative h-52 sm:h-60" aria-hidden>
           {ticks.map((tick) => (
             <span key={tick} className="absolute right-2 translate-y-1/2 text-[0.75rem] text-ink-3 tnum" style={{ bottom: `${(tick / max) * 100}%` }}>
-              {format(tick)}
+              {isShare ? pct(tick) : usd(tick, Number.isInteger(tick) ? 0 : 2)}
             </span>
           ))}
         </div>
