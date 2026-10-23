@@ -672,8 +672,9 @@ against. A turn's tags are fixed when it is created and come from, highest
 precedence first:
 
 1. the `tags` object on `POST /api/agents/:id/message` or
-   `POST /api/agents/:id/turns` (only for a new conversation; a conversation
-   keeps the tags it started with);
+   `POST /api/agents/:id/turns`. A conversation keeps the tags it started
+   with, and a later request that gives a different value for one of them
+   fails with `400 tag_conflict`;
 2. the agent's `metadata.defaultTags`.
 
 A turn started by a trigger takes its tags from, highest precedence first:

@@ -17,7 +17,7 @@ import type { AgentSubRouteOptions } from './types.js';
  * The stored resolution (who, when, why) for a resolved interrupt row, echoed
  * on resolve responses and read APIs (ctx-lhr0).
  */
-export function interruptResolutionFields(row: InterruptRow | undefined): {
+function interruptResolutionFields(row: InterruptRow | undefined): {
   resolvedAt?: number;
   resolvedBy?: InterruptRow['resolvedBy'];
   resolvedReason?: string | null;
