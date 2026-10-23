@@ -805,10 +805,15 @@ export interface Reconciliation {
   campaign_key_id: string;
   attempts: number;
   attempts_cost_usd: number;
+  /** Finished attempts the spend log has no rows for yet (their cost is Harbor's estimate). */
   attempts_unsettled: number;
+  attempts_running: number;
   gateway_rows: number;
   gateway_total_usd: number;
+  /** Rows of the key without an attempt id (route checks, strays). */
   gateway_unattributed: { calls: number; cost_usd: number };
+  /** Rows tagged with an attempt id that has no finished record under this panel. */
+  gateway_other_attempts: { calls: number; cost_usd: number };
   stablehand_spend_usd: number | null;
   stablehand_calls: number | null;
   difference_usd: number | null;
@@ -821,14 +826,17 @@ export async function reconcile(panelId: string, ctx: { gateway: GatewayContext;
   let cost = 0;
   let count = 0;
   let unsettled = 0;
+  let running = 0;
+  const known = new Set<string>();
   const rows: BoardRow[] = [];
   for (const store of stores) {
     for (const rec of store.all()) {
       if (rec.status !== 'done') {
-        unsettled++;
+        running++;
         continue;
       }
       count++;
+      known.add(rec.id);
       const s = snap?.by_attempt.get(rec.id);
       if (s && (rec.cost_usd !== s.cost_usd || rec.gateway_calls !== s.calls || rec.cost_state !== 'gateway')) {
         rec.cost_usd = s.cost_usd;
@@ -848,14 +856,22 @@ export async function reconcile(panelId: string, ctx: { gateway: GatewayContext;
     const k = await getCampaignKey(ctx.admin, ctx.gateway.key.id);
     sh = { costUsd: k.spend.costUsd, calls: k.spend.calls };
   }
+  const other = { calls: 0, cost_usd: 0 };
+  for (const [id, s] of snap?.by_attempt ?? []) {
+    if (known.has(id)) continue;
+    other.calls += s.calls;
+    other.cost_usd += s.cost_usd;
+  }
   return {
     campaign_key_id: ctx.gateway.key.id,
     attempts: count,
     attempts_cost_usd: Math.round(cost * 1e6) / 1e6,
     attempts_unsettled: unsettled,
+    attempts_running: running,
     gateway_rows: snap?.rows ?? 0,
     gateway_total_usd: Math.round((snap?.total_usd ?? 0) * 1e6) / 1e6,
     gateway_unattributed: snap ? { calls: snap.unattributed.calls, cost_usd: Math.round(snap.unattributed.cost_usd * 1e6) / 1e6 } : { calls: 0, cost_usd: 0 },
+    gateway_other_attempts: { calls: other.calls, cost_usd: Math.round(other.cost_usd * 1e6) / 1e6 },
     stablehand_spend_usd: sh ? Math.round(sh.costUsd * 1e6) / 1e6 : null,
     stablehand_calls: sh?.calls ?? null,
     difference_usd: sh ? Math.round((sh.costUsd - cost) * 1e6) / 1e6 : null,
