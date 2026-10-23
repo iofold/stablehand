@@ -192,9 +192,11 @@ export async function checkCandidate(cand: Candidate, env: EnvBuildResult, base:
     timings.prepare_seconds = secs(Date.now() - ts);
 
     // --- fail-to-pass on the fix's own test modules
-    const targets = cand.test_files.filter((f) => isTestModule(f) && fileExists(join(head, f)));
+    // Targets must exist at HEAD and be part of the suite the verifier runs (not under an --ignore).
+    const ignored = profile.suiteArgs.filter((a) => a.startsWith('--ignore=')).map((a) => a.slice('--ignore='.length));
+    const targets = cand.test_files.filter((f) => isTestModule(f) && fileExists(join(head, f)) && !ignored.some((p) => f === p || f.startsWith(`${p}/`)));
     result.test_targets = targets;
-    if (targets.length === 0) return reject('no_test_targets', 'fix touches no test module that still exists at HEAD');
+    if (targets.length === 0) return reject('no_test_targets', 'fix touches no test module that exists at HEAD and is in the verifier suite');
 
     ts = Date.now();
     const buggyRuns: PytestRun[] = [];
