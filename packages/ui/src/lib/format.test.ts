@@ -8,6 +8,7 @@ import {
   formatRunningDuration,
   formatTimeUntil,
   formatTimestamp,
+  formatTimestampInZone,
 } from './format';
 
 describe('format helpers', () => {
@@ -40,5 +41,14 @@ describe('format helpers', () => {
     expect(formatTimeUntil(now + 5 * 60_000, now)).toBe('in 5m');
     expect(formatTimeUntil(now + 3 * 3_600_000, now)).toBe('in 3h');
     expect(formatTimeUntil(now + 50 * 3_600_000, now)).toBe('in 2d');
+  });
+
+  it('shows a time in the schedule\'s own zone and names the zone', () => {
+    const at = Date.parse('2026-10-26T01:30:00Z');
+    const kolkata = formatTimestampInZone(at, 'Asia/Kolkata');
+    expect(kolkata).toContain('07:00');
+    expect(kolkata).toMatch(/GMT\+5:30|IST/);
+    expect(formatTimestampInZone(at, 'UTC')).toContain('01:30');
+    expect(formatTimestampInZone(at, 'Not/AZone')).toMatch(/\d{2}:\d{2}/);
   });
 });

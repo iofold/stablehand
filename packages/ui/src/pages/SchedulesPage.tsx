@@ -11,7 +11,7 @@ import {
   type Schedule,
   type Trigger,
 } from '@/lib/api';
-import { formatRelativeTime, formatTimestamp, formatTimeUntil } from '@/lib/format';
+import { formatRelativeTime, formatTimestampInZone, formatTimeUntil } from '@/lib/format';
 import { AlertBanner } from '@/components/ui/AlertBanner';
 import { PageShell } from '@/components/ui/PageShell';
 
@@ -206,13 +206,13 @@ export function SchedulesPage() {
                     <dt className="text-surface-400">Next run</dt>
                     <dd className="text-surface-200" data-testid="schedule-next">
                       {schedule.enabled && schedule.nextRunAt
-                        ? `${formatTimestamp(schedule.nextRunAt)} (${formatTimeUntil(schedule.nextRunAt)})`
+                        ? `${formatTimestampInZone(schedule.nextRunAt, schedule.timezone)} (${formatTimeUntil(schedule.nextRunAt)})`
                         : 'Off, so it will not run'}
                     </dd>
                     <dt className="text-surface-400">Last run</dt>
                     <dd className="text-surface-200" data-testid="schedule-last">
                       {schedule.lastFiredAt
-                        ? `${formatTimestamp(schedule.lastFiredAt)} (${formatRelativeTime(schedule.lastFiredAt)})`
+                        ? `${formatTimestampInZone(schedule.lastFiredAt, schedule.timezone)} (${formatRelativeTime(schedule.lastFiredAt)})`
                         : 'Never'}
                     </dd>
                     <dt className="text-surface-400">Sends</dt>

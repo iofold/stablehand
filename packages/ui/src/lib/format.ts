@@ -55,6 +55,27 @@ export function formatRelativeTime(timestamp: number | undefined): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+/**
+ * A date and time in a named IANA timezone, with the zone shown
+ * ("Oct 27, 07:00 AM GMT+5:30"). Falls back to the viewer's zone when the
+ * name is not one the browser knows.
+ */
+export function formatTimestampInZone(timestamp: number, timeZone: string): string {
+  const options: Intl.DateTimeFormatOptions = {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  };
+  try {
+    return new Date(timestamp).toLocaleString(undefined, { ...options, timeZone });
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    return new Date(timestamp).toLocaleString(undefined, options);
+  }
+}
+
 /** "in 5m", "in 3h", "in 2d" for a time ahead of now. */
 export function formatTimeUntil(timestamp: number, now = Date.now()): string {
   const mins = Math.round((timestamp - now) / 60_000);
