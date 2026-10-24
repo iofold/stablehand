@@ -2,7 +2,7 @@
 
 Good coding tasks take weeks to write. Bugfarm mines them from git history.
 
-Bugfarm reads a repository's past bug fixes and turns each one into a coding task with a receipt. A task only counts if its tests fail before the fix and pass after it. It also needs a difficulty measured against several model families. The campaign runs unattended on your own machine, under one spend cap. It learns from each batch's rejects, so the next batch keeps more candidates for less money.
+Bugfarm reads a repository's past bug fixes and turns each one into a coding task with a receipt. A task only counts if its tests fail before the fix and pass after it. It also needs a difficulty measured against several model families. The campaign runs unattended on your own machine, under one spend cap. Its experimental learning loop proposes rules from rejected candidates and retains a rule only when the next batches show a measured improvement. Development runs have not yet demonstrated a retained improvement.
 
 This directory holds the Bugfarm worker and its live board. The worker runs beside Stablehand as its own process, the same way the [artifact gallery](../artifact-gallery) does. The task pipeline it runs lives in `pipeline/`, and the floor agents it drives are Stablehand agents defined in `agents/`. The Harbor agent that benchmarks Stablehand's harnesses on those tasks lives in `harbor/`. The benchmark runner and the publish step (approval, then the Hugging Face Hub) live in [`bench/`](bench/README.md).
 
