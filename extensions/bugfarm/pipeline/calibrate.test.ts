@@ -6,6 +6,7 @@ import { toAtifV17 } from './calibrate-atif.ts';
 import { jobConfig, judge, labelsCompose } from './calibrate-harbor.ts';
 import { defaultPanel, knownModel, measuredFamilies, panelDefinition, panelSha, validatePanel } from './calibrate-panel.ts';
 import { probeRows, probeTable } from './calibrate-probe.ts';
+import { withSolverTools } from './lib/build-env.ts';
 import { BudgetPool, CostModel, calibrationToml, itemKeyFor, ladderPriority, readBugfarmMetadata, readTaskInfo, writeTaskCalibration } from './calibrate.ts';
 
 const tmp = mkdtempSync(join(tmpdir(), 'bugfarm-cal-'));
@@ -105,6 +106,18 @@ describe('panel', () => {
     expect(knownModel('claude-haiku-5-5-autocache')?.pricing.input).toBeCloseTo(0.1e-6);
     expect(knownModel('claude-sonnet-5-autocache')?.pricing.cache_read).toBeCloseTo(0.2e-6);
     expect(knownModel('no-such-model')).toBeUndefined();
+  });
+});
+
+describe('env images for terminus-2', () => {
+  it('appends a tmux layer to an agent-written Dockerfile that lacks one', () => {
+    const agent = 'FROM python:3.12-slim\nRUN pip install -e .[test]\n';
+    const built = withSolverTools(agent);
+    expect(built.startsWith('FROM python:3.12-slim\nRUN pip install -e .[test]\n')).toBe(true);
+    expect(built).toContain('apt-get install -y --no-install-recommends tmux');
+    expect(withSolverTools(built)).toBe(built);
+    const hasIt = 'FROM python:3.12-slim\nRUN apt-get update && apt-get install -y git tmux\n';
+    expect(withSolverTools(hasIt)).toBe(hasIt);
   });
 });
 

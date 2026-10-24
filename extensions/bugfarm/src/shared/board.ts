@@ -129,6 +129,10 @@ export interface CampaignPayload {
     last_event_type?: string;
     agents?: Record<string, { state: string; last_seen_at: number; turn_id?: string }>;
   };
+  /** Frozen calibration panel the campaign measures difficulty on, e.g. `cal-v2`. */
+  panel?: string | null;
+  /** Model families that panel measures, in order: the board's difficulty dots and legend follow it. */
+  families?: string[];
   simulated?: boolean;
   [extra: string]: unknown;
 }

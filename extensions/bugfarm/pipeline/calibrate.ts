@@ -217,10 +217,14 @@ function neverStarted(rec: AttemptRecord): boolean {
   return !isDir(rec.job_dir) && !fileExists(`${rec.job_dir}.config.json`);
 }
 
-/** A record left `running` by a killed process: read its Harbor result if it finished, else count it as an error. */
-export function recoverInterrupted(store: AttemptStore): AttemptRecord[] {
+/**
+ * A record left `running` by a killed process: read its Harbor result if it finished, else count
+ * it as an error. `only` limits it to some records (e.g. one card's), so a caller never touches an
+ * attempt another calibration in the same process is running.
+ */
+export function recoverInterrupted(store: AttemptStore, only: (rec: AttemptRecord) => boolean = () => true): AttemptRecord[] {
   const fixed: AttemptRecord[] = [];
-  for (const rec of store.all().filter((a) => a.status === 'running')) {
+  for (const rec of store.all().filter((a) => a.status === 'running' && only(a))) {
     if (neverStarted(rec)) {
       // Queued for a trial slot when the process stopped: no trial ran and no model was called.
       store.dropUnstarted(rec);
@@ -573,7 +577,8 @@ export async function calibrate(taskDir: string, panel: FrozenPanel, budget: num
   };
   const familyOf = (model: string): Family => panel.models[model]?.family ?? 'open';
 
-  const recovered = recoverInterrupted(store);
+  // Only this item's records: another card on the same task may be calibrating in this process.
+  const recovered = recoverInterrupted(store, (a) => a.item === task.item);
   if (recovered.length) await board.write(recovered.map(attemptRow));
 
   const inflight = new Map<string, Promise<void>>();
@@ -813,7 +818,7 @@ export function writeTaskCalibration(taskDir: string, panel: FrozenPanel, result
   writeFileSync(path, `${text.replace(/\n*$/, '\n')}\n${calibrationToml(panel, result)}`);
 }
 
-function rejectDetail(decision: Decision, difficulty: Record<string, { passes: number; attempts: number }>, panel: FrozenPanel): string {
+export function rejectDetail(decision: Decision, difficulty: Record<string, { passes: number; attempts: number }>, panel: FrozenPanel): string {
   const counts = Object.entries(difficulty).map(([f, d]) => `${f} ${d.passes}/${d.attempts}`).join(', ');
   const why: Record<string, string> = {
     too_easy: `the frontier family (${panel.frontier}) stopped early as too easy`,

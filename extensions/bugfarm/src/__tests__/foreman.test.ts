@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 import type { EnvContext } from '../../pipeline/lib/build-env.ts';
 import type { CheckResult } from '../../pipeline/lib/check-candidate.ts';
-import { pendingCalibration } from '../calibrate.js';
+import { pendingCalibration, type Calibrate, type CalibrationBudget } from '../calibrate.js';
 import type { FloorApi, StartTurnInput, TurnInfo } from '../floor/api.js';
 import type { ItemContext } from '../foreman/context.js';
 import { DEFAULT_CONFIG, Foreman, itemKeyFor, type CampaignConfig } from '../foreman/foreman.js';
@@ -19,6 +22,8 @@ function config(): CampaignConfig {
 }
 
 const quiet = { log: () => undefined, warn: () => undefined };
+const TASKS = mkdtempSync(path.join(tmpdir(), 'bugfarm-foreman-'));
+afterAll(() => rmSync(TASKS, { recursive: true, force: true }));
 
 function itemContext(_repo: string, sha: string): ItemContext {
   const check = {
@@ -112,14 +117,24 @@ class FakeJobs {
   submitted: Array<{ kind: JobKind; id: string }> = [];
   private readonly jobs = new Map<string, JobRecord>();
 
+  /** What package_task writes for an instruction; a test can make it write something else. */
+  constructor(readonly packaged: (instruction: string) => string = (instruction) => instruction) {}
+
   async submit(kind: JobKind, args: Record<string, unknown>, opts: { id?: string } = {}): Promise<JobRecord> {
     const id = opts.id ?? `${kind}-${this.submitted.length}`;
     const existing = this.jobs.get(id);
     if (existing) return existing;
     this.submitted.push({ kind, id });
-    const result: Record<string, unknown> = kind === 'check_candidate'
-      ? { accepted: true, sha: args.sha }
-      : kind === 'package_task' ? { task_dir: `/tasks/${String(args.sha).slice(0, 10)}` } : kind === 'run_controls' ? { passed: true, oracle: 1, nop: 0 } : { ok: true, tag: 'img' };
+    let result: Record<string, unknown>;
+    if (kind === 'package_task') {
+      // Like package-task: a canary line, then the instruction it was given.
+      const dir = path.join(TASKS, `${id.replace(/[^a-z0-9]+/gi, '-')}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, 'instruction.md'), `<!-- bugfarm-canary GUID 0000 -->\n${this.packaged(String(args.instruction ?? '')).trim()}\n`);
+      result = { task_dir: dir };
+    } else {
+      result = kind === 'check_candidate' ? { accepted: true, sha: args.sha } : kind === 'run_controls' ? { passed: true, oracle: 1, nop: 0 } : { ok: true, tag: 'img' };
+    }
     const job = { id, kind, args, status: 'done', result } as JobRecord;
     this.jobs.set(id, job);
     return job;
@@ -136,14 +151,14 @@ class FakeJobs {
   }
 }
 
-function foremanWith(store: MemoryStore, floor: FakeFloor, jobs: FakeJobs): Foreman {
+function foremanWith(store: MemoryStore, floor: FakeFloor, jobs: FakeJobs, calibrate: Calibrate = pendingCalibration): Foreman {
   return new Foreman({
     store,
     jobs,
     floor,
     agentNames: AGENTS,
-    calibrate: pendingCalibration,
-    panel: { entries: [] },
+    calibrate,
+    panel: { id: 'cal-test', entries: [{ harness: 'terminus-2', model: 'claude-x', family: 'anthropic' }, { harness: 'terminus-2', model: 'gpt-x', family: 'openai' }] },
     envContext,
     itemContext,
     logger: quiet,
@@ -209,6 +224,56 @@ describe('Foreman', () => {
     // No Scout or Env builder turn, no repeated check: only the remaining jobs ran.
     expect(jobs.submitted.map((j) => `${j.kind}:${j.id === `${keyA}:package` || j.id === `${keyA}:controls` ? 'A' : 'B'}`).sort())
       .toEqual(['package_task:A', 'package_task:B', 'run_controls:A', 'run_controls:B']);
+  });
+
+  it('calibrates the packaged final instruction and moves cards to Accepted or Rejected', async () => {
+    const store = new MemoryStore();
+    const floor = new FakeFloor(store);
+    const calls: Array<{ taskDir: string; budget: CalibrationBudget; other: number }> = [];
+    const calibrate: Calibrate = async (taskDir, _panel, budget) => {
+      calls.push({ taskDir, budget, other: budget.campaign?.otherSpendUsd() ?? -1 });
+      // Calibration writes its attempts to the board; the foreman counts them as spend.
+      await store.upsert([{ kind: 'attempt', key: `${budget.item}:a1`, payload: { item: budget.item, harness: 'terminus-2', model: 'claude-x', try: 1, result: 'fail', cost_usd: 0.25, phase: 'calibration' } }]);
+      return budget.item.endsWith(SHAS[0].slice(0, 12))
+        ? { state: 'accepted', difficulty: { anthropic: { passes: 1, attempts: 4 } }, costUsd: 0.25 }
+        : { state: 'rejected', reason: 'too_easy', detail: 'the frontier stopped early as too easy (anthropic 2/2)', difficulty: { anthropic: { passes: 2, attempts: 2 } }, costUsd: 0.25 };
+    };
+    const foreman = foremanWith(store, floor, new FakeJobs(), calibrate);
+    await foreman.launch('c4', config());
+    await foreman.whenIdle('c4');
+
+    const a = store.payload<Record<string, unknown>>('item', itemKeyFor('c4', REPO, SHAS[0]));
+    const b = store.payload<Record<string, unknown>>('item', itemKeyFor('c4', REPO, SHAS[1]));
+    expect(a).toMatchObject({ stage: 'accepted', step: 'accepted', difficulty: { anthropic: { passes: 1, attempts: 4 } } });
+    expect(a?.instruction_sha).toMatch(/^[0-9a-f]{16}$/);
+    expect(b).toMatchObject({ stage: 'rejected', reject_reason: 'too_easy', reject_detail: 'the frontier stopped early as too easy (anthropic 2/2)', difficulty: { anthropic: { passes: 2, attempts: 2 } } });
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.budget).toMatchObject({ maxUsd: DEFAULT_CONFIG.calibration_usd, tags: { campaign: 'test-tag', stage: 'calibrate' }, campaign: { id: 'c4', capUsd: config().cap_usd } });
+      // The gate sees the floor turns' spend: at least the Scout, the Env builder and this card's two Writer turns.
+      expect(call.other).toBeGreaterThanOrEqual(0.8 - 1e-9);
+    }
+    // Spend: 6 turns at $0.20 plus 2 calibration attempts at $0.25.
+    expect(store.payload<Record<string, unknown>>('campaign', 'c4')).toMatchObject({ panel: 'cal-test', families: ['anthropic', 'openai'] });
+    expect(store.payload<Record<string, unknown>>('campaign', 'c4')?.spend_usd).toBeCloseTo(1.7, 5);
+    expect(a?.cost_usd).toBeCloseTo(0.65, 5);
+    expect(store.payload<Record<string, unknown>>('batch', 'c4:1')).toMatchObject({ status: 'done', candidates: 2, accepted: 1, rejected: 1, ready: 0 });
+    expect(store.payload<Record<string, unknown>>('batch', 'c4:1')?.cost_usd).toBeCloseTo(1.7, 5);
+  });
+
+  it('never calibrates a task whose packaged instruction is not the final one', async () => {
+    const store = new MemoryStore();
+    const floor = new FakeFloor(store);
+    let called = 0;
+    const calibrate: Calibrate = async () => {
+      called++;
+      return { state: 'accepted' };
+    };
+    const foreman = foremanWith(store, floor, new FakeJobs(() => 'an older draft of the issue'), calibrate);
+    await foreman.launch('c5', { ...config(), batch_size: 1 });
+    await foreman.whenIdle('c5');
+    expect(called).toBe(0);
+    expect(store.payload<Record<string, unknown>>('item', itemKeyFor('c5', REPO, SHAS[0]))).toMatchObject({ stage: 'rejected', reject_reason: 'instruction_mismatch' });
   });
 
   it('rejects a card whose final instruction still leaks the fix', async () => {

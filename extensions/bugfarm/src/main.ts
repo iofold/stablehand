@@ -2,8 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { calibrationFromEnv } from '../pipeline/calibrate-foreman.ts';
+import type { BoardRow as CalibrationRow } from '../pipeline/calibrate-board.ts';
 import { envContext } from '../pipeline/lib/build-env.ts';
-import { DEFAULT_PANEL, pendingCalibration } from './calibrate.js';
+import { DEFAULT_PANEL, panelEntries, pendingCalibration, type Calibrate, type CalibrationPanel } from './calibrate.js';
 import { loadConfig } from './config.js';
 import { StablehandFloorApi } from './floor/api.js';
 import { loadItemContext } from './foreman/context.js';
@@ -73,14 +75,36 @@ async function main(): Promise<void> {
     },
   });
   const learning = new LearningLoop({ store, features: gitFeatures });
+  // Calibration writes its attempts and per-family difficulty straight into the board store.
+  const calibrationBoard = {
+    write: async (rows: CalibrationRow[]) => {
+      try {
+        await store.upsert(rows);
+      } catch (err) {
+        console.warn('[bugfarm] calibration: board write failed:', (err as Error).message);
+      }
+    },
+  };
+  let calibrate: Calibrate = pendingCalibration;
+  let panel: CalibrationPanel = DEFAULT_PANEL;
+  if (floor && config.foreman) {
+    const calibration = calibrationFromEnv(process.env, calibrationBoard);
+    if ('off' in calibration) {
+      console.log(`[bugfarm] calibration off (${calibration.off}); cards that pass their controls wait in Calibrating`);
+    } else {
+      calibrate = calibration.calibrate;
+      panel = panelEntries(calibration.panel);
+      console.log(`[bugfarm] calibration on: panel ${calibration.panel.id} (${panel.entries.map((e) => e.model).join(', ')}), sha ${calibration.panel.sha}`);
+    }
+  }
   const foreman = floor && config.foreman
     ? new Foreman({
       store,
       jobs,
       floor,
       agentNames: config.agentNames,
-      calibrate: pendingCalibration,
-      panel: DEFAULT_PANEL,
+      calibrate,
+      panel,
       envContext,
       itemContext: loadItemContext,
       learning,

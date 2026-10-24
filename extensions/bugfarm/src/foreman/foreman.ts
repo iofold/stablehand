@@ -1,6 +1,9 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { EnvContext } from '../../pipeline/lib/build-env.ts';
 import { profileFor } from '../../pipeline/lib/repos.ts';
-import type { Calibrate, CalibrationPanel } from '../calibrate.js';
+import { panelFamilies, type Calibrate, type CalibrationPanel } from '../calibrate.js';
 import { StablehandApiError } from '@stablehand/client';
 import { BudgetBlockedError, type FloorApi, type TurnInfo } from '../floor/api.js';
 import type { JobRecord, JobRunner } from '../jobs/runner.js';
@@ -8,6 +11,7 @@ import type { BatchEnd } from '../learning/loop.js';
 import { checkLeaks, describeLeaks } from '../leak-check.js';
 import { loadPlaybook, rulesFor } from '../playbook.js';
 import type {
+  AttemptPayload,
   BatchPayload,
   BoardRow,
   CampaignPayload,
@@ -101,6 +105,8 @@ interface ForemanItem extends ItemPayload {
   issue_body?: string | null;
   task_dir?: string | null;
   draft?: string | null;
+  /** sha256 (16 hex) of the instruction calibration ran on, canary line excluded. */
+  instruction_sha?: string | null;
 }
 
 interface ForemanCampaign extends CampaignPayload {
@@ -143,6 +149,8 @@ export interface ForemanDeps {
   costSettleMs?: number;
   /** The learning loop (src/learning/): measures the batch and runs the Teacher before the next one. */
   learning?: { afterBatch(end: BatchEnd): Promise<void> } | null;
+  /** How often the campaign's spend is re-summed while a batch runs (default 30 s). */
+  spendRefreshMs?: number;
 }
 
 /** What the Scout submits for each pull request. */
@@ -218,6 +226,8 @@ function asNumber(value: unknown): number | null {
 export class Foreman {
   private readonly active = new Map<string, Promise<void>>();
   private readonly agentIds = new Map<FloorRole, string>();
+  /** Floor-turn spend per campaign, as of the last refresh; the calibration budget gate reads it. */
+  private readonly turnSpend = new Map<string, number>();
   private writerGate = new Gate(3);
 
   constructor(private readonly deps: ForemanDeps) {}
@@ -332,6 +342,9 @@ export class Foreman {
   private async run(id: string): Promise<void> {
     let campaign = await this.campaign(id);
     this.writerGate = new Gate(campaign.config.writer_concurrency);
+    // The board's difficulty dots and legend follow the families this panel measures.
+    await this.patch('campaign', id, { panel: this.deps.panel.id ?? null, families: panelFamilies(this.deps.panel) });
+    await this.refreshSpend(id);
     for (let n = campaign.batch ?? 1; n <= campaign.config.batches; n++) {
       await this.patch('campaign', id, { batch: n });
       await this.runBatch(id, n);
@@ -381,7 +394,16 @@ export class Foreman {
     await this.deps.store.upsert(items
       .filter((row) => row.payload.stage === 'mined')
       .map((row) => ({ kind: 'item' as const, key: row.key, payload: { stage: 'env_ready', activity: 'Waiting for a check slot' } })));
-    await Promise.all(items.map((row) => this.runItem(id, row.key)));
+    // Calibration spends between turns, so the spend ring would sit still for minutes without this.
+    const ticker = setInterval(() => {
+      this.refreshSpend(id).catch((err: unknown) => this.logger.warn(`[bugfarm] foreman: refreshing ${id} spend failed:`, err));
+    }, this.deps.spendRefreshMs ?? 30_000);
+    ticker.unref?.();
+    try {
+      await Promise.all(items.map((row) => this.runItem(id, row.key)));
+    } finally {
+      clearInterval(ticker);
+    }
 
     const done = (await this.itemsOf(id)).filter((row) => row.payload.batch === n);
     await this.refreshSpend(id);
@@ -392,7 +414,9 @@ export class Foreman {
       ready: done.filter((row) => row.payload.stage === 'calibrating').length,
     };
     await this.patch('batch', batchKey, { ...counts, status: 'done', finished_at: this.now() });
-    this.logger.log(`[bugfarm] foreman: batch ${n} of ${id} done: ${counts.candidates} candidates, ${counts.ready} handed to calibration, ${counts.rejected} rejected`);
+    const cost = (await this.read<ForemanBatch>('batch', batchKey))?.cost_usd ?? 0;
+    const perAccepted = counts.accepted > 0 ? `, $${(cost / counts.accepted).toFixed(2)} per accepted task` : '';
+    this.logger.log(`[bugfarm] foreman: batch ${n} of ${id} done: ${counts.candidates} candidates, ${counts.accepted} accepted, ${counts.rejected} rejected${counts.ready ? `, ${counts.ready} waiting for calibration` : ''}; $${cost.toFixed(2)}${perAccepted}`);
   }
 
   // ------------------------------------------------------------------------------------------
@@ -472,20 +496,37 @@ export class Foreman {
     return { info, submission: row?.submission ?? null, turnId };
   }
 
-  /** Re-sum spend from turn rows: per item, per batch and for the campaign. */
+  /**
+   * Re-sum spend per item, per batch and for the campaign: floor turns from turn rows, plus
+   * calibration attempts from attempt rows (each priced by the gateway once its calls settle).
+   */
   private async refreshSpend(campaignId: string): Promise<void> {
     const turns = (await this.deps.store.currentOfKind('turn')).map((row) => row.payload as TurnPayload).filter((t) => t.campaign === campaignId);
+    const items = await this.itemsOf(campaignId);
+    const batchOf = new Map(items.map((item) => [item.key, item.payload.batch ?? 1]));
     const byItem = new Map<string, number>();
     const byBatch = new Map<number, number>();
     let total = 0;
+    let turnTotal = 0;
     for (const turn of turns) {
       const cost = asNumber(turn.cost_usd) ?? 0;
       total += cost;
+      turnTotal += cost;
       byItem.set(turn.item, (byItem.get(turn.item) ?? 0) + cost);
       byBatch.set(turn.batch, (byBatch.get(turn.batch) ?? 0) + cost);
     }
+    for (const row of await this.deps.store.currentOfKind('attempt')) {
+      const attempt = row.payload as AttemptPayload;
+      const batch = batchOf.get(attempt.item);
+      if (batch === undefined || attempt.phase === 'benchmark') continue;
+      const cost = asNumber(attempt.cost_usd) ?? 0;
+      total += cost;
+      byItem.set(attempt.item, (byItem.get(attempt.item) ?? 0) + cost);
+      byBatch.set(batch, (byBatch.get(batch) ?? 0) + cost);
+    }
+    this.turnSpend.set(campaignId, turnTotal);
     const rows: UpsertInput[] = [{ kind: 'campaign', key: campaignId, payload: { spend_usd: round(total) } }];
-    for (const item of await this.itemsOf(campaignId)) {
+    for (const item of items) {
       const cost = byItem.get(item.key);
       if (cost !== undefined) rows.push({ kind: 'item', key: item.key, payload: { cost_usd: round(cost) } });
     }
@@ -652,7 +693,7 @@ export class Foreman {
           continue;
         }
         this.logger.warn(`[bugfarm] foreman: ${key} failed at ${step}: ${message}`);
-        await this.reject(key, step === 'packaging' ? 'package_error' : step === 'controls' ? 'control_error' : step === 'writing' || step === 'reviewing' ? 'writer_failed' : 'check_error', message);
+        await this.reject(key, step === 'packaging' ? 'package_error' : step === 'controls' ? 'control_error' : step === 'writing' || step === 'reviewing' ? 'writer_failed' : step === 'calibrating' ? 'calibration_error' : 'check_error', message);
       }
     }
   }
@@ -760,18 +801,34 @@ export class Foreman {
         return;
       }
       case 'calibrating': {
-        const outcome = await this.deps.calibrate(item.task_dir ?? '', this.deps.panel, {
+        // Attempts only pool within one instruction (it is part of every attempt's cell), so the
+        // task must carry the final, leak-checked text: anything else would calibrate a different
+        // task than the one the card shows.
+        const taskDir = item.task_dir ?? '';
+        const packaged = packagedInstruction(taskDir);
+        if (packaged === null || packaged !== (item.instruction ?? '').trim()) {
+          await this.reject(key, 'instruction_mismatch', packaged === null
+            ? `no instruction.md in ${taskDir || 'the task'}; package the task again`
+            : 'the packaged instruction is not the final, leak-checked one; package the task again');
+          return;
+        }
+        await this.setItem(key, { stage: 'calibrating', instruction_sha: sha256(packaged).slice(0, 16), activity: 'Solvers are trying the task' });
+        const outcome = await this.deps.calibrate(taskDir, this.deps.panel, {
           maxUsd: campaign.config.calibration_usd,
           tags: { campaign: campaign.config.budget_tag, batch: String(item.batch ?? 1), stage: 'calibrate', item: key },
           item: key,
+          campaign: { id: campaignId, capUsd: campaign.config.cap_usd, otherSpendUsd: () => this.turnSpend.get(campaignId) ?? 0 },
         });
         if (outcome.state === 'pending') {
           await this.setItem(key, { stage: 'calibrating', step: 'handed_off', activity: 'Waiting for calibration' });
         } else if (outcome.state === 'accepted') {
-          await this.setItem(key, { stage: 'accepted', step: 'accepted', difficulty: outcome.difficulty, activity: null });
+          await this.setItem(key, { stage: 'accepted', step: 'accepted', difficulty: outcome.difficulty, reject_reason: null, reject_detail: null, activity: null });
+          this.logger.log(`[bugfarm] foreman: ${key} accepted (${describeDifficulty(outcome.difficulty)}; $${(outcome.costUsd ?? 0).toFixed(3)} of calibration)`);
         } else {
-          await this.reject(key, outcome.reason ?? 'out_of_band', null);
+          if (outcome.difficulty) await this.setItem(key, { difficulty: outcome.difficulty });
+          await this.reject(key, outcome.reason ?? 'out_of_band', outcome.detail ?? null);
         }
+        await this.refreshSpend(campaignId);
         return;
       }
       default:
@@ -821,6 +878,26 @@ export function cleanTitle(title: string): string {
 
 function round(value: number): number {
   return Math.round(value * 10_000) / 10_000;
+}
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+/** The instruction a packaged task gives the solver, without its canary line; null if missing. */
+export function packagedInstruction(taskDir: string): string | null {
+  if (!taskDir) return null;
+  let text: string;
+  try {
+    text = readFileSync(path.join(taskDir, 'instruction.md'), 'utf8');
+  } catch {
+    return null;
+  }
+  return text.replace(/^<!-- bugfarm-canary [^\n]*-->\n/, '').trim();
+}
+
+function describeDifficulty(difficulty: Record<string, { passes: number; attempts: number }> | undefined): string {
+  return Object.entries(difficulty ?? {}).map(([family, d]) => `${family} ${d.passes}/${d.attempts}`).join(', ') || 'no attempts';
 }
 
 /** Validate what the Scout submitted; drop entries without a commit or a PR number. */
