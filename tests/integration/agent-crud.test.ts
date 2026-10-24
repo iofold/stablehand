@@ -5,6 +5,7 @@ import { vi } from 'vitest';
 import { AgentSchema } from '@stablehand/contracts';
 import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 import { buildAgentDefinition } from '../../packages/stablehand/src/orchestrator/agent-definition.js';
+import { createDatabase } from '../../packages/stablehand/src/database/connection.js';
 
 const VALID_AGENT = {
   name: 'test-agent',
@@ -1410,6 +1411,21 @@ describe('Agent CRUD & related endpoints', () => {
       const older = await container.db.createConversation(agentId);
       const newer = await container.db.createConversation(agentId);
 
+      // Consecutive inserts can share a millisecond on fast hosts. Give this
+      // activity-ordering fixture explicit, distinct timestamps.
+      const activityAt = Date.now();
+      const fixtureDb = await createDatabase(container.config.database.url);
+      try {
+        await fixtureDb.pgClient`
+          UPDATE conversations SET updated_at = ${activityAt - 1_000} WHERE id = ${older.id}
+        `;
+        await fixtureDb.pgClient`
+          UPDATE conversations SET updated_at = ${activityAt} WHERE id = ${newer.id}
+        `;
+      } finally {
+        await fixtureDb.close();
+      }
+
       const res = await app.inject({ method: 'GET', url: '/api/conversations/recent?limit=50' });
       expect(res.statusCode).toBe(200);
       const { conversations } = res.json();
@@ -1430,6 +1446,7 @@ describe('Agent CRUD & related endpoints', () => {
       expect(paged.statusCode).toBe(200);
       const pagedIds = paged.json().conversations.map((c: { id: string }) => c.id);
       expect(pagedIds).not.toContain(newer.id);
+      expect(pagedIds).toContain(older.id);
 
       // Agent filter narrows to that agent only.
       const filtered = await app.inject({
