@@ -110,6 +110,8 @@ export function resolveCell(cfg: CellsConfig, c: CellSpec, overrides: { agent_ti
   if (c.agent === 'stablehand' && c.native_tools === 'none' && !notes.some((n) => /native tools off/i.test(n))) {
     notes.unshift('Harness-native tools off for this cell (only the task_* tools); the project default keeps them on.');
   }
+  const capUsd = overrides.max_cost_usd_per_trial ?? cfg.defaults.max_cost_usd_per_trial;
+  notes.push(c.agent === 'stablehand' ? `Each try stops at $${capUsd.toFixed(2)} of model spend.` : `Each try stops after ${String(cfg.terminus2_kwargs.max_turns ?? 'its')} turns.`);
   const body = {
     id: c.id,
     agent: c.agent,

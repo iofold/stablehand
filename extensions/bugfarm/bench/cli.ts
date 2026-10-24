@@ -149,6 +149,8 @@ function init(args: Args): void {
   for (const c of cells) {
     const old = existing.cells.find((x) => x.id === c.id);
     if (old && old.sha !== c.sha) throw new Error(`cell ${c.id} changed since bench ${id} was frozen (${old.sha} -> ${c.sha}); give it a new id or start a new bench`);
+    // Notes and labels are display only (not hashed): refresh them.
+    if (old) Object.assign(old, { notes: c.notes, harness_label: c.harness_label });
     if (!old) {
       existing.cells.push(c);
       added.push(c.id);

@@ -57,10 +57,9 @@ export function statsFor(def: BenchDefinition, cell: ResolvedCell, attempts: Ben
   );
 }
 
-export function cellNotes(def: BenchDefinition, cell: ResolvedCell, s: CellStats, running: number): string[] {
+/** The cell's own notes plus what the numbers alone don't say. Progress is in `attempts` / `planned_attempts`. */
+export function cellNotes(cell: ResolvedCell, s: CellStats): string[] {
   const notes = [...cell.notes];
-  const planned = def.tasks.length * def.k;
-  if (s.attempts < planned) notes.push(`${s.attempts} of ${planned} tries finished${running ? `, ${running} running` : ''}.`);
   if (s.errors) notes.push(`${s.errors} ${s.errors === 1 ? 'try' : 'tries'} errored and count as unsolved.`);
   return notes;
 }
@@ -101,7 +100,7 @@ export function cellRow(def: BenchDefinition, cell: ResolvedCell, s: CellStats, 
       errors: s.errors,
       median_seconds: s.median_seconds,
       usd_per_attempt: s.usd_per_attempt,
-      notes: cellNotes(def, cell, s, running),
+      notes: cellNotes(cell, s),
       task_set: { kind: def.task_set.kind, label: def.task_set.label, note: def.task_set.note ?? null },
       ci_method: 'bootstrap over tasks, 10,000 resamples, 95%',
       updated_at: Date.now(),
