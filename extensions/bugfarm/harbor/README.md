@@ -29,7 +29,9 @@ harbor (host) ── StablehandAgent.run ──┬─ relay on the Docker bridge
   stay on, and the prompt says they act on the solver's own sandbox, not the task. That sandbox holds the
   runtime, including its own `/app`, which a task's `/app` can be mistaken for: in a trial, LangGraph with
   gpt-5.4-mini explored and "fixed" the runtime's files instead of the task's. `--ak native_tools=none`
-  leaves only the `task_*` tools for a cell where that happens.
+  leaves only the `task_*` tools for a cell where that happens. The benchmark leaves LangGraph out of its
+  default cells for this reason; its optional cell runs with `native_tools: none` and says so on the
+  leaderboard (`../bench/cells.json`).
 - The relay secret is a tools-scope agent secret: the orchestrator sends it, the sandbox never sees it.
   It is deleted when the trial ends.
 - A turn that ends in `ERROR` raises `NonZeroAgentExitCodeError`, so Harbor records it and still runs the
@@ -46,7 +48,18 @@ STABLEHAND_EGRESS_ALLOWLIST=host.docker.internal   # in the stack's .env, then r
 The compose file already maps `host.docker.internal` to the host gateway. By default the relay binds the
 default Docker bridge's gateway (what `host.docker.internal` resolves to), not a public interface.
 
+The allowlist names hosts, not ports (`hostMatchesAllowlist` in `packages/stablehand/src/util/egress.ts`
+matches the hostname only), so this entry lets agent HTTP tools reach any port on the host gateway, not
+just the relay's. What guards the relay is its per-trial bearer secret, which only the orchestrator holds.
+Narrowing the entry to the relay's port needs `host:port` entries in core. Until then, bind other host
+services to `127.0.0.1` rather than `0.0.0.0`: a service on the loopback address cannot be reached
+through the bridge gateway.
+
 ## Run
+
+For a benchmark over many cells, use the runner in [`../bench`](../bench/README.md): it runs this agent
+and terminus-2 side by side under one campaign budget, resumes after a crash, and fills the leaderboard.
+By hand:
 
 ```bash
 cd extensions/bugfarm/harbor

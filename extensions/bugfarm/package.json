@@ -12,7 +12,8 @@
     "start": "node dist/server/main.js",
     "sim": "node dist/server/cli.js",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
-    "bugfarm": "node dist/server/bugfarm.js"
+    "bugfarm": "node dist/server/bugfarm.js",
+    "bench": "node --experimental-strip-types bench/cli.ts"
   },
   "dependencies": {
     "@stablehand/client": "workspace:*",

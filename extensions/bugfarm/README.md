@@ -4,7 +4,7 @@ Good coding tasks take weeks to write. Bugfarm mines them from git history.
 
 Bugfarm reads a repository's past bug fixes and turns each one into a coding task with a receipt. A task only counts if its tests fail before the fix and pass after it. It also needs a difficulty measured against several model families. The campaign runs unattended on your own machine, under one spend cap. It learns from each batch's rejects, so the next batch keeps more candidates for less money.
 
-This directory holds the Bugfarm worker and its live board. The worker runs beside Stablehand as its own process, the same way the [artifact gallery](../artifact-gallery) does. The task pipeline it runs lives in `pipeline/`, the floor agents it drives are Stablehand agents defined in `agents/`, and the Harbor agent that benchmarks Stablehand's harnesses on those tasks lives in `harbor/`.
+This directory holds the Bugfarm worker and its live board. The worker runs beside Stablehand as its own process, the same way the [artifact gallery](../artifact-gallery) does. The task pipeline it runs lives in `pipeline/`, and the floor agents it drives are Stablehand agents defined in `agents/`. The Harbor agent that benchmarks Stablehand's harnesses on those tasks lives in `harbor/`. The benchmark runner and the publish step (approval, then the Hugging Face Hub) live in [`bench/`](bench/README.md).
 
 ## How a campaign runs
 
@@ -91,7 +91,7 @@ Every candidate is a card that moves across the board as its checks finish:
 
 Three more tabs:
 
-- **Leaderboard:** each agent and model pair, ranked by pass rate on the accepted tasks, with a 95% interval and dollars per solved task.
+- **Leaderboard:** one benchmark run's agent and model pairs, ranked by pass@1 on the accepted tasks. Each row shows a 95% interval bar, dollars per solved task, solved tries, median agent time and the pair's notes (for example, a cell that runs with harness-native tools off). A banner names the task set, and flags a dev stand-in. The numbers come from [`bench/`](bench/README.md), never from calibration.
 - **Learning:** accepted share and dollars per accepted task, batch by batch, with the counts under each bar. Below the charts, each rule the Teacher (or a person) added: its predicate, the reason it targets, whether it was kept, reverted or is on trial, and its measured effect. Then the rejection reasons by batch, so you can see which fell.
 - **Ledger:** every attempt, with model, result, time and cost.
 
@@ -241,9 +241,9 @@ The response is `{ "cursor": 1234, "results": [{ "kind", "key", "id", "changed" 
 | `campaign` | campaign id | `name`, `repo`, `cap_usd`, `spend_usd`, `started_at`, `unattended_since`, `recovered_from_crash`, `batch` (current), `status` (`running`, `paused`, `recovering`, `done`), `finished_at` |
 | `batch` | batch number | `n` (required), `candidates`, `accepted`, `rejected`, `cost_usd`, `accepted_share` (optional; otherwise computed), `started_at`, `finished_at`, `status` (`running`, `done`). The learning loop adds `learning` (see [How it learns](#how-it-learns)): `gate`, `candidates`, `decided`, `accepted`, `share`, `cost_usd`, `usd_per_accepted`, `reasons`, `filtered`, `filtered_by`, `rules_served`, `setup_usd`, `teacher_usd`, `calibration_usd`, `teacher` |
 | `item` | e.g. `repo@sha` | `stage` (required): `mined`, `env_ready`, `fail_pass`, `controls`, `calibrating`, `accepted`, `rejected`, `published`. Also `reject_reason`, `reject_detail`, `repo`, `sha`, `title`, `url`, `batch`, `diff` (unified diff), `diff_stats` (`files`, `additions`, `deletions`), `failing_tests` (ids), `failing_output`, `difficulty` (`{ family: { passes, attempts } }`), `cost_usd`, `stage_times` (`{ stage: ms }`) |
-| `attempt` | e.g. `item:harness:model:try` | `item`, `harness`, `model`, `try`, `result` (`pass`, `fail`, `error`) are required. Also `family`, `cost_usd`, `seconds`, `phase` (`calibration`, `benchmark`), `at` |
+| `attempt` | e.g. `item:harness:model:try` | `item`, `harness`, `model`, `try`, `result` (`pass`, `fail`, `error`) are required. Also `family`, `cost_usd`, `seconds`, `phase` (`calibration` for selection, `measurement` for the benchmark), `at` |
 | `rule` | rule id | `text` and `batch_introduced` are required. Also `kind` (`scout_filter`, `writer_rule`, `env_recipe`), `repo` (limits it to one repository), `status` (`trial`, `kept`, `reverted`), `measured_batch`, `effect` (`accepted_share_pts`, `usd_per_accepted`, `summary`; the learning loop adds `target_before`, `target_after`, `before`, `after`, `checks`, `filtered`, `measured_with`), `skip_if`, `targets`, `expected_effect`, `campaign`, `source` (`starter`, `hand`, `teacher`) |
-| `cell` | `harness:model` | `harness`, `model`, `solved`, `attempts` and `pass_at_1` (0–1) are required. Also `family`, `tasks`, `ci_low`, `ci_high`, `usd_per_solve`, `cost_usd` |
+| `cell` | `harness:model`, or `<bench>:<cell>` from the benchmark | `harness`, `model`, `solved`, `attempts` and `pass_at_1` (0–1) are required. Also `family`, `tasks`, `ci_low`, `ci_high`, `usd_per_solve`, `cost_usd`. Benchmark rows add `bench` (the leaderboard shows one run at a time), `repo`, `runner`, `k`, `planned_attempts`, `running`, `tasks_solved`, `errors`, `median_seconds`, `notes` and `task_set` (`kind`: `accepted` or `dev_standin`, `label`, `note`) |
 
 The worker also keeps its own bookkeeping in the store: `job` (a pipeline job: `kind`, `status`, `args`, `progress`, `result`), `turn` (a floor agent's turn, keyed by turn id: role, tags, status, cost, last submission) and `env` (a repo's environment image, keyed by repo). Items the foreman writes also carry `campaign`, `activity` (what is happening to the card now), `instruction`, `pr`, `issue` and `fix_date`.
 
