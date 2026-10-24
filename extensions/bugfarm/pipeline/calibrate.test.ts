@@ -7,7 +7,7 @@ import { jobConfig, judge, labelsCompose } from './calibrate-harbor.ts';
 import { defaultPanel, fileSafe, knownModel, measuredFamilies, panelDefinition, panelSha, validatePanel } from './calibrate-panel.ts';
 import { probeRows, probeTable } from './calibrate-probe.ts';
 import { withSolverTools } from './lib/build-env.ts';
-import { BudgetPool, CostModel, bestCost, calibrationToml, itemKeyFor, ladderPriority, readBugfarmMetadata, readTaskInfo, writeTaskCalibration } from './calibrate.ts';
+import { BudgetPool, CostModel, TrialSlots, bestCost, calibrationToml, itemKeyFor, ladderPriority, readBugfarmMetadata, readTaskInfo, writeTaskCalibration } from './calibrate.ts';
 
 const tmp = mkdtempSync(join(tmpdir(), 'bugfarm-cal-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -115,6 +115,21 @@ describe('panel', () => {
     const kwargs = ((cfg.agents as Array<{ kwargs: { llm_call_kwargs: Record<string, unknown> } }>)[0]).kwargs.llm_call_kwargs;
     expect(kwargs.extra_body).toEqual({ reasoning_effort: 'low' });
     expect(fileSafe('claude-sonnet-5-5@low')).toBe('claude-sonnet-5-5_low');
+  });
+});
+
+describe('trial slots', () => {
+  it('give a free slot to the highest try waiting, in arrival order within a try', async () => {
+    const slots = new TrialSlots(1);
+    const order: string[] = [];
+    let release!: () => void;
+    const held = slots.use(() => new Promise<void>((r) => { release = r; }), 1);
+    const waiters = [['screen-a', 1], ['ladder-b', 3], ['screen-c', 1], ['ladder-d', 2]].map(([name, p]) =>
+      slots.use(async () => { order.push(name as string); }, p as number));
+    expect(slots.waiting).toBe(4);
+    release();
+    await Promise.all([held, ...waiters]);
+    expect(order).toEqual(['ladder-b', 'ladder-d', 'screen-a', 'screen-c']);
   });
 });
 

@@ -15,7 +15,7 @@ import { readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PROFILES } from './lib/repos.ts';
-import { Semaphore, ensureDir, fileExists, isDir, log, mapLimit, parseArgs, readJson, secs, writeJson } from './lib/util.ts';
+import { ensureDir, fileExists, isDir, log, mapLimit, parseArgs, readJson, secs, writeJson } from './lib/util.ts';
 import { BoardClient, NullBoard } from './calibrate-board.ts';
 import type { BoardRow, BoardSink } from './calibrate-board.ts';
 import { SpendLog, checkRoutes, getCampaignKey, mintCampaignKey, readCampaignKey, readDotenv } from './calibrate-gateway.ts';
@@ -294,6 +294,47 @@ export class BudgetPool {
   }
 }
 
+/** Trial slots shared by concurrent calibrations; `priority` decides who waits less. */
+export interface Slots {
+  use<T>(fn: () => Promise<T>, priority?: number): Promise<T>;
+}
+
+/**
+ * Trial slots that hand a free slot to the highest priority waiting, first come first served
+ * within a priority. Calibration passes the try number, so a card's later stage (the one that
+ * decides it) goes before a newer card's screen instead of queueing behind every screen.
+ */
+export class TrialSlots implements Slots {
+  private available: number;
+  private readonly waiters: Array<{ priority: number; seq: number; go: () => void }> = [];
+  private seq = 0;
+
+  constructor(slots: number) {
+    this.available = slots;
+  }
+
+  get waiting(): number {
+    return this.waiters.length;
+  }
+
+  async use<T>(fn: () => Promise<T>, priority = 0): Promise<T> {
+    if (this.available > 0) this.available--;
+    else {
+      await new Promise<void>((go) => {
+        this.waiters.push({ priority, seq: this.seq++, go });
+        this.waiters.sort((a, b) => b.priority - a.priority || a.seq - b.seq);
+      });
+    }
+    try {
+      return await fn();
+    } finally {
+      const next = this.waiters.shift();
+      if (next) next.go();
+      else this.available++;
+    }
+  }
+}
+
 /** Per-model attempt cost estimates: the panel's prior until the run has seen real attempts. */
 export class CostModel {
   private readonly observed = new Map<string, number[]>();
@@ -400,7 +441,7 @@ export interface CalibrateOptions {
   gateway: GatewayContext;
   board?: BoardSink;
   /** Shared trial slots across concurrent calibrations (default: 6 for this call alone). */
-  slots?: Semaphore;
+  slots?: Slots;
   /** More budget pools to check and charge besides this call's own (e.g. a campaign-wide pool). */
   pools?: BudgetPool[];
   costModel?: CostModel;
@@ -566,7 +607,7 @@ export async function calibrate(taskDir: string, panel: FrozenPanel, budget: num
   const task = readTaskInfo(taskDir, opts.itemKey);
   const store = new AttemptStore(panel.id, task.name);
   const board = opts.board ?? new NullBoard();
-  const slots = opts.slots ?? new Semaphore(6);
+  const slots = opts.slots ?? new TrialSlots(6);
   const costModel = opts.costModel ?? new CostModel(panel.models);
   const own = new BudgetPool(budget);
   const pools = [own, ...(opts.pools ?? [])];
@@ -661,6 +702,8 @@ export async function calibrate(taskDir: string, panel: FrozenPanel, budget: num
             },
             { trajectoryDir: store.trajectoryDir, attemptSlug: slug },
           ),
+          // A later try of this card is closer to its decision than a newer card's screen.
+          tryNo,
         );
         done = {
           ...rec,
@@ -880,7 +923,7 @@ export function ladderPriority(views: FamilyView[], frontier: Family): number {
 }
 
 export async function calibrateMany(taskDirs: string[], panel: FrozenPanel, opts: ManyOptions): Promise<CalibrationResult[]> {
-  const slots = new Semaphore(opts.concurrency);
+  const slots = new TrialSlots(opts.concurrency);
   const campaign = new BudgetPool(opts.totalBudget);
   if (opts.alreadySpent) campaign.adjust(opts.alreadySpent);
   const costModel = new CostModel(panel.models);

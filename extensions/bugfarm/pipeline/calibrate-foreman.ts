@@ -19,12 +19,12 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Calibrate, CalibrationOutcome, CalibrationPanel, CampaignBudget } from '../src/calibrate.js';
 import type { BoardSink } from './calibrate-board.ts';
-import { AttemptStore, BudgetPool, CostModel, attemptRow, bestCost, calibrate, panelDir, readTaskInfo, recoverInterrupted, rejectDetail } from './calibrate.ts';
-import type { AttemptRecord, CalibrationResult, GatewayContext } from './calibrate.ts';
+import { AttemptStore, BudgetPool, CostModel, TrialSlots, attemptRow, bestCost, calibrate, panelDir, readTaskInfo, recoverInterrupted, rejectDetail } from './calibrate.ts';
+import type { AttemptRecord, CalibrationResult, GatewayContext, Slots } from './calibrate.ts';
 import { SpendLog, readCampaignKey, readDotenv } from './calibrate-gateway.ts';
 import { loadFrozenPanel } from './calibrate-panel.ts';
 import type { FrozenPanel } from './calibrate-panel.ts';
-import { Semaphore, fileExists, isDir, log } from './lib/util.ts';
+import { fileExists, isDir, log } from './lib/util.ts';
 
 export interface ForemanCalibrateOptions {
   /** A frozen panel, or its id under `.work/calibration/panels/`. */
@@ -32,7 +32,7 @@ export interface ForemanCalibrateOptions {
   gateway: GatewayContext;
   board?: BoardSink;
   /** Trial slots shared by every task the foreman hands over (default 6). */
-  slots?: Semaphore;
+  slots?: Slots;
 }
 
 /** Entries of the foreman's panel that differ from the frozen panel's ladder models, as text. */
@@ -119,12 +119,12 @@ export function calibrationFromEnv(env: Record<string, string | undefined>, boar
     key,
     spendLog: meteringKey ? new SpendLog({ gatewayUrl: url, meteringKey, keyAlias: key.key_alias, sinceMs: key.created_at || Date.now() - 30 * 86_400_000 }) : undefined,
   };
-  return { panel, calibrate: foremanCalibrate({ panel, gateway, board, slots: new Semaphore(Number.isInteger(slots) && slots > 0 ? slots : 6) }) };
+  return { panel, calibrate: foremanCalibrate({ panel, gateway, board, slots: new TrialSlots(Number.isInteger(slots) && slots > 0 ? slots : 6) }) };
 }
 
 export function foremanCalibrate(opts: ForemanCalibrateOptions): Calibrate {
   const panel = typeof opts.panel === 'string' ? loadFrozenPanel(opts.panel) : opts.panel;
-  const slots = opts.slots ?? new Semaphore(6);
+  const slots = opts.slots ?? new TrialSlots(6);
   const costModel = new CostModel(panel.models);
   const pools = new Map<string, Promise<CampaignPool>>();
   let warned = false;
