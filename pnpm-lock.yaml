@@ -59,6 +59,7 @@ overrides:
   '@humanfs/node@<0.16.8': 0.16.8
   baseline-browser-mapping@>=2 <2.11.0: 2.11.0
   postcss-selector-parser@>=6 <6.1.5: 6.1.5
+  vitest@3.2.6>tinypool: 2.1.2
 
 importers:
 
@@ -5314,9 +5315,9 @@ packages:
     resolution: {integrity: sha512-j2Zq4NyQYG5XMST4cbs02Ak8iJUdxRM0XI5QyxXuZOzKOINmWurp3smXu3y5wDcJrptwpSjgXHzIQxR0omXljQ==}
     engines: {node: '>=12.0.0'}
 
-  tinypool@1.1.1:
-    resolution: {integrity: sha512-Zba82s87IFq9A9XmjiX5uZA/ARWDrB03OHlq+Vw1fSdt0I+4/Kutwy8BP4Y/y/aORMo61FQ0vIb5j44vSo5Pkg==}
-    engines: {node: ^18.0.0 || >=20.0.0}
+  tinypool@2.1.2:
+    resolution: {integrity: sha512-9YodfrxS9g9IbFr/KOjE5bAeJ0p61n3bW6mqvy0jtoeKd1kTW1Cxm0oulm6KX2lyM9Gl6WIe8nEbY7LWv5ZJww==}
+    engines: {node: ^20.0.0 || >=22.0.0}
 
   tinyrainbow@2.0.0:
     resolution: {integrity: sha512-op4nsTR47R6p0vMUUoYl/a+ljLFVtlfaXkLQmqfLR1qHma1h/ysYk4hEXZ880bf2CYgTskvTa/e196Vd5dDQXw==}
@@ -11353,7 +11354,7 @@ snapshots:
       fdir: 6.5.0(picomatch@4.0.5)
       picomatch: 4.0.5
 
-  tinypool@1.1.1: {}
+  tinypool@2.1.2: {}
 
   tinyrainbow@2.0.0: {}
 
@@ -11713,7 +11714,7 @@ snapshots:
       tinybench: 2.9.0
       tinyexec: 0.3.2
       tinyglobby: 0.2.15
-      tinypool: 1.1.1
+      tinypool: 2.1.2
       tinyrainbow: 2.0.0
       vite: 6.4.4(@types/node@22.19.15)(jiti@2.7.0)(yaml@2.8.3)
       vite-node: 3.2.4(@types/node@22.19.15)(jiti@2.7.0)(yaml@2.8.3)
@@ -11756,7 +11757,7 @@ snapshots:
       tinybench: 2.9.0
       tinyexec: 0.3.2
       tinyglobby: 0.2.15
-      tinypool: 1.1.1
+      tinypool: 2.1.2
       tinyrainbow: 2.0.0
       vite: 6.4.4(@types/node@22.19.15)(jiti@2.7.0)(yaml@2.9.0)
       vite-node: 3.2.4(@types/node@22.19.15)(jiti@2.7.0)(yaml@2.9.0)
@@ -11799,7 +11800,7 @@ snapshots:
       tinybench: 2.9.0
       tinyexec: 0.3.2
       tinyglobby: 0.2.15
-      tinypool: 1.1.1
+      tinypool: 2.1.2
       tinyrainbow: 2.0.0
       vite: 6.4.4(@types/node@24.13.3)(jiti@1.21.7)(yaml@2.9.0)
       vite-node: 3.2.4(@types/node@24.13.3)(jiti@1.21.7)(yaml@2.9.0)
@@ -11842,7 +11843,7 @@ snapshots:
       tinybench: 2.9.0
       tinyexec: 0.3.2
       tinyglobby: 0.2.15
-      tinypool: 1.1.1
+      tinypool: 2.1.2
       tinyrainbow: 2.0.0
       vite: 6.4.4(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.8.3)
       vite-node: 3.2.4(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.8.3)
@@ -11885,7 +11886,7 @@ snapshots:
       tinybench: 2.9.0
       tinyexec: 0.3.2
       tinyglobby: 0.2.15
-      tinypool: 1.1.1
+      tinypool: 2.1.2
       tinyrainbow: 2.0.0
       vite: 6.4.4(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0)
       vite-node: 3.2.4(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0)
