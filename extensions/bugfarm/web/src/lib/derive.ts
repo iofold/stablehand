@@ -9,6 +9,7 @@ import type {
   RulePayload,
 } from '../../../src/shared/board';
 import { modelFamily } from '../../../src/shared/board';
+import type { BatchLearning } from '../../../src/shared/learning';
 import { useBoard } from './store';
 
 export interface Item extends ItemPayload {
@@ -27,6 +28,8 @@ export interface Attempt extends AttemptPayload {
 export interface Batch extends BatchPayload {
   share: number | null;
   usdPerAccepted: number | null;
+  /** The learning loop's numbers for a finished batch, at the campaign's gate. */
+  learn: BatchLearning | null;
 }
 
 export interface Rule extends RulePayload {
@@ -113,15 +116,18 @@ export function deriveView(rows: Map<string, BoardRow>, firstSeen: Map<string, n
     .map((row) => {
       const share = batchShare(row.payload);
       const accepted = row.payload.accepted ?? 0;
+      const learn = (row.payload as { learning?: BatchLearning }).learning;
       return {
         ...row.payload,
         share,
         usdPerAccepted: accepted > 0 && typeof row.payload.cost_usd === 'number' ? row.payload.cost_usd / accepted : null,
+        learn: learn && typeof learn.decided === 'number' ? learn : null,
       };
     })
     .sort((a, b) => a.n - b.n);
 
   const rules: Rule[] = ofKind(all, 'rule')
+    .filter((row) => inCampaign(row.payload))
     .map((row) => ({ ...row.payload, key: row.key }))
     .sort((a, b) => b.batch_introduced - a.batch_introduced || a.key.localeCompare(b.key));
 
