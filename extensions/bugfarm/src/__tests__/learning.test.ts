@@ -246,7 +246,8 @@ class LearningFloor implements FloorApi {
       const rules = batch === '2'
         ? [{ kind: 'scout_filter', text: 'Skip fixes more than 300 days older than HEAD.', skip_if: { field: 'age_days', op: '>', value: 300 }, targets: 'no_fail_to_pass', expected_effect: 'no_fail_to_pass falls to 0.' }]
         : [{ kind: 'writer_rule', text: 'Describe what a user sees; never name a private helper.', targets: 'instruction_leaks_fix', expected_effect: 'No leak rejects.' }];
-      this.answers.push(await this.tools.handle('propose_rules', { summary: `batch ${Number(batch) - 1}`, rules }, this.req(turnId)));
+      // No summary on the second call: the recorded submission then carries summary null.
+      this.answers.push(await this.tools.handle('propose_rules', batch === '2' ? { summary: 'batch 1', rules } : { rules }, this.req(turnId)));
     } else {
       const row = await this.store.latest('item', input.tags.item);
       const leaky = String((row?.payload as ItemPayload | undefined)?.sha ?? '').startsWith('e');

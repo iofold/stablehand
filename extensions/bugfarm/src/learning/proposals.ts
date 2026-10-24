@@ -19,7 +19,7 @@ export const ProposalSchema = z.object({
 });
 
 export const ProposeRulesSchema = z.object({
-  summary: z.string().trim().max(2000).optional(),
+  summary: z.string().trim().max(2000).nullish(),
   rules: z.array(z.unknown()).max(MAX_RULES_PER_BATCH, `at most ${MAX_RULES_PER_BATCH} rule changes per batch`),
 });
 
