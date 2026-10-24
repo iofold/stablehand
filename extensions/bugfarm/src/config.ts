@@ -22,7 +22,7 @@ export interface BugfarmConfig {
   /** Bearer secret for the floor agents' HTTP tools. Empty turns the tools off. */
   toolsToken: string;
   /** Floor agents by role; the foreman finds them by name. */
-  agentNames: { scout: string; env_builder: string; writer: string };
+  agentNames: { scout: string; env_builder: string; writer: string; teacher: string };
   /** Concurrent pipeline jobs per kind. */
   checkConcurrency: number;
   controlsConcurrency: number;
@@ -55,10 +55,13 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     simSpeed: Number.isFinite(speed) && speed > 0 ? speed : 1,
     webDir: env.BUGFARM_WEB_DIR ?? null,
     toolsToken: env.BUGFARM_TOOLS_TOKEN ?? '',
+    // BUGFARM_AGENT_SUFFIX names a separate set of floor agents (`bugfarm seed --agent-suffix`), so
+    // two workers on one Stablehand never answer each other's tool calls.
     agentNames: {
-      scout: env.BUGFARM_SCOUT_AGENT ?? 'bugfarm-scout',
-      env_builder: env.BUGFARM_ENV_BUILDER_AGENT ?? 'bugfarm-env-builder',
-      writer: env.BUGFARM_WRITER_AGENT ?? 'bugfarm-writer',
+      scout: env.BUGFARM_SCOUT_AGENT ?? `bugfarm-scout${env.BUGFARM_AGENT_SUFFIX ?? ''}`,
+      env_builder: env.BUGFARM_ENV_BUILDER_AGENT ?? `bugfarm-env-builder${env.BUGFARM_AGENT_SUFFIX ?? ''}`,
+      writer: env.BUGFARM_WRITER_AGENT ?? `bugfarm-writer${env.BUGFARM_AGENT_SUFFIX ?? ''}`,
+      teacher: env.BUGFARM_TEACHER_AGENT ?? `bugfarm-teacher${env.BUGFARM_AGENT_SUFFIX ?? ''}`,
     },
     checkConcurrency: intFrom(env.BUGFARM_CHECK_CONCURRENCY, 3),
     controlsConcurrency: intFrom(env.BUGFARM_CONTROLS_CONCURRENCY, 2),

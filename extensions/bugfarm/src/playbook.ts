@@ -1,4 +1,5 @@
 import type { BoardRow, RulePayload } from './shared/board.js';
+import type { Predicate } from './shared/predicate.js';
 import type { UpsertInput } from './store/validate.js';
 
 /**
@@ -9,8 +10,10 @@ import type { UpsertInput } from './store/validate.js';
  * - `writer_rule`: how the Writer phrases an instruction;
  * - `env_recipe`: what the Env builder knows about building a repo's environment.
  *
- * Rules are added by hand for now (`bugfarm rule add`); the Teacher's learning loop will add and
- * revert them later. A rule with status `reverted` is kept for the record and never served.
+ * Rules come from `bugfarm seed` (starters), `bugfarm rule add` (by hand) and the Teacher, which
+ * proposes them after each batch (src/learning/). A new rule is on `trial` for one batch and is
+ * then kept or reverted on measurement. A rule with status `reverted` is kept for the record and
+ * never served. A Scout filter with `skip_if` is code: the worker drops the candidates it matches.
  */
 
 export const RULE_KINDS = ['scout_filter', 'writer_rule', 'env_recipe'] as const;
@@ -22,6 +25,10 @@ export interface PlaybookRule {
   text: string;
   /** Limits the rule to one repository (`owner/name`). */
   repo?: string;
+  /** `trial` while it is being measured, `kept` once it earned its place. */
+  status?: 'trial' | 'kept';
+  /** Scout filters: candidates matching this predicate are dropped by the worker. */
+  skip_if?: Predicate;
 }
 
 export interface RulesJson {
@@ -44,7 +51,14 @@ export async function loadPlaybook(store: PlaybookStore, repo?: string): Promise
     const payload = row.payload as RulePayload & { repo?: string };
     if (payload.simulated || payload.status === 'reverted' || !isRuleKind(payload.kind)) continue;
     if (repo && payload.repo && payload.repo !== repo) continue;
-    const rule: PlaybookRule = { id: row.key, kind: payload.kind, text: payload.text, ...(payload.repo ? { repo: payload.repo } : {}) };
+    const rule: PlaybookRule = {
+      id: row.key,
+      kind: payload.kind,
+      text: payload.text,
+      ...(payload.repo ? { repo: payload.repo } : {}),
+      ...(payload.status === 'trial' || payload.status === 'kept' ? { status: payload.status } : {}),
+      ...(payload.kind === 'scout_filter' && payload.skip_if ? { skip_if: payload.skip_if } : {}),
+    };
     if (payload.kind === 'scout_filter') rules.scout_filters.push(rule);
     else if (payload.kind === 'writer_rule') rules.writer_rules.push(rule);
     else rules.env_recipes.push(rule);

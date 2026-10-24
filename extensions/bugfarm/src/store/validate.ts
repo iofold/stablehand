@@ -119,7 +119,7 @@ const Job = z.looseObject({
 
 const Turn = z.looseObject({
   turn_id: z.string().min(1),
-  role: z.enum(['scout', 'env_builder', 'writer']),
+  role: z.enum(['scout', 'env_builder', 'writer', 'teacher']),
   agent_id: z.string().min(1),
   campaign: z.string().min(1),
   batch: Count,

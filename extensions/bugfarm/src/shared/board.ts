@@ -1,3 +1,6 @@
+import type { MeasuredEffect } from './learning.js';
+import type { Predicate } from './predicate.js';
+
 /**
  * The Bugfarm board model, shared by the worker and the web board.
  *
@@ -201,7 +204,7 @@ export interface JobPayload {
   [extra: string]: unknown;
 }
 
-export type FloorRole = 'scout' | 'env_builder' | 'writer';
+export type FloorRole = 'scout' | 'env_builder' | 'writer' | 'teacher';
 
 /** A floor agent's Stablehand turn, keyed by turn id. Tools find their item through it. */
 export interface TurnPayload {
@@ -210,7 +213,7 @@ export interface TurnPayload {
   agent_id: string;
   campaign: string;
   batch: number;
-  /** The tag `stage`: scout, env, write, review. */
+  /** The tag `stage`: scout, env, write, review, teach. */
   stage: string;
   /** The tag `item`: the item key, or a batch or repo key for turns that are not about one item. */
   item: string;
@@ -262,13 +265,19 @@ export interface RulePayload {
   batch_introduced: number;
   measured_batch?: number | null;
   status?: 'trial' | 'kept' | 'reverted';
-  effect?: {
-    /** Change in accepted share, in percentage points. */
-    accepted_share_pts?: number;
-    /** Change in dollars per accepted task. */
-    usd_per_accepted?: number;
-    summary?: string;
-  } | null;
+  /** Measured by the learning loop; the simulator writes only the first three fields. */
+  effect?: MeasuredEffect | null;
+  /** Limits the rule to one repository (`owner/name`). */
+  repo?: string;
+  /** The campaign that introduced it; its batches measure it. */
+  campaign?: string;
+  /** `starter`, `hand` or `teacher`. */
+  source?: string;
+  /** Scout filters: the candidates the worker drops, as a predicate over their features. */
+  skip_if?: Predicate | null;
+  /** The rejection reason the rule is meant to reduce, and what its author expected. */
+  targets?: string | null;
+  expected_effect?: string | null;
   simulated?: boolean;
   [extra: string]: unknown;
 }

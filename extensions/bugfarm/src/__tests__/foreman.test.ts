@@ -12,7 +12,7 @@ import { MemoryStore } from './memory-store.js';
 const REPO = 'fastapi/fastapi';
 const HEAD = 'a'.repeat(40);
 const SHAS = ['1111111111111111111111111111111111111111', '2222222222222222222222222222222222222222'];
-const AGENTS = { scout: 'bugfarm-scout', env_builder: 'bugfarm-env-builder', writer: 'bugfarm-writer' } as const;
+const AGENTS = { scout: 'bugfarm-scout', env_builder: 'bugfarm-env-builder', writer: 'bugfarm-writer', teacher: 'bugfarm-teacher' } as const;
 
 function config(): CampaignConfig {
   return { ...DEFAULT_CONFIG, repo: REPO, budget_tag: 'test-tag', batch_size: 2, writer_concurrency: 2 };
