@@ -17,6 +17,7 @@ A campaign is a repository, a number of batches, a candidate count per batch and
    - a **Writer turn** drafts an issue-style instruction that describes the symptom, then a second **review turn** checks it for leaks of the fix and rewrites it if needed. A deterministic leak check runs on every submission and once more at the end;
    - a **package job** writes the Harbor task, and a **controls job** runs the reference fix (must score 1) and doing nothing (must score 0) (**Controls ✓**);
    - the card is handed to calibration with `calibrate(taskDir, panel, budget)` and waits in **Calibrating**. Calibration is a separate module; until it lands the hand-off records nothing.
+4. **Learning**, when the batch is done and before the next batch's Scout turn: the batch's numbers go on the curve, the rules that were on trial in it are kept or reverted on measurement, and the **Teacher** proposes rules from its rejects for the next batch. See [How it learns](#how-it-learns).
 
 Every turn starts through the Stablehand API with the tags `{campaign, batch, stage, item}`, so spend lands on the campaign's budget and `GET /api/turns?tag=` finds it. The foreman waits with `waitForTurn` and adds each turn's `usage.cost` to its card, its batch and the campaign.
 
@@ -29,12 +30,34 @@ Every turn starts through the Stablehand API with the tags `{campaign, batch, st
 | `bugfarm-scout` | pi-agent, gpt-5.4-mini, $0.50 per turn | GitHub only (`api.github.com`, `github.com`, `codeload.github.com`) | `submit_candidates`, plus `agents/scout/mine_prs.py` in its workspace |
 | `bugfarm-env-builder` | claude-agents, claude-sonnet-5, $2 per turn | none | `start_job`, `job_status` |
 | `bugfarm-writer` | claude-agents, claude-sonnet-5, $0.60 per turn | none | `submit_instruction` |
+| `bugfarm-teacher` | claude-agents, claude-sonnet-5, $0.60 per turn | none | `propose_rules` |
 
 The manifests are in `agents/*.yaml`. Each turn's spend cap is the manifest's `limits.maxCostUsd`; the campaign's cap is a budget policy on its `campaign` tag.
 
 ### The playbook
 
-`rule` rows in the board store, rendered as `rules.json` into every floor turn's task: `scout_filter` rules for the Scout, `writer_rule` rules for the Writer and `env_recipe` rules for the Env builder. `bugfarm seed` adds a few starter rules; add more by hand with `bugfarm rule add`. A rule whose status is `reverted` is kept but no longer served. The learning loop that adds and measures rules comes later.
+`rule` rows in the board store, rendered as `rules.json` into every floor turn's task: `scout_filter` rules for the Scout, `writer_rule` rules for the Writer and `env_recipe` rules for the Env builder. `bugfarm seed` adds a few starter rules (`--no-starter-rules` skips them); add more by hand with `bugfarm rule add`; the Teacher adds the rest. A rule whose status is `reverted` is kept but no longer served.
+
+A Scout filter can carry `skip_if`, a predicate over the candidate's features. That makes it code rather than advice: `submit_candidates` drops every candidate it matches before the candidate becomes a card, and tells the Scout which, so it can send replacements.
+
+```json
+{ "all": [ { "field": "age_days", "op": ">", "value": 300 }, { "field": "title", "op": "matches", "value": "\\bv1\\b" } ] }
+```
+
+A condition is `{field, op, value}`; `all`, `any` and `not` combine them, up to 8 conditions. Features (`src/shared/predicate.ts`): `age_days` (fix to HEAD), `fix_date`, `files`, `source_file_count`, `test_file_count`, `source_files`, `test_files`, `other_files`, `non_test_lines`, `lines_added`, `lines_deleted`, `test_lines`, `title`, `title_prefix` (a leading emoji or `:code:`), `labels`, `has_issue`, `pr_body_chars`, `issue_body_chars` and `scout_rank`. Numbers take `< <= > >= == !=`, strings `== != matches contains`, lists `contains any_matches all_match none_match`; regexes are case-insensitive. A condition on a feature that is missing is unknown, and a filter only drops a candidate when its predicate is certainly true. The worker computes the git features from its own clone, so they come out the same every time.
+
+## How it learns
+
+After each batch the foreman hands the batch to the learning loop (`src/learning/`), before the next batch's Scout turn:
+
+1. **Features.** Every card gets its `features` (as above).
+2. **The curve.** The batch row gets `learning`: candidates, decided, accepted, accepted share (accepted ÷ decided), spend and dollars per accepted task, the rejection reasons with counts, what the filters dropped, and the rules the batch ran with.
+   - *Accepted* is measured at the campaign's gate. At `calibration`, a candidate counts when calibration accepts it, and calibration's spend counts. At `controls`, it counts when it passes every check before calibration: fail→pass, the leak review, packaging, and the oracle and nop controls. `--learn-gate auto` (the default) picks `calibration` when the first batch has calibration verdicts and `controls` otherwise, and keeps that choice for the campaign.
+   - Spend is the floor agents' turns, including the Teacher turn that wrote the batch's rules. The one-off environment build is recorded but left out, since it lands on whichever batch first needs the environment.
+3. **Measurement.** Each rule that was on trial in this batch is compared with the batch before. It is **kept** when the reason it targets falls (as a share of decided candidates) and the accepted share rises or the dollars per accepted task fall. Otherwise it is **reverted**: it stays in the store, marked, and is no longer served. The rule row records the verdict and the evidence: both deltas, the target's count before and after, both batches' numbers, and how many candidates a filter dropped. Rules on trial together share one measurement; their targets tell them apart.
+4. **The Teacher**, unless this was the last batch or nothing was rejected. Its task holds the batch's cards as data (outcome, reason, detail, features, the Writer's leak-check results), the curve so far, and the playbook with what earlier rules did. It calls `propose_rules` with at most three rules. Each has a kind, its text, a `skip_if` for a Scout filter, the reason it `targets` and its `expected_effect`. The tool checks every rule against the batch and dry-runs each filter on its cards. It refuses a rule whose target did not occur, a filter that would not have dropped any of the rejects it targets, a filter that would drop more accepted cards than rejects, and a repeat of an existing or reverted rule. What passes goes on trial in the next batch. The Teacher's turn is tagged with that next batch, so its cost counts against the rules it wrote.
+
+Reflections are hypotheses: a prior factory's reflections blamed the same cause six times out of six, and an A/B test showed no effect. So a rule earns its place only by measurement, and batches of about ten are noisy. One card moves the share by ten points, so the Learning tab shows counts next to every percentage. `--no-learning` turns the loop off for a campaign.
 
 ### Worker tools
 
@@ -44,8 +67,9 @@ The floor agents reach the worker through Stablehand HTTP tools, which the orche
 |---|---|---|
 | `POST /tools/v1/start_job` | `{kind, args}`; kinds `build_env` `{repo, dockerfile}`, `check_candidate` `{repo, sha}`, `package_task` `{repo, sha, instruction}`, `run_controls` `{repo, sha}` | `{job_id, status, progress}`. The same request twice is the same job. |
 | `POST /tools/v1/job_status` | `{job_id, wait_seconds}` (up to 240) | Waits for the job, then `{status, progress, result \| error}` |
-| `POST /tools/v1/submit_candidates` | `{candidates: [{pr, sha, title, …}]}` | Records the Scout's list on its turn |
+| `POST /tools/v1/submit_candidates` | `{candidates: [{pr, sha, title, labels, …}]}` | Records the Scout's list on its turn, minus what the playbook's `skip_if` filters drop; says which were dropped |
 | `POST /tools/v1/submit_instruction` | `{instruction}` | Records the Writer's text and answers `{clean, leaks}` |
+| `POST /tools/v1/propose_rules` | `{summary, rules: [{kind, text, skip_if?, targets, expected_effect}]}`, at most 3 | Teacher. Records the rules that pass and answers with a report per rule (errors, warnings, the filter's dry run) |
 
 Jobs are `job` rows in the board store: their progress shows on the card they belong to, and a restarted worker resumes the ones that were queued or running.
 
@@ -68,7 +92,7 @@ Every candidate is a card that moves across the board as its checks finish:
 Three more tabs:
 
 - **Leaderboard:** each agent and model pair, ranked by pass rate on the accepted tasks, with a 95% interval and dollars per solved task.
-- **Learning:** accepted share and dollars per accepted task, batch by batch. Below the charts, each rule the reviewer added, with its measured effect and whether it was kept or reverted.
+- **Learning:** accepted share and dollars per accepted task, batch by batch, with the counts under each bar. Below the charts, each rule the Teacher (or a person) added: its predicate, the reason it targets, whether it was kept, reverted or is on trial, and its measured effect. Then the rejection reasons by batch, so you can see which fell.
 - **Ledger:** every attempt, with model, result, time and cost.
 
 The board is dark by default and has a light theme. It is sized for a 1920×1080 screen capture and works on a phone, where the columns become a swipeable row. It honours the system's reduced-motion setting.
@@ -165,7 +189,8 @@ For page work, `pnpm --filter @stablehand-ext/bugfarm dev:web` serves the page w
 | `BUGFARM_WEB_DIR` | `dist/web` | Where the built board page is. |
 | `BUGFARM_TOOLS_TOKEN` | empty | Bearer secret the floor agents' HTTP tools send. Empty turns the tools off. |
 | `BUGFARM_FOREMAN` | `1` | `0` runs the board and tools without driving campaigns. The foreman also needs `STABLEHAND_BASE_URL` and `STABLEHAND_API_KEY`. |
-| `BUGFARM_SCOUT_AGENT` / `BUGFARM_ENV_BUILDER_AGENT` / `BUGFARM_WRITER_AGENT` | `bugfarm-scout` / `bugfarm-env-builder` / `bugfarm-writer` | Floor agents, by name. |
+| `BUGFARM_SCOUT_AGENT` / `BUGFARM_ENV_BUILDER_AGENT` / `BUGFARM_WRITER_AGENT` / `BUGFARM_TEACHER_AGENT` | `bugfarm-scout` / `bugfarm-env-builder` / `bugfarm-writer` / `bugfarm-teacher` | Floor agents, by name. |
+| `BUGFARM_AGENT_SUFFIX` | empty | Appended to the default floor-agent names, for a second worker on the same Stablehand with its own agents (`bugfarm seed --agent-suffix` creates them). |
 | `BUGFARM_CHECK_CONCURRENCY` / `BUGFARM_CONTROLS_CONCURRENCY` | `3` / `2` | Check and controls jobs at once. |
 | `BUGFARM_WORK_DIR` | `pipeline/.work` | Clones, trees, results and Harbor tasks. |
 | `BUGFARM_MAX_CONTAINERS` | `4` | Containers the checks may run at once. |
@@ -214,10 +239,10 @@ The response is `{ "cursor": 1234, "results": [{ "kind", "key", "id", "changed" 
 | Kind | Key | Fields |
 |---|---|---|
 | `campaign` | campaign id | `name`, `repo`, `cap_usd`, `spend_usd`, `started_at`, `unattended_since`, `recovered_from_crash`, `batch` (current), `status` (`running`, `paused`, `recovering`, `done`), `finished_at` |
-| `batch` | batch number | `n` (required), `candidates`, `accepted`, `rejected`, `cost_usd`, `accepted_share` (optional; otherwise computed), `started_at`, `finished_at`, `status` (`running`, `done`) |
+| `batch` | batch number | `n` (required), `candidates`, `accepted`, `rejected`, `cost_usd`, `accepted_share` (optional; otherwise computed), `started_at`, `finished_at`, `status` (`running`, `done`). The learning loop adds `learning` (see [How it learns](#how-it-learns)): `gate`, `candidates`, `decided`, `accepted`, `share`, `cost_usd`, `usd_per_accepted`, `reasons`, `filtered`, `filtered_by`, `rules_served`, `setup_usd`, `teacher_usd`, `calibration_usd`, `teacher` |
 | `item` | e.g. `repo@sha` | `stage` (required): `mined`, `env_ready`, `fail_pass`, `controls`, `calibrating`, `accepted`, `rejected`, `published`. Also `reject_reason`, `reject_detail`, `repo`, `sha`, `title`, `url`, `batch`, `diff` (unified diff), `diff_stats` (`files`, `additions`, `deletions`), `failing_tests` (ids), `failing_output`, `difficulty` (`{ family: { passes, attempts } }`), `cost_usd`, `stage_times` (`{ stage: ms }`) |
 | `attempt` | e.g. `item:harness:model:try` | `item`, `harness`, `model`, `try`, `result` (`pass`, `fail`, `error`) are required. Also `family`, `cost_usd`, `seconds`, `phase` (`calibration`, `benchmark`), `at` |
-| `rule` | rule id | `text` and `batch_introduced` are required. Also `kind` (`scout_filter`, `writer_rule`, `env_recipe`), `repo` (limits it to one repository), `status` (`trial`, `kept`, `reverted`), `measured_batch`, `effect` (`accepted_share_pts`, `usd_per_accepted`, `summary`) |
+| `rule` | rule id | `text` and `batch_introduced` are required. Also `kind` (`scout_filter`, `writer_rule`, `env_recipe`), `repo` (limits it to one repository), `status` (`trial`, `kept`, `reverted`), `measured_batch`, `effect` (`accepted_share_pts`, `usd_per_accepted`, `summary`; the learning loop adds `target_before`, `target_after`, `before`, `after`, `checks`, `filtered`, `measured_with`), `skip_if`, `targets`, `expected_effect`, `campaign`, `source` (`starter`, `hand`, `teacher`) |
 | `cell` | `harness:model` | `harness`, `model`, `solved`, `attempts` and `pass_at_1` (0–1) are required. Also `family`, `tasks`, `ci_low`, `ci_high`, `usd_per_solve`, `cost_usd` |
 
 The worker also keeps its own bookkeeping in the store: `job` (a pipeline job: `kind`, `status`, `args`, `progress`, `result`), `turn` (a floor agent's turn, keyed by turn id: role, tags, status, cost, last submission) and `env` (a repo's environment image, keyed by repo). Items the foreman writes also carry `campaign`, `activity` (what is happening to the card now), `instruction`, `pr`, `issue` and `fix_date`.
