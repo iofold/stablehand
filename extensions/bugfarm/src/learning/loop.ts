@@ -285,7 +285,7 @@ export class LearningLoop {
       const result = await end.runTeacherTurn(() => this.teacherTaskFor(end, learning));
       const proposal = this.proposalFrom(result.submission);
       const context = await this.reviewContext(id, n, end.config.repo);
-      const reports = reviewProposals({ rules: proposal.rules, batch: n, reasons: context.reasons, cards: context.cards, existing: context.existing });
+      const reports = reviewProposals({ rules: proposal.rules, batch: n, reasons: context.reasons, cards: context.cards, existing: context.existing, envBuilt: context.envBuilt });
       const ok = reports.filter((report): report is ProposalReport & { rule: Proposal } => report.ok && Boolean(report.rule)).slice(0, MAX_RULES_PER_BATCH);
       const rows: UpsertInput[] = ok.map((report, index) => ({
         kind: 'rule',
@@ -383,7 +383,7 @@ export class LearningLoop {
   // For the HTTP tools
 
   /** The batch a Teacher turn learns from: its turn is tagged with the next batch. */
-  private async reviewContext(id: string, n: number, repo: string): Promise<{ reasons: Record<string, number>; cards: ProposalCard[]; existing: ExistingRule[] }> {
+  private async reviewContext(id: string, n: number, repo: string): Promise<{ reasons: Record<string, number>; cards: ProposalCard[]; existing: ExistingRule[]; envBuilt: string | null }> {
     const learning = (await this.payload<{ learning?: BatchLearning }>('batch', `${id}:${n}`))?.learning;
     const gate = learning?.gate ?? 'controls';
     const items = await this.rows<LearningItem>('item', (p) => p.campaign === id && p.batch === n);
@@ -393,7 +393,9 @@ export class LearningLoop {
     });
     const existing: ExistingRule[] = (await this.rows<RulePayload>('rule', (p) => !p.simulated && (!p.repo || p.repo === repo)))
       .map(({ key, payload }) => ({ id: key, kind: payload.kind, text: payload.text, status: payload.status, skip_if: payload.skip_if ?? null }));
-    return { reasons: learning?.reasons ?? {}, cards, existing };
+    const campaign = await this.payload<{ env?: { state?: string; tag?: string } | null }>('campaign', id);
+    const envBuilt = campaign?.env?.state === 'ready' ? campaign.env.tag ?? repo : null;
+    return { reasons: learning?.reasons ?? {}, cards, existing, envBuilt };
   }
 
   /** `propose_rules`: check the Teacher's rules against the batch it learns from. */
@@ -407,7 +409,7 @@ export class LearningLoop {
     const repo = campaign?.config?.repo ?? '';
     const n = turn.batch - 1;
     const context = await this.reviewContext(turn.campaign, n, repo);
-    const reports = reviewProposals({ rules: parsed.data.rules, batch: n, reasons: context.reasons, cards: context.cards, existing: context.existing });
+    const reports = reviewProposals({ rules: parsed.data.rules, batch: n, reasons: context.reasons, cards: context.cards, existing: context.existing, envBuilt: context.envBuilt });
     const ok = reports.filter((report) => report.ok && report.rule).map((report) => report.rule as Proposal);
     const failed = reports.filter((report) => !report.ok);
     const message = parsed.data.rules.length === 0

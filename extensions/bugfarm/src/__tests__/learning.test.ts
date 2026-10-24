@@ -182,6 +182,12 @@ describe('proposal review', () => {
     expect(reports[2].errors[0]).toContain('reverted on measurement');
     expect(reports[3].ok).toBe(false);
   });
+
+  it('refuses an env recipe once the campaign reuses a built environment', () => {
+    const rule = { kind: 'env_recipe', text: 'Install the core version the commit pins.', targets: 'no_fail_to_pass', expected_effect: 'Fewer drift rejects.' };
+    expect(reviewProposals({ ...base, rules: [rule] })[0].ok).toBe(true);
+    expect(reviewProposals({ ...base, rules: [rule], envBuilt: 'bugfarm/env-x:1' })[0].errors[0]).toContain('cannot change the next batch');
+  });
 });
 
 // ---------------------------------------------------------------------------------------------

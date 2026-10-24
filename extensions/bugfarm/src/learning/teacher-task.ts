@@ -85,6 +85,8 @@ export function teacherTask(input: TeacherTaskInput): string {
     'Predicate shape: a condition {"field": ..., "op": ..., "value": ...}, or {"all": [...]}, {"any": [...]}, {"not": {...}}; at most 8 conditions. Regex ops (matches, any_matches, all_match, none_match) are case-insensitive. Example:',
     fence('json', JSON.stringify({ all: [{ field: 'age_days', op: '>', value: 300 }, { field: 'title', op: 'matches', value: '\\bv1\\b' }] })),
     '',
+    'What reaches batch ' + (input.batch + 1) + ': scout_filter rules (the Scout, and skip_if as code) and writer_rule rules (every Writer turn). An env_recipe reaches only the Env builder, which does not run again in this campaign: the environment is built and reused, so propose none. A failure that only a pipeline change could fix needs no rule; say so in the summary.',
+    '',
     `Call propose_rules once with {"summary": "...", "rules": [...]}. It checks each rule against batch ${input.batch} and tells you what a filter would have dropped; fix what it rejects and call it again with the full list (the last call counts). Submit an empty list if nothing in this batch is worth a rule.`,
   ].join('\n');
 }

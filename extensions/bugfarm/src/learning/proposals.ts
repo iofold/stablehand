@@ -105,6 +105,12 @@ export function reviewProposals(opts: {
   reasons: Record<string, number>;
   cards: ProposalCard[];
   existing: ExistingRule[];
+  /**
+   * Env recipes reach only the Env builder, which runs when a repo's environment is built. Set
+   * when the campaign's environment is built and every later batch reuses it, so a recipe could
+   * not change the next batch and its trial would measure noise.
+   */
+  envBuilt?: string | null;
 }): ProposalReport[] {
   const seenText = new Map<string, ExistingRule>();
   const seenPredicate = new Map<string, ExistingRule>();
@@ -122,6 +128,9 @@ export function reviewProposals(opts: {
     }
     const input = parsed.data;
     const rule: Proposal = { kind: input.kind, text: input.text, targets: input.targets, expected_effect: input.expected_effect };
+    if (input.kind === 'env_recipe' && opts.envBuilt) {
+      report.errors.push(`kind: an env_recipe only reaches the Env builder, and this campaign's environment (${opts.envBuilt}) is already built and reused by every later batch, so it cannot change the next batch. Propose a scout_filter or a writer_rule instead, or nothing.`);
+    }
     if ((opts.reasons[input.targets] ?? 0) === 0) {
       report.errors.push(`targets: no card in batch ${opts.batch} was rejected for ${input.targets}. Target one that was: ${reasonList}.`);
     }
