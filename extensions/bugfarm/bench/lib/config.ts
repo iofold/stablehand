@@ -41,6 +41,8 @@ export interface CellSpec {
   agent_kwargs?: Record<string, unknown>;
   /** Shown on the leaderboard and in the dataset card. */
   notes?: string[];
+  /** At most this many of the cell's trials at once (a provider's rate limit). Scheduling only: not hashed. */
+  max_concurrent?: number;
 }
 
 export interface CellsConfig {

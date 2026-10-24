@@ -149,8 +149,8 @@ function init(args: Args): void {
   for (const c of cells) {
     const old = existing.cells.find((x) => x.id === c.id);
     if (old && old.sha !== c.sha) throw new Error(`cell ${c.id} changed since bench ${id} was frozen (${old.sha} -> ${c.sha}); give it a new id or start a new bench`);
-    // Notes and labels are display only (not hashed): refresh them.
-    if (old) Object.assign(old, { notes: c.notes, harness_label: c.harness_label });
+    // Notes, labels and per-cell concurrency do not change what is measured (not hashed): refresh them.
+    if (old) Object.assign(old, { notes: c.notes, harness_label: c.harness_label, max_concurrent: c.max_concurrent });
     if (!old) {
       existing.cells.push(c);
       added.push(c.id);
@@ -256,7 +256,7 @@ async function doReconcile(args: Args): Promise<void> {
   const s = loadSettings();
   const board = boardFor(def.id, s.boardUrl, s.boardToken);
   const all = store.all();
-  await board.write([...def.cells.map((c) => cellRow(def, c, statsFor(def, c, all))), ...all.filter((a) => a.status === 'done').map(attemptRow)]);
+  await board.write([...def.cells.map((c) => cellRow(def, c, all)), ...all.filter((a) => a.status === 'done').map(attemptRow)]);
   console.log(JSON.stringify(r, null, 2));
 }
 
@@ -275,7 +275,7 @@ async function boardSync(args: Args): Promise<void> {
   if (!s.boardUrl || !s.boardToken) throw new Error('board-sync needs BUGFARM_URL and BUGFARM_INGEST_TOKEN');
   const store = new AttemptStore(def.id);
   const all = store.all();
-  const rows = [...def.cells.map((c) => cellRow(def, c, statsFor(def, c, all))), ...all.filter((a) => a.status === 'done').map(attemptRow)];
+  const rows = [...def.cells.map((c) => cellRow(def, c, all)), ...all.filter((a) => a.status === 'done').map(attemptRow)];
   await boardFor(def.id, s.boardUrl, s.boardToken).write(rows);
   console.log(`sent ${rows.length} rows`);
 }

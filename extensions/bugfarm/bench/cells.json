@@ -23,7 +23,7 @@
     { "id": "claude-agents/claude-sonnet-5", "agent": "stablehand", "harness": "claude-agents", "model": "claude-sonnet-5", "est_attempt_usd": 0.6 },
     { "id": "pi/gpt-6-luna", "agent": "stablehand", "harness": "pi", "model": "gpt-6-luna", "est_attempt_usd": 0.05 },
     { "id": "pi/gpt-5.4-mini", "agent": "stablehand", "harness": "pi", "model": "gpt-5.4-mini", "est_attempt_usd": 0.3 },
-    { "id": "pi/cf-kimi-k2.7-code", "agent": "stablehand", "harness": "pi", "model": "cf-kimi-k2.7-code", "est_attempt_usd": 0.3 },
+    { "id": "pi/cf-kimi-k2.7-code", "agent": "stablehand", "harness": "pi", "model": "cf-kimi-k2.7-code", "est_attempt_usd": 0.3, "max_concurrent": 2 },
     { "id": "terminus-2/claude-sonnet-5", "agent": "terminus-2", "model": "claude-sonnet-5", "est_attempt_usd": 0.5 },
     { "id": "terminus-2/gpt-6-luna", "agent": "terminus-2", "model": "gpt-6-luna", "est_attempt_usd": 0.02 },
     {

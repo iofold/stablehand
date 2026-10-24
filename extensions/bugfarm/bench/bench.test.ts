@@ -258,3 +258,15 @@ describe('resuming a killed run', () => {
     expect(s.counted(cell.id)).toHaveLength(1);
   });
 });
+
+describe('provider failures', () => {
+  it('re-runs a try the provider or the environment failed, but not one the agent lost', () => {
+    const base = { status: 'done' as const, result: 'fail' as const } as import('./lib/store.ts').BenchAttempt;
+    expect(runner.providerFailure({ ...base, exception: 'NonZeroAgentExitCodeError: Stablehand turn x ended in ERROR: OpenAI API error (429): {"message":"litellm.RateLimitError: rate limiting"}' })).toMatch(/^provider: /);
+    expect(runner.providerFailure({ ...base, result: 'error', exception: 'no verifier reward' })).toMatch(/^provider or environment/);
+    expect(runner.providerFailure({ ...base, exception: 'NonZeroAgentExitCodeError: ended in ERROR: Stopped: this run reached its $1.50 spend cap' })).toBeNull();
+    expect(runner.providerFailure({ ...base, exception: 'AgentTimeoutError: Agent execution timed out after 1200.0 seconds' })).toBeNull();
+    expect(runner.providerFailure({ ...base })).toBeNull();
+    expect(runner.providerFailure({ ...base, result: 'pass', exception: '429' })).toBeNull();
+  });
+});

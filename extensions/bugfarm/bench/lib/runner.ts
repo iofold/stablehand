@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { cleanupAttempt } from '../../pipeline/calibrate-harbor.ts';
 import { isDir, log } from '../../pipeline/lib/util.ts';
-import { attemptRow, cellRow, statsFor } from './board.ts';
+import { attemptRow, cellRow } from './board.ts';
 import type { BoardSink } from './board.ts';
 import { cellSlug } from './config.ts';
 import type { ResolvedCell } from './config.ts';
@@ -23,6 +23,24 @@ import { api, searchTurns, settle } from './spend.ts';
 import type { PricingContext } from './spend.ts';
 import { benchDir, bestCost } from './store.ts';
 import type { AttemptStore, BenchAttempt, BenchDefinition } from './store.ts';
+
+/** How many times one try may run when the provider or the environment, not the agent, fails it. */
+export const MAX_EXECUTIONS = 3;
+
+const PROVIDER_FAILURE = /\b429\b|rate.?limit|throttl|RateLimitError|\b50[234]\b|overloaded|ServiceUnavailable|InternalServerError|ECONNRESET|ECONNREFUSED|model_gateway_unavailable|service "main" is not running|DockerException|docker compose .* failed/i;
+
+/**
+ * Why a finished try should not count against its agent, or null when it should. A try with no
+ * verifier reward never got graded; a try whose agent stopped on a provider error (a rate limit, a
+ * 5xx) or a broken container never got a fair run. A per-try spend cap or an agent timeout is the
+ * agent's own outcome and counts.
+ */
+export function providerFailure(a: BenchAttempt): string | null {
+  if (a.status !== 'done' || a.result === 'pass') return null;
+  if (a.result === 'error') return `provider or environment: no verifier reward${a.exception ? ` (${a.exception.slice(0, 160)})` : ''}`;
+  if (a.exception && PROVIDER_FAILURE.test(a.exception) && !/spend cap|AgentTimeoutError/i.test(a.exception)) return `provider: ${a.exception.slice(0, 200)}`;
+  return null;
+}
 
 export interface RunOptions {
   concurrency: number;
@@ -156,16 +174,27 @@ export async function runBench(def: BenchDefinition, store: AttemptStore, env: L
   }
 
   const inflight = new Map<string, Slot>();
+  const queue: Array<{ cell: ResolvedCell; task: string; tryN: number }> = [];
   const slotKey = (cell: string, task: string, tryN: number) => `${cell}|${task}|${tryN}`;
   const publishCell = async (cell: ResolvedCell) => {
     const all = store.all();
     const running = [...inflight.values()].filter((s) => s.cell.id === cell.id).length;
-    await board.write([cellRow(def, cell, statsFor(def, cell, all), running)]);
+    await board.write([cellRow(def, cell, all, running)]);
   };
   const spent = () => store.all().filter((a) => a.status !== 'running').reduce((s, a) => s + bestCost(a), 0);
   const reservedTotal = () => [...inflight.values()].reduce((s, x) => s + x.reserved, 0);
 
   const complete = async (slot: Slot, finished: BenchAttempt) => {
+    const why = providerFailure(finished);
+    if (why && finished.execution < MAX_EXECUTIONS) {
+      store.save(finished);
+      store.voidAttempt(finished, why);
+      summary.voided++;
+      log('bench', `${finished.job_name}: ${why.slice(0, 160)}; voided, the try runs again`);
+      queue.unshift({ cell: slot.cell, task: finished.task, tryN: finished.try });
+      await publishCell(slot.cell);
+      return;
+    }
     store.save(finished);
     costs.observe(finished.cell, bestCost(finished));
     summary.finished++;
@@ -212,13 +241,17 @@ export async function runBench(def: BenchDefinition, store: AttemptStore, env: L
   for (const cell of cells) await publishCell(cell);
 
   // --- The queue: try by try, task by task, every cell, so a budget stop leaves cells even -------
-  const queue: Array<{ cell: ResolvedCell; task: string; tryN: number }> = [];
   for (let tryN = 1; tryN <= k; tryN++) {
     for (const task of def.tasks) {
       for (const cell of cells) {
         if (inflight.has(slotKey(cell.id, task.name, tryN))) continue;
         const rec = store.get(cell.id, task.name, tryN);
-        if (rec?.status === 'done') continue;
+        const why = rec ? providerFailure(rec) : null;
+        if (rec && why && rec.execution < MAX_EXECUTIONS && !opts.plan) {
+          store.voidAttempt(rec, why);
+          summary.voided++;
+          log('bench', `${rec.job_name}: ${why.slice(0, 120)}; voided, the try runs again`);
+        } else if (rec?.status === 'done') continue;
         queue.push({ cell, task: task.name, tryN });
       }
     }
@@ -249,7 +282,8 @@ export async function runBench(def: BenchDefinition, store: AttemptStore, env: L
       }
     }
     while (!stopping && inflight.size < opts.concurrency && queue.length) {
-      const idx = queue.findIndex((q) => spent() + reservedTotal() + costs.estimate(q.cell) * (1 + opts.reserveFactor) <= opts.budgetUsd);
+      const busy = (cell: ResolvedCell) => [...inflight.values()].filter((s) => s.cell.id === cell.id).length;
+      const idx = queue.findIndex((q) => busy(q.cell) < (q.cell.max_concurrent ?? Infinity) && spent() + reservedTotal() + costs.estimate(q.cell) * (1 + opts.reserveFactor) <= opts.budgetUsd);
       if (idx < 0) break;
       const [q] = queue.splice(idx, 1);
       const prior = store.all().filter((a) => a.cell === q.cell.id && a.task === q.task && a.try === q.tryN);

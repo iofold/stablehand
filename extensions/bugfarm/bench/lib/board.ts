@@ -57,14 +57,22 @@ export function statsFor(def: BenchDefinition, cell: ResolvedCell, attempts: Ben
   );
 }
 
+/** Executions voided because the model provider or the environment failed, not the agent. */
+export function providerRetries(cell: ResolvedCell, all: BenchAttempt[]): number {
+  return all.filter((a) => a.cell === cell.id && a.status === 'void' && (a.void_reason ?? '').startsWith('provider')).length;
+}
+
 /** The cell's own notes plus what the numbers alone don't say. Progress is in `attempts` / `planned_attempts`. */
-export function cellNotes(cell: ResolvedCell, s: CellStats): string[] {
+export function cellNotes(cell: ResolvedCell, s: CellStats, retries = 0): string[] {
   const notes = [...cell.notes];
+  if (retries) notes.push(`${retries} ${retries === 1 ? 'try' : 'tries'} hit a provider or environment failure (for example a rate limit) and ran again; their spend is in the ledger, not in this row.`);
   if (s.errors) notes.push(`${s.errors} ${s.errors === 1 ? 'try' : 'tries'} errored and count as unsolved.`);
   return notes;
 }
 
-export function cellRow(def: BenchDefinition, cell: ResolvedCell, s: CellStats, running = 0): BoardRow {
+export function cellRow(def: BenchDefinition, cell: ResolvedCell, all: BenchAttempt[], running = 0): BoardRow {
+  const s = statsFor(def, cell, all);
+  const retries = providerRetries(cell, all);
   const planned = def.tasks.length * def.k;
   return {
     kind: 'cell',
@@ -100,7 +108,8 @@ export function cellRow(def: BenchDefinition, cell: ResolvedCell, s: CellStats, 
       errors: s.errors,
       median_seconds: s.median_seconds,
       usd_per_attempt: s.usd_per_attempt,
-      notes: cellNotes(cell, s),
+      notes: cellNotes(cell, s, retries),
+      provider_retries: retries,
       task_set: { kind: def.task_set.kind, label: def.task_set.label, note: def.task_set.note ?? null },
       ci_method: 'bootstrap over tasks, 10,000 resamples, 95%',
       updated_at: Date.now(),
