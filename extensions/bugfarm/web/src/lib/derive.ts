@@ -38,6 +38,7 @@ export interface Rule extends RulePayload {
 
 export interface Cell extends CellPayload {
   key: string;
+  rowId: number;
   family: string;
 }
 
@@ -132,7 +133,7 @@ export function deriveView(rows: Map<string, BoardRow>, firstSeen: Map<string, n
     .sort((a, b) => b.batch_introduced - a.batch_introduced || a.key.localeCompare(b.key));
 
   const cells: Cell[] = ofKind(all, 'cell')
-    .map((row) => ({ ...row.payload, key: row.key, family: row.payload.family ?? modelFamily(row.payload.model) }))
+    .map((row) => ({ ...row.payload, key: row.key, rowId: row.id, family: row.payload.family ?? modelFamily(row.payload.model) }))
     .sort((a, b) => b.pass_at_1 - a.pass_at_1 || (a.usd_per_solve ?? Infinity) - (b.usd_per_solve ?? Infinity));
 
   const simulated = all.some((row) => (row.payload as { simulated?: boolean }).simulated === true);

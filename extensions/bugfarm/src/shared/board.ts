@@ -295,6 +295,22 @@ export interface CellPayload {
   usd_per_solve?: number | null;
   cost_usd?: number;
   simulated?: boolean;
+  /** The benchmark run this row belongs to (`bench/`); the leaderboard shows one run at a time. */
+  bench?: string;
+  campaign?: string;
+  repo?: string;
+  /** Who ran the trials, in plain words: "Stablehand claude-agents", "Harbor terminus-2". */
+  runner?: string;
+  k?: number;
+  planned_attempts?: number;
+  running?: number;
+  tasks_planned?: number;
+  tasks_solved?: number;
+  errors?: number;
+  median_seconds?: number | null;
+  notes?: string[];
+  task_set?: { kind: 'accepted' | 'dev_standin' | string; label: string; note?: string | null };
+  updated_at?: number;
   [extra: string]: unknown;
 }
 
