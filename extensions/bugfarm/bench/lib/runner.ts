@@ -102,6 +102,19 @@ export function newAttempt(def: BenchDefinition, cell: ResolvedCell, taskName: s
   };
 }
 
+/**
+ * Read a finished trial. If reading it fails (a malformed result file), record the try as an error
+ * with the reason rather than crash the run and leave the record for the next run to trip on.
+ */
+async function finalizeSafely(a: BenchAttempt, trajDir: string, exit: number | null): Promise<BenchAttempt> {
+  try {
+    return await finalize(a, trajDir, exit);
+  } catch (e) {
+    log('bench', `${a.job_name}: could not read the trial (${String(e)}); recording an error`);
+    return { ...a, status: 'done', result: 'error', reward: null, exception: `could not read the trial: ${String(e).slice(0, 300)}`, finished_at: Date.now(), seconds: Math.round((Date.now() - a.started_at) / 100) / 10, pid: undefined };
+  }
+}
+
 async function cancelStablehandTurn(pricing: PricingContext, def: BenchDefinition, a: BenchAttempt): Promise<void> {
   if (!pricing.stablehand || a.agent !== 'stablehand') return;
   const trials = trialNames(a.job_dir);
@@ -170,13 +183,13 @@ export async function runBench(def: BenchDefinition, store: AttemptStore, env: L
       summary.adopted++;
       const done = (async () => {
         const how = await waitForPid(a.pid as number, a.job_name, a.deadline_at);
-        return finalize(a, trajDir, how === 'killed' ? null : 0);
+        return finalizeSafely(a, trajDir, how === 'killed' ? null : 0);
       })();
       inflight.set(slotKey(a.cell, a.task, a.try), { a, cell, reserved: costs.estimate(cell), done });
       continue;
     }
     if (trialFinished(a.job_dir)) {
-      const fin = await finalize(a, trajDir, null);
+      const fin = await finalizeSafely(a, trajDir, null);
       store.save(fin);
       costs.observe(fin.cell, bestCost(fin));
       summary.recovered++;
@@ -257,7 +270,7 @@ export async function runBench(def: BenchDefinition, store: AttemptStore, env: L
       const reserved = costs.estimate(q.cell) * (1 + opts.reserveFactor);
       const done = launched.exited.then(async (code) => {
         stop();
-        return finalize(a, trajDir, code);
+        return finalizeSafely(a, trajDir, code);
       });
       inflight.set(slotKey(a.cell, a.task, a.try), { a, cell: q.cell, reserved, done });
       log('bench', `${a.job_name}: started (pid ${launched.pid}; ${inflight.size} running, ${queue.length} queued)`);
