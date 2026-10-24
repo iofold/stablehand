@@ -14,6 +14,9 @@ mine (the Scout, `candidateFromUnit`), the env Dockerfile (the Env builder, `bui
 and the instruction text (the Writer, `packageTask(..., { instruction })`). The CLI below still runs
 the whole pipeline by hand, with no model calls.
 
+[Calibration](#calibration-calibratets) is the first stage that calls models: it measures each
+packaged task's difficulty per model family and keeps the tasks in a useful band.
+
 ## Method
 
 1. **`scout`.** Blobless clone (`--filter=blob:none`). Walk HEAD's **first-parent** history since
@@ -170,6 +173,208 @@ the full suite.
 | `.work/` at peak | 1.33 GB (clones 0.24, trees 0.57, tasks 0.46) |
 | fastapi env image | 780 MB |
 | Build cache per task build | about 62 MB, now pruned automatically |
+
+## Calibration (`calibrate.ts`)
+
+Calibration measures how hard each packaged task is for each model family, keeps the tasks in a
+useful band, and records the difficulty on the task. It runs real model calls, so everything it
+does is priced, capped and receipted.
+
+```ts
+import { calibrate } from './calibrate.ts';
+const r = await calibrate(taskDir, frozenPanel, budgetUsd, { gateway, board });
+// r.perFamily.anthropic = { model, passes, attempts, errors, rate, ci95, state }
+// r.decision: accept | too_easy | unsolved_review | out_of_band | over_budget | held
+// r.cost: every attempt on this task under this panel, priced by the gateway
+```
+
+`calibrate()` is resumable: attempts are stored, so calling it again with more budget carries on
+where the budget gate stopped it. It writes stage changes to the board only with `writeStage`
+(the standalone CLI); when a foreman owns the item it writes the difficulty and attempts and leaves
+the stage to the foreman.
+
+### Method
+
+- **One model per family.** Each family's difficulty is measured on one ladder model. Results never
+  pool across models, prompts or verifiers: every attempt carries a cell id that hashes the frozen
+  panel, the model, the harness and Harbor version, `instruction.md`, `tests/` and the environment
+  files. A rewritten instruction starts a new cell.
+- **Screen first.** One attempt from a cheap model and one from the frontier model. A screen attempt
+  on a ladder model counts as that ladder's first try.
+- **Many tasks, one budget.** `calibrateMany` (the `run` command) screens every task, then ladders a
+  few tasks at a time in priority order, each drawing on the whole remaining budget, and repeats
+  while a pass still spends. Priority: the frontier has passed every attempt (one more pass may
+  settle `too_easy`), then someone passed while the frontier only missed (likely `accept`; in the
+  prior factory 81% of first misses repeated), then a mixed frontier, then tasks nobody has solved.
+  An even split was tried first and left every task short of its next frontier stage.
+- **Ladder.** Cumulative attempts of 2, 4, 8 and 16 per family. A family stops early as too easy at
+  2/2, 3/4 or 4/8 passes. Errors count as attempts and are never replaced. Nothing is decided while
+  any attempt runs.
+- **Frontier first.** Another family may only grow to the last stage the frontier family finished
+  without a verdict, so a task that is too easy for the frontier costs the others nothing beyond the
+  screen. Once the frontier has finished, the others run freely.
+- **Stop when the decision is certain.** Calibration is selection, not measurement, so it stops as
+  soon as more attempts cannot change the decision: the frontier is too easy, the frontier already
+  has more passes than the ceiling allows, or someone has passed and the frontier cannot end above
+  the ceiling even if every remaining attempt passes.
+- **Band** (configurable): at least one pass in at least one family, and a frontier pass rate of at
+  most 50%. Decisions:
+
+  | Decision | When |
+  |---|---|
+  | `accept` | someone passes sometimes, and the frontier stays at or under the ceiling |
+  | `too_easy` | the frontier stopped early as too easy |
+  | `out_of_band` | the frontier pass rate is above the ceiling |
+  | `unsolved_review` | every ladder finished with no passes; "unsolved" can mean broken, so a reviewer looks |
+  | `over_budget` | the budget gate refused every stage still needed; call again with more budget to resume |
+  | `held` | errored attempts could change the decision (it differs if they are read as passes) |
+
+- **Budget gate.** A stage of k attempts launches only if the remaining budget covers
+  k × (estimated attempt cost + reserve). The estimate is the panel's prior until the run has seen
+  two attempts of that model, then their mean; the reserve is half the estimate. Another family's
+  stage also has to leave room for the frontier's next stage while that stage is still affordable.
+  Spend is tracked per call and across a campaign, and the campaign key's gateway cap is the hard
+  stop.
+- **Frozen panel.** `freeze` checks every panel route, hashes the panel and writes
+  `.work/calibration/panels/<id>.json`. A frozen id never changes; a new panel needs a new id.
+- **Selection ≠ measurement.** These attempts live under `.work/calibration/<panel>/` and go to the
+  board with `phase: "calibration"`. The benchmark measures on attempts of its own.
+
+### How an attempt runs
+
+Each attempt is one Harbor 0.24 job with `terminus-2`, which runs on the host and drives the task
+container over tmux, so the container keeps `network_mode: none`.
+
+- **Model calls** go through the Stablehand LiteLLM gateway on a campaign key minted with
+  `POST /api/model-gateway/campaign-keys` (tags `{campaign: ...}`, `maxBudgetUsd`). terminus-2 uses
+  LiteLLM's OpenAI-compatible client: the model is `openai/<gateway model>`, `api_base` is
+  `<gateway>/v1`, and the key is `OPENAI_API_KEY` in Harbor's process environment, never in the job
+  config Harbor writes to disk. `model_info` carries the gateway's prices, so Harbor's own cost
+  estimate matches the gateway's bill.
+- **Pricing.** Every call carries `x-litellm-spend-logs-metadata: {"bugfarm_attempt": <id>}`.
+  The gateway's spend log (`/spend/logs/v2`, read with the metering key and filtered by the
+  campaign key's alias) then prices each attempt exactly. `reconcile` compares the attempt total
+  with the campaign's spend in Stablehand.
+- **Result.** The verifier's reward decides: 1 is a pass, less is a fail (an agent timeout is a
+  fail, the model ran out of time), no reward is an error.
+- **Trajectories.** Harbor writes ATIF v1.8. The raw file is copied next to the attempt record, and
+  a v1.7 copy is written beside it (v1.8 only adds audio parts; they become text notes).
+- **Cleanup.** A per-attempt compose override (Harbor's `extra_docker_compose`) labels the trial's
+  main container `bugfarm.run=<run id>` and `bugfarm.attempt=<job>`. After the trial, cleanup
+  removes only the compose projects of this attempt's labelled containers and of the job's own
+  trials (the egress sidecar and the verifier env carry no label), even when Harbor fails or is
+  killed. It never touches another job's containers, and leaves task images to Harbor's
+  `--rmi local` because other jobs may share them.
+- **Records.** `.work/calibration/<panel>/tasks/<task>/attempts/*.json`, `trajectories/`, and
+  `summary.json`. Each decided task also gets `[metadata.bugfarm.calibration]` and
+  `[metadata.bugfarm.difficulty.<family>]` in its `task.toml`.
+
+### Commands
+
+```bash
+# Once per VM: a board, a frozen panel and a campaign key.
+node --experimental-strip-types calibrate.ts freeze --panel cal-v1 --key-file <probe key file>
+node --experimental-strip-types calibrate.ts mint-key --campaign bugfarm-dev-cal --max-budget 19
+
+# One task (what the foreman calls), or a whole dataset within one budget.
+node --experimental-strip-types calibrate.ts one .work/tasks/fastapi/fastapi-0f3e7bd682 --budget 1.5
+node --experimental-strip-types calibrate.ts run --tasks-dir .work/tasks/fastapi --budget 18.5 --concurrency 6 --stage
+
+node --experimental-strip-types calibrate.ts reconcile     # attempts vs gateway spend log vs Stablehand
+node --experimental-strip-types calibrate.ts report        # per-family table, cost, in-band count
+node --experimental-strip-types calibrate.ts board-sync    # re-send all rows to a new or reset board
+node --experimental-strip-types calibrate.ts task-toml     # re-write the task.toml receipts
+node --experimental-strip-types calibrate.ts atif17 in.json out.json
+```
+
+Settings come from the environment: `BUGFARM_GATEWAY_URL` (default `http://localhost:4400`),
+`BUGFARM_CAMPAIGN_KEY_FILE` (written 0600 by `mint-key`), `BUGFARM_STABLEHAND_ENV` (a Stablehand
+`.env` to read `STABLEHAND_API_TOKEN` and `STABLEHAND_MODEL_GATEWAY_METERING_KEY` from),
+`STABLEHAND_URL`, and `BUGFARM_URL` with `BUGFARM_INGEST_TOKEN` for the board. Secrets are read,
+never printed.
+
+### Panel `cal-v1`
+
+| Family | Cheap | Strong | Ladder model | Price in / out per M tokens |
+|---|---|---|---|---|
+| Claude (frontier) | claude-haiku-4-5 | claude-sonnet-5 | claude-sonnet-5 | $2 / $10 (cache read $0.20) |
+| GPT | gpt-6-luna | gpt-5.4-mini | gpt-6-luna | $0.10 / $0.50 (cache read $0.01) |
+| Open weights | cf-kimi-k2.7-code | cf-glm-5.2 | cf-kimi-k2.7-code | $0.95 / $4 (no caching) |
+| Gemini | — | — | — | slot held: the gateway's Gemini key is invalid |
+
+Screen: gpt-6-luna (cheap) and claude-sonnet-5 (frontier). terminus-2 settings: JSON parser, at
+most 40 turns, a 900 s agent timeout, no terminal recording. All six routes answered before the
+freeze. Claude is measured on its strong model so the band's ceiling means something; GPT and open
+weights are measured on their cheap models so a full ladder stays affordable under a $20 cap.
+
+### Results: fastapi, 12 tasks (2026-10-23, Azure VM)
+
+The 12 tasks that passed their controls, on panel `cal-v1` (sha `7197b4595e3a59b1`), campaign key
+`bugfarm-dev-cal` capped at $19, gate budget $18.50, 6 trials at a time on the 16-CPU VM.
+
+| Task | Decision | Claude (sonnet-5) | GPT (luna) | Open (kimi) | Attempts | Cost |
+|---|---|---|---|---|---|---|
+| fastapi@0f3e7bd6 | too_easy | 2/2 | 1/1 | – | 3 | $0.69 |
+| fastapi@d0282a38 | too_easy | 2/2 | 1/1 | – | 3 | $0.23 |
+| fastapi@e92a0dc3 | too_easy | 2/2 | 1/1 | – | 3 | $0.37 |
+| fastapi@d6235443 | too_easy | 3/4 | 1/1 | – | 5 | $1.54 |
+| fastapi@f90d0369 | **accept** | 0/8 | 1/2 | 0/2 | 12 | $5.87 |
+| fastapi@d1fd422f | over_budget | 1/8 | 2/2 | 0/2 | 12 | $3.65 |
+| fastapi@eb75fd07 | over_budget | 2/4 | 1/1 | – | 5 | $2.59 |
+| fastapi@5e6a1eec | over_budget | 1/4 | 0/2 | 0/2 | 8 | $2.43 |
+| fastapi@ac88f563 | over_budget | 0/1 | 0/1 | – | 2 | $0.55 |
+| fastapi@89317c70 | over_budget | 0/1 (error) | 0/1 | – | 2 | $0.41 |
+| fastapi@c7fb7851 | over_budget | 0/1 | 0/1 | – | 2 | $0.27 |
+| fastapi@aadfcce7 | over_budget | 0/1 (error) | 0/1 (error) | – | 2 | $0.00 |
+| **All 12** | 1 in band, 4 too easy, 7 undecided | 13/38 | 8/15 | 0/6 | 59 | **$18.60** |
+
+| Model | Attempts (screen) | Passes | Errors | Cost | Per attempt | Minutes per attempt |
+|---|---|---|---|---|---|---|
+| claude-sonnet-5 | 38 (12) | 13 | 2 | $17.73 | $0.467 | 8.2 |
+| gpt-6-luna | 15 (12) | 8 | 2 | $0.19 | $0.013 | 6.9 |
+| cf-kimi-k2.7-code | 6 (0) | 0 | 0 | $0.68 | $0.113 | 12.6 |
+
+- **Spend reconciles exactly.** The 59 attempts sum to $18.601842. The gateway's spend log for the
+  campaign key has 1,891 calls for $18.601842, every one tagged with an attempt id. Stablehand's
+  campaign spend (`GET /api/model-gateway/campaign-keys/:id`) is $18.601842 for 1,891 calls. The
+  route checks, the two cost probes and the smoke run went through a separate $1 probe key
+  ($0.47, revoked afterwards), so the total was $19.07 against the $20 cap.
+- **In band: 1 of 12.** The frontier is expensive: claude-sonnet-5 costs $0.47 and 8 minutes per
+  attempt, and an `accept` needs at least 8 frontier attempts (0/8 makes the 50% ceiling certain)
+  or the full 16. Too-easy tasks settle for $0.23–1.54; the accepted task cost $5.87. The 7
+  undecided tasks have their attempts stored and resume with more budget.
+- **Difficulty depends on the family.** gpt-6-luna, the cheapest model on the panel, passed 8 of
+  15 and solved tasks sonnet-5 mostly missed (d1fd: luna 2/2, sonnet 1/8; f90d: luna 1/2, sonnet
+  0/8). Kimi passed none of 6 and timed out once.
+- **Errors: 4 of 59, counted and never replaced.** Three came from the pipeline's end-of-run
+  cleanup, which removed every `bugfarm=1` container on the host at 22:35, including live
+  calibration trials (`service "main" is not running`). Calibration now labels its trials
+  `bugfarm.run=<run id>` and cleans up only what each attempt started. The fourth was a tmux
+  server that died inside the task container mid-run.
+- **Time.** Screen 40 minutes (24 attempts), ladder 55 minutes, plus a 16-minute handover while the
+  first process's in-flight trials finished. An attempt takes 4–17 minutes: about 1 minute of
+  Harbor setup, the agent, and a 2-minute verifier (the full fastapi suite).
+
+**What a decisive run needs.** At these prices, settling the 7 open tasks would take roughly
+$25–50 more, almost all of it frontier attempts. Cheaper options: measure the frontier family on
+claude-haiku-4-5 and keep sonnet-5 for the screen, or accept on a statistical ceiling (for
+example, a Wilson upper bound under 50%) instead of a certain one.
+
+### Calibration gotchas
+
+- **terminus-2 needs tmux in the image.** Without it, terminus-2 tries `apt-get install tmux`
+  inside a container that has no network, and the trial fails with "Failed to start tmux
+  session". Env images now install tmux.
+- **The spend log rejects big pages.** `/spend/logs/v2` answers 422 to `page_size` above 100.
+- **Harbor's estimate matches the gateway** when `model_info` carries the gateway's prices,
+  cache read and write included, so the budget gate runs on accurate numbers before the spend log
+  catches up.
+- **No max_tokens.** LiteLLM's OpenAI client sends no token limit unless asked, so models that
+  refuse `max_tokens` (gpt-6-luna) work through terminus-2 unchanged; the route check sends
+  `max_completion_tokens` for them.
+- **Resuming a killed run.** Attempts still `running` are read from Harbor's result if the trial
+  finished, and counted as errors if it did not. Attempts that were still queued for a trial slot
+  never started, so they are dropped rather than counted.
 
 ## Gotchas hit in the spike
 
