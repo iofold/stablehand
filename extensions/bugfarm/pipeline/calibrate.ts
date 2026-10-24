@@ -399,6 +399,8 @@ export interface CalibrateOptions {
   settleTimeoutMs?: number;
   /** Labels every trial container this call starts (`bugfarm.run`); default: panel id plus a timestamp. */
   runId?: string;
+  /** Recorded on every model call in the spend log as `tag_<name>` (the campaign key carries the budget tags). */
+  spendTags?: Record<string, string>;
   /** Called after every finished attempt (e.g. to update a campaign's spend on the board). */
   onAttempt?: (rec: AttemptRecord) => void | Promise<void>;
 }
@@ -637,7 +639,7 @@ export async function calibrate(taskDir: string, panel: FrozenPanel, budget: num
               agentTimeoutSec: panel.agent_timeout_sec,
               gatewayUrl: opts.gateway.url,
               gatewayKey: opts.gateway.key.key,
-              spendMetadata: { bugfarm_panel: panel.id, bugfarm_item: task.item },
+              spendMetadata: { ...Object.fromEntries(Object.entries(opts.spendTags ?? {}).map(([k, v]) => [`tag_${k}`, v])), bugfarm_panel: panel.id, bugfarm_item: task.item },
               processTimeoutMs: (panel.agent_timeout_sec + 3600) * 1000,
               runId,
             },

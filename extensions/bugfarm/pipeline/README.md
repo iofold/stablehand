@@ -189,7 +189,12 @@ const r = await calibrate(taskDir, frozenPanel, budgetUsd, { gateway, board });
 ```
 
 `calibrate()` is resumable: attempts are stored, so calling it again with more budget carries on
-where the budget gate stopped it. It writes stage changes to the board only with `writeStage`
+where the budget gate stopped it. For the foreman, `calibrate-foreman.ts` wraps it in the
+`Calibrate` contract from `src/calibrate.ts`
+(`foremanCalibrate({ panel: 'cal-v1', gateway })`): `accept` becomes `accepted`, `held` stays
+`pending`, every other decision is `rejected` with the decision as its reason, and `budget.item`
+is the board key. The frozen panel wins over the foreman's panel entries; a mismatch is logged
+once. It writes stage changes to the board only with `writeStage`
 (the standalone CLI); when a foreman owns the item it writes the difficulty and attempts and leaves
 the stage to the foreman.
 
