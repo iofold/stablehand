@@ -45,7 +45,7 @@
     "@stablehand/contracts": "workspace:*",
     "tar-stream": "^3.1.8",
     "yaml": "^2.8.3",
-    "zod": "^4.3.6"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
