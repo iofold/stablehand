@@ -50,9 +50,11 @@ A cell's identity is a hash of everything that decides how it runs: agent, harne
      - **reads** the result of a trial that finished while no runner was watching;
      - **voids** a trial its own crash cut short. The execution is kept for the spend ledger, its orphaned Stablehand turn is cancelled, and the try runs again, because the agent never got a fair attempt.
    - Exactly one finished record counts per (cell, task, try), so nothing is counted twice.
+   - **Provider failures run again.** Some tries never get a fair run. Either the agent stopped on a provider error, such as a 429 rate limit or a 5xx, or the verifier gave no reward. Such a try is voided the same way and runs again, up to three executions. The per-try spend cap and the agent timeout are the agent's own outcomes, so they count. The cell's notes say how many tries ran again.
+   - **Per-cell concurrency.** A cell can cap its own trials in flight (`max_concurrent`), for a provider with a per-minute limit. The kimi cell runs two at a time. This is scheduling only, not part of the cell's identity.
 5. **Clean up only what it started.** Each trial's main container is labelled `bugfarm.run=bench:<id>` and `bugfarm.attempt=<job>`. Cleanup removes the compose projects of that attempt's own trials and nothing else.
 6. **Score.**
-   - **Result:** a try passes when the verifier's reward is 1. Anything less is a fail, and no reward is an error. Errors count as unsolved tries and are listed per cell.
+   - **Result:** a try passes when the verifier's reward is 1. Anything less is a fail, and no reward is an error. An error left after its retries counts as an unsolved try and is listed per cell.
    - **pass@1:** the mean over tasks of passing tries / tries.
    - **Interval:** a 95% percentile bootstrap that resamples tasks (10,000 draws, seeded by bench and cell). Tries on one task are correlated, so resampling tries would overstate certainty.
    - **$ per solve:** the cell's gateway-priced spend divided by its passing tries.

@@ -293,7 +293,7 @@ export function Leaderboard({ view }: { view: BoardView }) {
           <div className="mt-4 max-w-4xl space-y-1.5 text-[0.85rem] leading-snug text-ink-3">
             <p>
               Pass rate is pass@1: for each task, the share of tries that passed its hidden tests, averaged over tasks. The interval resamples tasks
-              (10,000 bootstrap draws), so with few tasks it is wide on purpose. A try that errors counts as unsolved. Per solve is the pair&apos;s whole
+              (10,000 bootstrap draws), so with few tasks it is wide on purpose. A try the model provider failed (a rate limit, a 5xx) ran again; a try that still errors counts as unsolved. Per solve is the pair&apos;s whole
               spend, priced by the model gateway, divided by its passing tries. Median time is the agent&apos;s own time per try.
             </p>
             {shared.map(({ runner, note }) => (

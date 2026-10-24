@@ -155,7 +155,7 @@ export function renderCard(m: DatasetModel, approval: Approval | null): string {
   out.push('');
   out.push(leaderboard(m.cells));
   out.push('');
-  out.push('pass@1 is the share of tries that passed the hidden tests, averaged over tasks. The 95% interval resamples tasks (10,000 bootstrap draws), so with few tasks it is wide. A try that errors counts as unsolved. "$ per solve" is the pair\'s whole spend, priced by the model gateway, divided by its passing tries. Median agent time is the agent\'s own time per try.');
+  out.push('pass@1 is the share of tries that passed the hidden tests, averaged over tasks. The 95% interval resamples tasks (10,000 bootstrap draws), so with few tasks it is wide. A try the provider failed (a rate limit, a 5xx) ran again; a try that still errors counts as unsolved. "$ per solve" is the pair\'s whole spend, priced by the model gateway, divided by its passing tries. Median agent time is the agent\'s own time per try.');
   const notes = [...new Set(m.cells.flatMap((c) => c.notes.map((n) => `${c.runner}: ${n}`)))];
   if (notes.length) {
     out.push('');

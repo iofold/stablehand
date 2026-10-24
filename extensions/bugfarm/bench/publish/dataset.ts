@@ -279,7 +279,7 @@ export async function buildDataset(def: BenchDefinition, store: AttemptStore, op
   writeFileSync(join(out, 'data', 'swebench.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
 
   const cells = leaderboardCells(def, store);
-  writeFileSync(join(out, 'leaderboard.json'), JSON.stringify({ bench: def.id, campaign: def.campaign, task_set: def.task_set, k: def.k, method: 'pass@1 = mean over tasks of passing tries / tries; 95% percentile bootstrap over tasks, 10,000 resamples; errors count as unsolved; $ per solve = cell spend / passing tries, gateway-priced', cells }, null, 2) + '\n');
+  writeFileSync(join(out, 'leaderboard.json'), JSON.stringify({ bench: def.id, campaign: def.campaign, task_set: def.task_set, k: def.k, method: 'pass@1 = mean over tasks of passing tries / tries; 95% percentile bootstrap over tasks, 10,000 resamples; tries a provider failed are re-run, remaining errors count as unsolved; $ per solve = cell spend / passing tries, gateway-priced', cells }, null, 2) + '\n');
 
   const ledger = buildLedger(def, store, opts.reconciliation, opts.selection, opts.authoring);
   mkdirSync(join(out, 'spend'), { recursive: true });
