@@ -5,13 +5,26 @@ import { familyLabel } from '../../../src/shared/board';
 /** Families in a fixed order, so a dot's position always means the same family. */
 export const FAMILY_ORDER = ['anthropic', 'openai', 'google', 'open'];
 
+function byFamilyOrder(a: string, b: string): number {
+  const ia = FAMILY_ORDER.indexOf(a);
+  const ib = FAMILY_ORDER.indexOf(b);
+  return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
+}
+
+/**
+ * The families the legend names, in dot order: the campaign's panel families when it says which
+ * it measures, else the families the cards' difficulty actually has, else all four.
+ */
+export function legendFamilies(campaignFamilies: string[] | undefined, difficulties: Array<Record<string, PassCount> | undefined>): string[] {
+  if (campaignFamilies && campaignFamilies.length > 0) return [...new Set(campaignFamilies)].sort(byFamilyOrder);
+  const seen = new Set<string>();
+  for (const d of difficulties) for (const family of Object.keys(d ?? {})) seen.add(family);
+  return seen.size > 0 ? [...seen].sort(byFamilyOrder) : FAMILY_ORDER;
+}
+
 export function orderedFamilies(difficulty: Record<string, PassCount> | undefined): [string, PassCount][] {
   if (!difficulty) return [];
-  return Object.entries(difficulty).sort(([a], [b]) => {
-    const ia = FAMILY_ORDER.indexOf(a);
-    const ib = FAMILY_ORDER.indexOf(b);
-    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
-  });
+  return Object.entries(difficulty).sort(([a], [b]) => byFamilyOrder(a, b));
 }
 
 /**

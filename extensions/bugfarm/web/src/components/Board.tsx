@@ -5,7 +5,7 @@ import type { BoardView, Item } from '../lib/derive';
 import { useMediaQuery } from '../lib/hooks';
 import { useDisplayStages, type Shown } from '../lib/useDisplayStages';
 import { AnimatedNumber } from './AnimatedNumber';
-import { FAMILY_ORDER, PassPie } from './DifficultyDots';
+import { PassPie, legendFamilies } from './DifficultyDots';
 import { ItemCard } from './ItemCard';
 
 const NEW_WINDOW_MS = 1400;
@@ -122,13 +122,13 @@ function Column({ stage, cards, onOpen, mobile, columnRef }: ColumnProps) {
   );
 }
 
-function Legend() {
+function Legend({ families }: { families: string[] }) {
   return (
     <p className="flex min-w-0 items-center gap-2 text-[0.85rem] text-ink-2">
       <PassPie passes={3} attempts={8} size={14} />
       <span>
         Dots show how often each model family solved it, in order:{' '}
-        {FAMILY_ORDER.map((family) => familyLabel(family)).join(', ')}.
+        {families.map((family) => familyLabel(family)).join(', ')}.
       </span>
     </p>
   );
@@ -181,7 +181,7 @@ export function Board({ view, onOpen }: { view: BoardView; onOpen: (key: string)
   return (
     <div className="flex flex-1 flex-col">
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 pb-3 pt-4 sm:px-6">
-        <Legend />
+        <Legend families={legendFamilies(view.campaign?.families, view.items.map((item) => item.difficulty))} />
         <div role="radiogroup" aria-label="Which candidates to show" className="flex rounded-full bg-well p-1 text-[0.85rem] font-semibold">
           {(['all', 'batch'] as Scope[]).map((value) => (
             <button
