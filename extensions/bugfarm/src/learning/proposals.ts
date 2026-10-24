@@ -147,7 +147,13 @@ export function reviewProposals(opts: {
           rule.skip_if = pred;
           report.predicate = describePredicate(pred);
           const dupPred = seenPredicate.get(JSON.stringify(pred));
-          if (dupPred) report.errors.push(`skip_if: rule ${dupPred.id} (${dupPred.status ?? 'kept'}) already has this predicate.`);
+          if (dupPred) {
+            report.errors.push(dupPred.status === 'proposed'
+              ? `skip_if: ${dupPred.id} in this submission has the same predicate; one filter drops a candidate once, so give it one rule with the target it catches most.`
+              : `skip_if: rule ${dupPred.id} (${dupPred.status ?? 'kept'}) already has this predicate.`);
+          } else {
+            seenPredicate.set(JSON.stringify(pred), { id: `rule ${index}`, text: input.text, status: 'proposed', skip_if: pred });
+          }
           const run = dryRun(pred, opts.cards, input.targets);
           report.dry_run = run;
           if (run.target_rejects > 0 && run.target_rejects_caught === 0) {

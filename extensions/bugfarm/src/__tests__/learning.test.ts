@@ -183,6 +183,13 @@ describe('proposal review', () => {
     expect(reports[3].ok).toBe(false);
   });
 
+  it('refuses two filters with one predicate in a submission', () => {
+    const filter = (targets: string) => ({ kind: 'scout_filter', text: `Skip old fixes for ${targets}.`, skip_if: { field: 'age_days', op: '>', value: 300 }, targets, expected_effect: 'Fewer rejects.' });
+    const reports = reviewProposals({ ...base, reasons: { no_fail_to_pass: 2, env_drift: 1 }, rules: [filter('no_fail_to_pass'), filter('env_drift')] });
+    expect(reports[0].ok).toBe(true);
+    expect(reports[1].errors.join(' ')).toContain('rule 0 in this submission has the same predicate');
+  });
+
   it('refuses an env recipe once the campaign reuses a built environment', () => {
     const rule = { kind: 'env_recipe', text: 'Install the core version the commit pins.', targets: 'no_fail_to_pass', expected_effect: 'Fewer drift rejects.' };
     expect(reviewProposals({ ...base, rules: [rule] })[0].ok).toBe(true);
