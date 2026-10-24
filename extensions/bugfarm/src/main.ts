@@ -12,6 +12,8 @@ import { Foreman } from './foreman/foreman.js';
 import { ChangeHub } from './hub.js';
 import { createPipelineHandlers } from './jobs/pipeline-jobs.js';
 import { JobRunner } from './jobs/runner.js';
+import { gitFeatures } from './learning/features.js';
+import { LearningLoop } from './learning/loop.js';
 import { createBugfarmServer } from './server.js';
 import { StablehandLink } from './stablehand.js';
 import { BoardStore } from './store/store.js';
@@ -70,6 +72,7 @@ async function main(): Promise<void> {
       if (job.owner === 'foreman' && job.item) await store.upsert([{ kind: 'item', key: job.item, payload: { activity: message.slice(0, 200) } }]);
     },
   });
+  const learning = new LearningLoop({ store, features: gitFeatures });
   const foreman = floor && config.foreman
     ? new Foreman({
       store,
@@ -80,9 +83,10 @@ async function main(): Promise<void> {
       panel: DEFAULT_PANEL,
       envContext,
       itemContext: loadItemContext,
+      learning,
     })
     : null;
-  const tools = config.toolsToken ? createToolHandlers({ jobs, store, floor, itemContext: loadItemContext }) : null;
+  const tools = config.toolsToken ? createToolHandlers({ jobs, store, floor, itemContext: loadItemContext, learning }) : null;
 
   let link: StablehandLink | null = null;
   let lastCampaign = config.campaignKey;

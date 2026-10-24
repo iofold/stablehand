@@ -15,6 +15,8 @@ export const LaunchBodySchema = z.strictObject({
   turn_timeout_min: z.number().int().min(5).max(180).optional(),
   rebuild_env: z.boolean().optional(),
   calibration_usd: z.number().nonnegative().max(1_000).optional(),
+  learning: z.boolean().optional(),
+  learning_gate: z.enum(['auto', 'controls', 'calibration']).optional(),
 });
 
 function stamp(now: Date): string {

@@ -4,6 +4,7 @@ import type { Calibrate, CalibrationPanel } from '../calibrate.js';
 import { StablehandApiError } from '@stablehand/client';
 import { BudgetBlockedError, type FloorApi, type TurnInfo } from '../floor/api.js';
 import type { JobRecord, JobRunner } from '../jobs/runner.js';
+import type { BatchEnd } from '../learning/loop.js';
 import { checkLeaks, describeLeaks } from '../leak-check.js';
 import { loadPlaybook, rulesFor } from '../playbook.js';
 import type {
@@ -54,6 +55,10 @@ export interface CampaignConfig {
   rebuild_env: boolean;
   /** Dollars each task may spend in calibration. */
   calibration_usd: number;
+  /** `false` turns the learning loop off (no Teacher, no measured rules). */
+  learning?: boolean;
+  /** Where the learning curve counts a candidate as accepted; `auto` picks once from batch 1. */
+  learning_gate?: 'auto' | 'controls' | 'calibration';
 }
 
 export const DEFAULT_CONFIG: Omit<CampaignConfig, 'repo' | 'budget_tag'> = {
@@ -136,6 +141,8 @@ export interface ForemanDeps {
   now?: () => number;
   /** How long to keep asking for a turn's cost while the gateway prices it. */
   costSettleMs?: number;
+  /** The learning loop (src/learning/): measures the batch and runs the Teacher before the next one. */
+  learning?: { afterBatch(end: BatchEnd): Promise<void> } | null;
 }
 
 /** What the Scout submits for each pull request. */
@@ -330,10 +337,27 @@ export class Foreman {
       await this.runBatch(id, n);
       campaign = await this.campaign(id);
       if (campaign.status !== 'running') return;
+      await this.deps.learning?.afterBatch(this.batchEnd(id, n, campaign.config));
     }
     await this.refreshSpend(id);
     await this.patch('campaign', id, { status: 'done', finished_at: this.now() });
     this.logger.log(`[bugfarm] foreman: campaign ${id} finished`);
+  }
+
+  /** The learning loop's view of a finished batch. Its Teacher turn is tagged with the next batch, whose rules it writes. */
+  private batchEnd(id: string, n: number, config: CampaignConfig): BatchEnd {
+    return {
+      campaignId: id,
+      batch: n,
+      last: n >= config.batches,
+      config,
+      runTeacherTurn: async (task) => {
+        const { info, submission, turnId } = await this.runTurn({
+          campaignId: id, role: 'teacher', stage: 'teach', batch: n + 1, item: `${id}:batch-${n}`, owner: { kind: 'batch', key: `${id}:${n}` }, attempt: 1, task,
+        });
+        return { submission, turnId, status: info.status === 'COMPLETED' ? 'completed' : info.status.toLowerCase() };
+      },
+    };
   }
 
   private async itemsOf(campaignId: string): Promise<Array<BoardRow<'item'> & { payload: ForemanItem }>> {
@@ -343,8 +367,9 @@ export class Foreman {
   private async runBatch(id: string, n: number): Promise<void> {
     const batchKey = `${id}:${n}`;
     let batch = await this.read<ForemanBatch>('batch', batchKey);
-    if (!batch) {
-      batch = { n, campaign: id, status: 'running', started_at: this.now(), finished_at: null, candidates: 0, accepted: 0, rejected: 0, cost_usd: 0, scouted: false };
+    // A row without a status was started by spend landing early (the Teacher's turn for this batch).
+    if (!batch?.status) {
+      batch = { n, campaign: id, status: 'running', started_at: this.now(), finished_at: null, candidates: 0, accepted: 0, rejected: 0, cost_usd: 0, scouted: false, ...batch };
       await this.patch('batch', batchKey, batch as Record<string, unknown>);
     }
     if (batch.status === 'done') return;

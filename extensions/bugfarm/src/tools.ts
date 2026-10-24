@@ -4,6 +4,7 @@ import type { FloorApi } from './floor/api.js';
 import { leakInputFor, type ItemContext } from './foreman/context.js';
 import { parseCandidates } from './foreman/foreman.js';
 import { jobIdFor, type JobRecord, type JobRunner } from './jobs/runner.js';
+import type { LearningLoop } from './learning/loop.js';
 import { checkLeaks } from './leak-check.js';
 import type { BoardRow, FloorRole, ItemPayload, JobKind, TurnPayload } from './shared/board.js';
 import type { UpsertInput } from './store/validate.js';
@@ -17,6 +18,7 @@ import type { UpsertInput } from './store/validate.js';
  *   POST /tools/v1/job_status         {job_id, wait_seconds?}  → {status, progress, result}
  *   POST /tools/v1/submit_candidates  {candidates: [...]}      Scout
  *   POST /tools/v1/submit_instruction {instruction}            Writer; answers with a leak report
+ *   POST /tools/v1/propose_rules      {summary, rules: [...]}  Teacher; answers with a check of each rule
  */
 
 export class ToolError extends Error {
@@ -33,6 +35,8 @@ export interface ToolDeps {
   };
   floor: Pick<FloorApi, 'lookupTurn'> | null;
   itemContext: (repo: string, sha: string) => ItemContext;
+  /** The learning loop: Scout filters on submit_candidates, and propose_rules. */
+  learning?: Pick<LearningLoop, 'screen' | 'review'> | null;
 }
 
 /** Sandbox tool calls time out at 5 minutes; a long poll stays well inside that. */
@@ -69,7 +73,7 @@ function header(req: IncomingMessage, name: string): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-const ROLE_BY_STAGE: Record<string, FloorRole> = { scout: 'scout', env: 'env_builder', write: 'writer', review: 'writer' };
+const ROLE_BY_STAGE: Record<string, FloorRole> = { scout: 'scout', env: 'env_builder', write: 'writer', review: 'writer', teach: 'teacher' };
 
 /** A compact view of a job for an agent: enough to act on, nothing it cannot use. */
 export function jobView(job: JobRecord): Record<string, unknown> {
@@ -143,21 +147,34 @@ export function createToolHandlers(deps: ToolDeps) {
     if (!parsed.success) throw new ToolError(400, `submit_candidates: ${issues(parsed.error)}`);
     const turn = await turnOf(req);
     if (!turn || turn.role !== 'scout') throw new ToolError(409, 'submit_candidates only works inside a Bugfarm Scout turn.');
-    const candidates = parseCandidates({ candidates: parsed.data.candidates });
-    const dropped = parsed.data.candidates.length - candidates.length;
-    if (candidates.length === 0) {
+    const parsedCandidates = parseCandidates({ candidates: parsed.data.candidates });
+    const dropped = parsed.data.candidates.length - parsedCandidates.length;
+    if (parsedCandidates.length === 0) {
       throw new ToolError(422, 'None of the candidates had both a PR number (pr) and a merge commit sha (sha, 7-40 hex characters). Fix them and submit again.');
     }
+    // Scout filters with a skip_if predicate are code: the worker drops what they match.
+    const screen = deps.learning ? await deps.learning.screen(turn, parsedCandidates, parsed.data.candidates) : null;
+    const candidates = screen?.kept ?? parsedCandidates;
+    const skipped = screen?.skipped ?? [];
     await deps.store.upsert([{
       kind: 'turn',
       key: turn.key,
-      payload: { submission: { candidates, at: Date.now() }, submissions: (turn.submissions ?? 0) + 1 },
+      payload: {
+        submission: { candidates, at: Date.now(), ...(screen ? { skipped, extras: screen.extras, features: screen.features } : {}) },
+        submissions: (turn.submissions ?? 0) + 1,
+      },
     }]);
+    const notes: string[] = [];
+    if (dropped > 0) notes.push(`${dropped} had no valid pr or sha and were dropped`);
+    if (skipped.length > 0) {
+      notes.push(`the playbook's filters dropped ${skipped.length}: ${skipped.map((s) => `#${s.pr} (${s.rule}: ${s.predicate})`).join('; ')}`);
+    }
     return {
       accepted: candidates.length,
       dropped,
-      message: dropped > 0
-        ? `Recorded ${candidates.length} candidates; ${dropped} had no valid pr or sha and were dropped. You can submit again to replace the list.`
+      skipped: skipped.map((s) => ({ pr: s.pr, rule: s.rule, skip_if: s.predicate })),
+      message: notes.length > 0
+        ? `Recorded ${candidates.length} candidates; ${notes.join('; ')}. To fill the batch, submit the full list again (kept ones plus replacements); the last submission counts.`
         : `Recorded ${candidates.length} candidates. You are done; reply with a one-line summary.`,
     };
   }
@@ -186,6 +203,37 @@ export function createToolHandlers(deps: ToolDeps) {
       };
   }
 
+  async function proposeRules(body: unknown, req: IncomingMessage): Promise<Record<string, unknown>> {
+    const turn = await turnOf(req);
+    if (!turn || turn.role !== 'teacher') throw new ToolError(409, 'propose_rules only works inside a Bugfarm Teacher turn.');
+    if (!deps.learning) throw new ToolError(503, 'The learning loop is off on this worker.');
+    let review: Awaited<ReturnType<LearningLoop['review']>>;
+    try {
+      review = await deps.learning.review(turn, body);
+    } catch (err) {
+      const status = (err as { status?: unknown }).status;
+      if (typeof status === 'number') throw new ToolError(status, (err as Error).message);
+      throw err;
+    }
+    await deps.store.upsert([{
+      kind: 'turn',
+      key: turn.key,
+      payload: { submission: { summary: review.summary, rules: review.rules, reports: review.reports, at: Date.now() }, submissions: (turn.submissions ?? 0) + 1 },
+    }]);
+    return {
+      recorded: review.rules.length,
+      reports: review.reports.map((report) => ({
+        index: report.index,
+        ok: report.ok,
+        ...(report.errors.length > 0 ? { errors: report.errors } : {}),
+        ...(report.warnings.length > 0 ? { warnings: report.warnings } : {}),
+        ...(report.predicate ? { skip_if: report.predicate } : {}),
+        ...(report.dry_run ? { dry_run: report.dry_run } : {}),
+      })),
+      message: review.message,
+    };
+  }
+
   return {
     async handle(name: string, body: unknown, req: IncomingMessage): Promise<Record<string, unknown>> {
       switch (name) {
@@ -197,6 +245,8 @@ export function createToolHandlers(deps: ToolDeps) {
           return submitCandidates(body, req);
         case 'submit_instruction':
           return submitInstruction(body, req);
+        case 'propose_rules':
+          return proposeRules(body, req);
         default:
           throw new ToolError(404, `no tool ${name}`);
       }
