@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { toAtifV17 } from './calibrate-atif.ts';
 import { jobConfig, judge, labelsCompose } from './calibrate-harbor.ts';
-import { defaultPanel, panelSha, validatePanel } from './calibrate-panel.ts';
+import { defaultPanel, knownModel, measuredFamilies, panelDefinition, panelSha, validatePanel } from './calibrate-panel.ts';
+import { probeRows, probeTable } from './calibrate-probe.ts';
 import { BudgetPool, CostModel, calibrationToml, itemKeyFor, ladderPriority, readBugfarmMetadata, readTaskInfo, writeTaskCalibration } from './calibrate.ts';
 
 const tmp = mkdtempSync(join(tmpdir(), 'bugfarm-cal-'));
@@ -79,6 +80,47 @@ describe('panel', () => {
     const p = defaultPanel();
     p.families[1] = { ...p.families[1], ladder: 'claude-sonnet-5' };
     expect(() => validatePanel(p)).toThrow();
+  });
+
+  it('defines cal-v2: one measured model per family, the autocache frontier and early decisions', () => {
+    const p = panelDefinition('cal-v2');
+    expect(() => validatePanel(p)).not.toThrow();
+    expect(p.families.map((f) => [f.family, f.ladder])).toEqual([
+      ['anthropic', 'claude-sonnet-5-5-autocache'],
+      ['openai', 'gpt-6-luna'],
+      ['open', 'cf-kimi-k2.7-code'],
+      ['google', null],
+    ]);
+    expect(p.screen).toEqual({ cheap: 'gpt-6-luna', frontier: 'claude-sonnet-5-5-autocache' });
+    expect(p.ladder.early).toEqual({ accept_after: 4, unsolved_after: { frontier: 4, others: 8 } });
+    expect(measuredFamilies(p)).toEqual(['anthropic', 'openai', 'open']);
+    // cal-v1 keeps its shape and its sha.
+    expect(panelDefinition('cal-v1')).toEqual(defaultPanel('cal-v1'));
+    expect(defaultPanel().ladder.early).toBeUndefined();
+  });
+
+  it('finds prices for plain and autocache siblings', () => {
+    expect(knownModel('claude-sonnet-5-5')?.pricing.cache_read).toBeCloseTo(0.1e-6);
+    expect(knownModel('claude-sonnet-5-5')?.model).toBe('claude-sonnet-5-5');
+    expect(knownModel('claude-haiku-5-5-autocache')?.pricing.input).toBeCloseTo(0.1e-6);
+    expect(knownModel('claude-sonnet-5-autocache')?.pricing.cache_read).toBeCloseTo(0.2e-6);
+    expect(knownModel('no-such-model')).toBeUndefined();
+  });
+});
+
+describe('probe', () => {
+  it('totals tokens and prices the calls against no caching', () => {
+    const outcome = (result: 'pass' | 'fail') => ({ result, reward: result === 'pass' ? 1 : 0, seconds: 300, job_dir: '/j', harbor_exit: 0 });
+    const rows = probeRows([
+      { attempt_id: 'a', model: 'claude-sonnet-5-5', try: 1, outcome: outcome('fail'), gateway: { cost_usd: 0.5, calls: 10, failed_calls: 0, last_start_ms: 0, tokens: { prompt: 240_000, completion: 2_000, cache_read: 0, cache_write: 0 } } },
+      { attempt_id: 'b', model: 'claude-sonnet-5-5-autocache', try: 1, outcome: outcome('pass'), gateway: { cost_usd: 0.1, calls: 10, failed_calls: 0, last_start_ms: 0, tokens: { prompt: 240_000, completion: 2_000, cache_read: 200_000, cache_write: 40_000 } } },
+    ]);
+    expect(rows[0]).toMatchObject({ model: 'claude-sonnet-5-5', attempts: 1, passes: 0, calls: 10, cache_read_share: 0 });
+    // 240k prompt at $2/M + 2k output at $10/M = $0.50 without caching.
+    expect(rows[1].uncached_usd).toBeCloseTo(0.5);
+    expect(rows[1].saved_share).toBeCloseTo(0.8);
+    expect(rows[1].cache_read_share).toBeCloseTo(0.8333, 3);
+    expect(probeTable(rows)).toContain('| claude-sonnet-5-5-autocache | 1 | 1 | 10 |');
   });
 });
 

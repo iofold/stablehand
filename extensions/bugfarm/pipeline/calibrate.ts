@@ -19,12 +19,13 @@ import { Semaphore, ensureDir, fileExists, isDir, log, mapLimit, parseArgs, read
 import { BoardClient, NullBoard } from './calibrate-board.ts';
 import type { BoardRow, BoardSink } from './calibrate-board.ts';
 import { SpendLog, checkRoutes, getCampaignKey, mintCampaignKey, readCampaignKey, readDotenv } from './calibrate-gateway.ts';
-import type { CampaignKeyFile, StablehandAdmin } from './calibrate-gateway.ts';
+import type { CallTokens, CampaignKeyFile, StablehandAdmin } from './calibrate-gateway.ts';
 import { RUN_LABEL, judge, readTrial, keepTrajectories, runAttempt } from './calibrate-harbor.ts';
 import { toAtifV17 } from './calibrate-atif.ts';
+import { probeModels, probeTable } from './calibrate-probe.ts';
 import { decide, familyState, frontierNextLaunch, plan, stageFits, tally, wilson } from './calibrate-ladder.ts';
 import type { AttemptResult, Decision, Family, FamilyView, Tally } from './calibrate-ladder.ts';
-import { CALIBRATION_DIR, defaultPanel, freezePanel, loadFrozenPanel, readPanelFile } from './calibrate-panel.ts';
+import { CALIBRATION_DIR, freezePanel, knownModel, loadFrozenPanel, panelDefinition, readPanelFile } from './calibrate-panel.ts';
 import type { FrozenPanel, PanelModel } from './calibrate-panel.ts';
 
 // ---------------------------------------------------------------------------------------------
@@ -153,6 +154,8 @@ export interface AttemptRecord {
   cost_usd_estimate?: number;
   cost_state: CostState;
   gateway_calls?: number;
+  /** Tokens the gateway logged for this attempt's calls (prompt includes cache reads and writes). */
+  gateway_tokens?: CallTokens;
   llm_calls?: number;
   episodes?: number;
   n_input_tokens?: number;
@@ -340,6 +343,8 @@ export function attemptRow(rec: AttemptRecord): BoardRow {
       exception: rec.exception ?? null,
       cost_state: rec.cost_state,
       gateway_calls: rec.gateway_calls ?? null,
+      cache_read_tokens: rec.gateway_tokens?.cache_read ?? null,
+      prompt_tokens: rec.gateway_tokens?.prompt ?? null,
       trace: rec.trajectories?.[0] ?? null,
       trace_v17: rec.trajectories_v17?.[0] ?? null,
       job_dir: rec.job_dir,
@@ -428,6 +433,7 @@ export async function settleCosts(store: AttemptStore, recs: AttemptRecord[], sp
       const before = bestCost(rec);
       rec.cost_usd = s ? s.cost_usd : expected === 0 ? 0 : undefined;
       rec.gateway_calls = s?.calls ?? 0;
+      if (s) rec.gateway_tokens = s.tokens;
       rec.cost_state = complete && stable ? 'gateway' : s ? 'gateway_partial' : 'estimated';
       store.save(rec);
       opts.onDelta?.(bestCost(rec) - before);
@@ -967,9 +973,10 @@ export async function reconcile(panelId: string, ctx: { gateway: GatewayContext;
       count++;
       known.add(rec.id);
       const s = snap?.by_attempt.get(rec.id);
-      if (s && (rec.cost_usd !== s.cost_usd || rec.gateway_calls !== s.calls || rec.cost_state !== 'gateway')) {
+      if (s && (rec.cost_usd !== s.cost_usd || rec.gateway_calls !== s.calls || rec.cost_state !== 'gateway' || !rec.gateway_tokens)) {
         rec.cost_usd = s.cost_usd;
         rec.gateway_calls = s.calls;
+        rec.gateway_tokens = s.tokens;
         rec.cost_state = 'gateway';
         store.save(rec);
         rows.push(attemptRow(rec));
@@ -1080,17 +1087,20 @@ export function reportTable(panel: FrozenPanel, results: CalibrationResult[]): s
 const USAGE = `usage: calibrate.ts <command> [options]
 
   routes      [--key-file f] [--models a,b]     Ask each panel model for one word through the gateway
-  freeze      [--panel-id cal-v1] [--panel panel.json] [--key-file f]
+  freeze      [--panel-id cal-v2] [--panel panel.json] [--key-file f]
               Check every panel route, then freeze the panel (refuses to change a frozen id)
-  mint-key    --campaign <tag> --max-budget <usd> [--key-file f] [--name n]
+  mint-key    --campaign <tag> --max-budget <usd> [--key-file f] [--name n] [--models a,b]
               Mint a Stablehand campaign gateway key for the panel's models (master token)
-  one         <taskDir> --budget <usd> [--panel cal-v1] [--stage] [--item key]
+  probe       <taskDir> --models a,b [--tries 2] [--concurrency 4] [--id name] [--panel cal-v2]
+              Same task, several models, no ladder: each attempt priced from the spend log, with
+              prompt, cache-read, cache-write and output tokens (e.g. plain vs -autocache aliases)
+  one         <taskDir> --budget <usd> [--panel cal-v2] [--stage] [--item key]
               calibrate() one task and print its result as JSON
-  run         <taskDir...> | --tasks-dir <dir>  --budget <usd> [--concurrency 6] [--task-concurrency 3] [--panel cal-v1] [--stage]
+  run         <taskDir...> | --tasks-dir <dir>  --budget <usd> [--concurrency 6] [--task-concurrency 3] [--panel cal-v2] [--stage]
               Screen every task, then ladder them within one budget; prints the report
-  reconcile   [--panel cal-v1]   Re-price attempts from the spend log; compare with Stablehand's campaign spend
-  board-sync  [--panel cal-v1] [--stage]   Re-send every stored attempt and item row to the board
-  report      [--panel cal-v1]   Per-family results, cost per task and the in-band count
+  reconcile   [--panel cal-v2]   Re-price attempts from the spend log; compare with Stablehand's campaign spend
+  board-sync  [--panel cal-v2] [--stage]   Re-send every stored attempt and item row to the board
+  report      [--panel cal-v2]   Per-family results, cost per task and the in-band count
   atif17      <in.json> <out.json>   Convert an ATIF v1.8 trajectory to v1.7
 
 Environment (secrets are read, never printed):
@@ -1148,7 +1158,7 @@ function taskDirsFrom(args: ReturnType<typeof parseArgs>): string[] {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0];
-  const panelId = typeof args.panel === 'string' && !args.panel.endsWith('.json') ? args.panel : typeof args['panel-id'] === 'string' ? args['panel-id'] : 'cal-v1';
+  const panelId = typeof args.panel === 'string' && !args.panel.endsWith('.json') ? args.panel : typeof args['panel-id'] === 'string' ? args['panel-id'] : 'cal-v2';
   const e = cliEnv(panelId);
   const str = (k: string) => (typeof args[k] === 'string' ? (args[k] as string) : undefined);
   const num = (k: string) => {
@@ -1161,7 +1171,7 @@ async function main(): Promise<void> {
 
   switch (cmd) {
     case 'routes': {
-      const panel = defaultPanel(panelId);
+      const panel = panelDefinition(panelId);
       const key = readCampaignKey(str('key-file') ?? e.keyFile);
       const models = str('models')?.split(',') ?? Object.keys(panel.models);
       const res = await checkRoutes(e.gatewayUrl, key.key, models, { completionTokensModels: panel.completion_tokens_models, tag: 'routes' });
@@ -1169,7 +1179,7 @@ async function main(): Promise<void> {
       break;
     }
     case 'freeze': {
-      const base = str('panel')?.endsWith('.json') ? readPanelFile(str('panel') as string) : defaultPanel(panelId);
+      const base = str('panel')?.endsWith('.json') ? readPanelFile(str('panel') as string) : panelDefinition(panelId);
       const key = readCampaignKey(str('key-file') ?? e.keyFile);
       const frozen = await freezePanel(base, { gatewayUrl: e.gatewayUrl, key: key.key });
       console.log(JSON.stringify({ id: frozen.id, sha: frozen.sha, frozen_at: frozen.frozen_at, routes: frozen.routes.map((r) => `${r.ok ? 'ok' : 'FAIL'} ${r.model}`) }, null, 2));
@@ -1177,14 +1187,31 @@ async function main(): Promise<void> {
     }
     case 'mint-key': {
       if (!e.admin) throw new Error('mint-key needs STABLEHAND_API_TOKEN (or BUGFARM_STABLEHAND_ENV)');
-      const panel = defaultPanel(panelId);
+      const panel = panelDefinition(panelId);
       const campaign = str('campaign');
       if (!campaign) throw new Error(`--campaign is required\n\n${USAGE}`);
       const keyFile = str('key-file') ?? e.keyFile;
       if (fileExists(keyFile)) throw new Error(`${keyFile} already exists; revoke or move it before minting another key`);
-      const models = [...new Set(panel.families.flatMap((f) => [f.cheap, f.strong]).filter((m): m is string => Boolean(m)))];
+      const models = str('models')?.split(',').filter(Boolean) ?? [...new Set(panel.families.flatMap((f) => [f.cheap, f.strong]).filter((m): m is string => Boolean(m)))];
       const k = await mintCampaignKey(e.admin, { name: str('name') ?? `bugfarm calibration ${campaign}`, tags: { campaign }, models, maxBudgetUsd: num('max-budget'), keyFile });
       console.log(JSON.stringify({ id: k.id, key_alias: k.key_alias, tags: k.tags, models: k.models, max_budget_usd: k.max_budget_usd, key_file: keyFile }, null, 2));
+      break;
+    }
+    case 'probe': {
+      const panel = panelDefinition(panelId);
+      const task = readTaskInfo(taskDirsFrom(args)[0]);
+      const models = (str('models') ?? '').split(',').filter(Boolean);
+      if (!models.length) throw new Error(`--models is required\n\n${USAGE}`);
+      const gw = gatewayContext(e);
+      const probeId = str('id') ?? `probe-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')}`;
+      const { rows } = await probeModels(task, panel, models, Number(str('tries') ?? 2), {
+        gatewayUrl: gw.url,
+        gatewayKey: gw.key.key,
+        spendLog: gw.spendLog,
+        probeId,
+        concurrency: Number(str('concurrency') ?? 4),
+      });
+      console.log(probeTable(rows));
       break;
     }
     case 'one': {

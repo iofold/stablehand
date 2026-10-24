@@ -140,13 +140,42 @@ export async function checkRoutes(gatewayUrl: string, key: string, models: strin
   return out;
 }
 
+interface UsageObject {
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  prompt_tokens_details?: { cached_tokens?: number | null; cache_write_tokens?: number | null } | null;
+}
+
 export interface SpendRow {
   request_id: string;
   spend: number;
   startTime: string;
   status?: string;
   model_group?: string | null;
-  metadata?: { spend_logs_metadata?: Record<string, unknown> | null } | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  metadata?: { spend_logs_metadata?: Record<string, unknown> | null; usage_object?: UsageObject | null } | null;
+}
+
+/** Tokens of one model call, as the gateway logged them. `prompt` includes cache reads and writes. */
+export interface CallTokens {
+  prompt: number;
+  completion: number;
+  cache_read: number;
+  cache_write: number;
+}
+
+export function rowTokens(row: SpendRow): CallTokens {
+  const u = row.metadata?.usage_object ?? {};
+  const n = (v: number | null | undefined) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  return {
+    prompt: n(u.prompt_tokens ?? row.prompt_tokens),
+    completion: n(u.completion_tokens ?? row.completion_tokens),
+    cache_read: n(u.cache_read_input_tokens ?? u.prompt_tokens_details?.cached_tokens),
+    cache_write: n(u.cache_creation_input_tokens ?? u.prompt_tokens_details?.cache_write_tokens),
+  };
 }
 
 export interface AttemptSpend {
@@ -154,6 +183,7 @@ export interface AttemptSpend {
   calls: number;
   failed_calls: number;
   last_start_ms: number;
+  tokens: CallTokens;
 }
 
 export interface SpendSnapshot {
@@ -229,9 +259,14 @@ export class SpendLog {
           snap.unattributed.cost_usd += spend;
           continue;
         }
-        const cur = snap.by_attempt.get(id) ?? { cost_usd: 0, calls: 0, failed_calls: 0, last_start_ms: 0 };
+        const cur = snap.by_attempt.get(id) ?? { cost_usd: 0, calls: 0, failed_calls: 0, last_start_ms: 0, tokens: { prompt: 0, completion: 0, cache_read: 0, cache_write: 0 } };
         cur.cost_usd += spend;
         cur.calls++;
+        const t = rowTokens(row);
+        cur.tokens.prompt += t.prompt;
+        cur.tokens.completion += t.completion;
+        cur.tokens.cache_read += t.cache_read;
+        cur.tokens.cache_write += t.cache_write;
         if (row.status && row.status !== 'success') cur.failed_calls++;
         cur.last_start_ms = Math.max(cur.last_start_ms, Date.parse(row.startTime) || 0);
         snap.by_attempt.set(id, cur);

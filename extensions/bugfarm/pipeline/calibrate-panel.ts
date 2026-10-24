@@ -10,7 +10,7 @@ import { fileExists, readJson, writeJson } from './lib/util.ts';
 import { checkRoutes } from './calibrate-gateway.ts';
 import type { RouteCheck } from './calibrate-gateway.ts';
 import type { SolverModel } from './calibrate-harbor.ts';
-import { DEFAULT_BAND, DEFAULT_LADDER } from './calibrate-ladder.ts';
+import { DEFAULT_BAND, DEFAULT_LADDER, EARLY_LADDER } from './calibrate-ladder.ts';
 import type { BandConfig, Family, LadderConfig } from './calibrate-ladder.ts';
 
 export const CALIBRATION_DIR = join(WORK_DIR, 'calibration');
@@ -96,6 +96,70 @@ export function defaultPanel(id = 'cal-v1'): Panel {
     models,
     completion_tokens_models: ['gpt-6-luna', 'gpt-5.4-mini'],
   };
+}
+
+/**
+ * Panel cal-v2: one cost-effective measured model per family, and early ladder decisions.
+ *
+ * - Claude, the frontier, is measured on claude-sonnet-5-5-autocache: the gateway marks cache
+ *   points on terminus-2's growing conversation, so each call reads the conversation so far at
+ *   $0.10 per M tokens instead of resending it at $2. claude-haiku-5-5 is the family's cheap model.
+ * - GPT is measured on gpt-6-luna ($0.013 an attempt on cal-v1); gpt-5.4-mini is its strong model.
+ * - Open weights are measured on cf-kimi-k2.7-code.
+ * - The Gemini slot stays empty until the gateway's Gemini key works.
+ *
+ * The cost priors are the measured means from the cal-v1 run and the caching probe; the budget
+ * gate replaces them with this run's own mean after two attempts of a model.
+ */
+export function panelV2(id = 'cal-v2'): Panel {
+  const models: Record<string, PanelModel> = {
+    'claude-sonnet-5-5-autocache': { model: 'claude-sonnet-5-5-autocache', family: 'anthropic', tier: 'strong', max_input_tokens: 1_000_000, max_output_tokens: 128_000, pricing: { input: 2 * M, output: 10 * M, cache_read: 0.1 * M, cache_write: 2.5 * M }, est_attempt_usd: 0.2 },
+    'claude-haiku-5-5': { model: 'claude-haiku-5-5', family: 'anthropic', tier: 'cheap', max_input_tokens: 1_000_000, max_output_tokens: 128_000, pricing: { input: 0.1 * M, output: 0.5 * M, cache_read: 0.01 * M, cache_write: 0.125 * M }, est_attempt_usd: 0.03 },
+    'gpt-6-luna': { model: 'gpt-6-luna', family: 'openai', tier: 'cheap', max_input_tokens: 922_000, max_output_tokens: 128_000, pricing: { input: 0.1 * M, output: 0.5 * M, cache_read: 0.01 * M, cache_write: 0.125 * M }, est_attempt_usd: 0.015 },
+    'gpt-5.4-mini': { model: 'gpt-5.4-mini', family: 'openai', tier: 'strong', max_input_tokens: 272_000, max_output_tokens: 128_000, pricing: { input: 0.75 * M, output: 4.5 * M, cache_read: 0.075 * M }, est_attempt_usd: 0.1 },
+    'cf-kimi-k2.7-code': { model: 'cf-kimi-k2.7-code', family: 'open', tier: 'cheap', max_input_tokens: 128_000, pricing: { input: 0.95 * M, output: 4 * M }, est_attempt_usd: 0.12 },
+  };
+  return {
+    id,
+    harness: 'terminus-2',
+    harbor_version: HARBOR_VERSION,
+    agent_kwargs: { parser_name: 'json', record_terminal_session: false, max_turns: 40, suppress_max_turns_warning: true },
+    agent_timeout_sec: 900,
+    families: [
+      { family: 'anthropic', cheap: 'claude-haiku-5-5', strong: 'claude-sonnet-5-5-autocache', ladder: 'claude-sonnet-5-5-autocache' },
+      { family: 'openai', cheap: 'gpt-6-luna', strong: 'gpt-5.4-mini', ladder: 'gpt-6-luna' },
+      { family: 'open', cheap: 'cf-kimi-k2.7-code', strong: null, ladder: 'cf-kimi-k2.7-code' },
+      { family: 'google', cheap: null, strong: null, ladder: null, note: 'slot held: the gateway has no working Gemini key' },
+    ],
+    frontier: 'anthropic',
+    screen: { cheap: 'gpt-6-luna', frontier: 'claude-sonnet-5-5-autocache' },
+    ladder: EARLY_LADDER,
+    band: DEFAULT_BAND,
+    reserve_factor: 0.5,
+    models,
+    completion_tokens_models: ['gpt-6-luna', 'gpt-5.4-mini'],
+  };
+}
+
+/** The panel definition behind an id: cal-v2 for `cal-v2…` ids, the cal-v1 shape otherwise. */
+export function panelDefinition(id: string): Panel {
+  return id.startsWith('cal-v2') ? panelV2(id) : defaultPanel(id);
+}
+
+/**
+ * A solver model by gateway name, from the panels' model lists (for probes outside a panel).
+ * An `-autocache` alias and its plain alias share prices, so either finds the other.
+ */
+export function knownModel(name: string): PanelModel | undefined {
+  const all: Record<string, PanelModel> = { ...defaultPanel().models, ...panelV2().models };
+  if (all[name]) return all[name];
+  const sibling = name.endsWith('-autocache') ? name.slice(0, -'-autocache'.length) : `${name}-autocache`;
+  return all[sibling] ? { ...all[sibling], model: name } : undefined;
+}
+
+/** Families with a measured (ladder) model, in panel order: what the board's dots stand for. */
+export function measuredFamilies(p: Panel): Family[] {
+  return p.families.filter((f) => f.ladder).map((f) => f.family);
 }
 
 function canonical(v: unknown): string {
