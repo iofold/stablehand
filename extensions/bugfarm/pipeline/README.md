@@ -189,14 +189,32 @@ const r = await calibrate(taskDir, frozenPanel, budgetUsd, { gateway, board });
 ```
 
 `calibrate()` is resumable: attempts are stored, so calling it again with more budget carries on
-where the budget gate stopped it. For the foreman, `calibrate-foreman.ts` wraps it in the
-`Calibrate` contract from `src/calibrate.ts`
-(`foremanCalibrate({ panel: 'cal-v1', gateway })`): `accept` becomes `accepted`, `held` stays
-`pending`, every other decision is `rejected` with the decision as its reason, and `budget.item`
-is the board key. The frozen panel wins over the foreman's panel entries; a mismatch is logged
-once. It writes stage changes to the board only with `writeStage`
+where the budget gate stopped it. It writes stage changes to the board only with `writeStage`
 (the standalone CLI); when a foreman owns the item it writes the difficulty and attempts and leaves
 the stage to the foreman.
+
+**In the foreman.** The worker calibrates every card that passes its controls, through
+`calibrate-foreman.ts` (`calibrationFromEnv`, then `foremanCalibrate`), which wraps `calibrate()`
+in the `Calibrate` contract from `src/calibrate.ts`:
+
+- `accept` moves the card to **Accepted**. Every other decision moves it to **Rejected**, with the
+  decision as its reason (`held` becomes `held_errors`) and the pass counts per family as the
+  detail.
+- The task must carry the final, leak-checked instruction. Attempts never pool across
+  instructions (the instruction is part of every attempt's cell), so a Writer rewrite would mean
+  recalibrating. The foreman checks that the packaged `instruction.md` is the instruction the
+  review passed, rejects the card as `instruction_mismatch` if it is not, and records its sha on
+  the card.
+- Budgets: the card's `calibration_usd` covers every attempt the card has had, so a resumed card
+  only gets what it has left. Across cards there is one pool per campaign: the campaign's cap,
+  minus what its floor turns spent, minus calibration so far. Every card calibrating at once draws
+  on it, and a stage the pool cannot cover does not launch. The campaign key's gateway cap is the
+  hard stop behind both.
+- The frozen panel wins over the foreman's panel entries; a mismatch is logged once. The campaign
+  key's `campaign` tag must match the campaign's budget tag, or the card is rejected as
+  `calibration_error` instead of spending outside the cap.
+- Without a frozen panel or a campaign key the worker logs why and leaves cards waiting in
+  Calibrating.
 
 ### Method
 
@@ -222,15 +240,41 @@ the stage to the foreman.
   soon as more attempts cannot change the decision: the frontier is too easy, the frontier already
   has more passes than the ceiling allows, or someone has passed and the frontier cannot end above
   the ceiling even if every remaining attempt passes.
+- **Early decisions (cal-v2 on).** Waiting for certainty made every accept cost at least 8
+  frontier attempts (0/8 is the first count that makes the 50% ceiling certain at the 16 cap), and
+  on cal-v1 that was $4–6 a task. From cal-v2 the ladder decides on what it has seen:
+  - **Accept** as soon as the frontier has at least 4 finished attempts, has passed at most half of
+    them, and some family has at least one pass.
+  - **`unsolved_review`** when nobody has passed with the frontier at 4 attempts and every other
+    family at 8. The other families stop at 8.
+  - **Too easy** stays as it was: 2/2, 3/4 or 4/8 frontier passes.
+  - The other families run only while nobody has passed: in selection their job is to show that
+    the task can be solved. Once anyone passes, only the frontier's next stage is needed. While
+    nobody has, they still follow the frontier's last finished stage, and once the frontier stops
+    at 0/4 they grow freely to 8.
+  - Errors count as attempts, and the `held` rule still applies: a decision that would change if
+    the errors were passes waits for a person.
+
+  Why this is enough for selection: at 4 frontier attempts every count is decided. 3 or 4 passes is
+  too easy, 0 to 2 passes is at or under the ceiling, so the frontier never needs a fifth attempt
+  unless nobody has passed at all. The cost is precision: a task whose true frontier rate is 55%
+  passes 2 of 4 often enough to be accepted now and then, and the Wilson interval on 1/4 runs from
+  5% to 70%. That is the right trade, because calibration only selects. The benchmark measures
+  accepted tasks on attempts of its own and never reads these, so a borderline task shows up there
+  with its real rate. On cal-v1's numbers, the one accept (fastapi@f90d0369: sonnet 0/8, luna 1/2)
+  would have been decided after 4 frontier attempts instead of 8, and three of the seven
+  over-budget tasks would have been accepted with the attempts they already had
+  (fastapi@d1fd422f: sonnet 1/8, luna 2/2; fastapi@eb75fd07: sonnet 2/4; fastapi@5e6a1eec: sonnet
+  1/4).
 - **Band** (configurable): at least one pass in at least one family, and a frontier pass rate of at
   most 50%. Decisions:
 
   | Decision | When |
   |---|---|
-  | `accept` | someone passes sometimes, and the frontier stays at or under the ceiling |
+  | `accept` | someone passes sometimes, and the frontier stays at or under the ceiling (from cal-v2: after 4 frontier attempts) |
   | `too_easy` | the frontier stopped early as too easy |
   | `out_of_band` | the frontier pass rate is above the ceiling |
-  | `unsolved_review` | every ladder finished with no passes; "unsolved" can mean broken, so a reviewer looks |
+  | `unsolved_review` | every ladder finished with no passes (from cal-v2: frontier at 4, the others at 8); "unsolved" can mean broken, so a reviewer looks |
   | `over_budget` | the budget gate refused every stage still needed; call again with more budget to resume |
   | `held` | errored attempts could change the decision (it differs if they are read as passes) |
 

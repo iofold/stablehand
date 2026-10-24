@@ -9,7 +9,7 @@ import { log, mapLimit, writeJson } from './lib/util.ts';
 import { runAttempt } from './calibrate-harbor.ts';
 import type { AttemptOutcome } from './calibrate-harbor.ts';
 import type { AttemptSpend, CallTokens, SpendLog } from './calibrate-gateway.ts';
-import { CALIBRATION_DIR, knownModel } from './calibrate-panel.ts';
+import { CALIBRATION_DIR, fileSafe, knownModel } from './calibrate-panel.ts';
 import type { Panel } from './calibrate-panel.ts';
 
 export interface ProbeAttempt {
@@ -109,7 +109,7 @@ export async function probeModels(task: { dir: string; name: string }, panel: Pa
   log('probe', `${opts.probeId}: ${specs.length} attempts on ${task.name} (${models.join(', ')}), ${opts.concurrency} at a time`);
   const attempts = await mapLimit(specs, opts.concurrency, async ({ model, tryNo }): Promise<ProbeAttempt> => {
     const attemptId = `${opts.probeId}:${task.name}:${model}:${tryNo}`;
-    const slug = `${model}-t${String(tryNo).padStart(2, '0')}`;
+    const slug = `${fileSafe(model)}-t${String(tryNo).padStart(2, '0')}`;
     const out = await runAttempt(
       {
         attemptId,

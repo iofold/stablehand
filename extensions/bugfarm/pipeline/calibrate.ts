@@ -25,7 +25,7 @@ import { toAtifV17 } from './calibrate-atif.ts';
 import { probeModels, probeTable } from './calibrate-probe.ts';
 import { decide, familyState, frontierNextLaunch, plan, stageFits, tally, wilson } from './calibrate-ladder.ts';
 import type { AttemptResult, Decision, Family, FamilyView, Tally } from './calibrate-ladder.ts';
-import { CALIBRATION_DIR, freezePanel, knownModel, loadFrozenPanel, panelDefinition, readPanelFile } from './calibrate-panel.ts';
+import { CALIBRATION_DIR, fileSafe, freezePanel, loadFrozenPanel, panelDefinition, panelGatewayModels, readPanelFile } from './calibrate-panel.ts';
 import type { FrozenPanel, PanelModel } from './calibrate-panel.ts';
 
 // ---------------------------------------------------------------------------------------------
@@ -199,7 +199,7 @@ export class AttemptStore {
   }
 
   private path(rec: AttemptRecord): string {
-    return join(this.dir, `${rec.model}-${rec.cell}-t${String(rec.try).padStart(2, '0')}.json`);
+    return join(this.dir, `${fileSafe(rec.model)}-${rec.cell}-t${String(rec.try).padStart(2, '0')}.json`);
   }
 
   save(rec: AttemptRecord): void {
@@ -233,7 +233,7 @@ export function recoverInterrupted(store: AttemptStore, only: (rec: AttemptRecor
     }
     const { trialDir, res } = readTrial(rec.job_dir);
     const verdict = res ? judge(res) : { result: 'error' as const, reward: null, exception: 'interrupted: the calibration process stopped during this attempt' };
-    const slug = `${rec.model}-${rec.cell}-t${String(rec.try).padStart(2, '0')}`;
+    const slug = `${fileSafe(rec.model)}-${rec.cell}-t${String(rec.try).padStart(2, '0')}`;
     const traj = keepTrajectories(trialDir, store.trajectoryDir, slug);
     const done: AttemptRecord = {
       ...rec,
@@ -611,7 +611,7 @@ export async function calibrate(taskDir: string, panel: FrozenPanel, budget: num
     const tries = store.forCell(model, cell).map((r) => r.try);
     const tryNo = (tries.length ? Math.max(...tries) : 0) + 1;
     const id = `${task.name}:${panel.id}:${cell}:${model}:${tryNo}`;
-    const slug = `${model}-${cell}-t${String(tryNo).padStart(2, '0')}`;
+    const slug = `${fileSafe(model)}-${cell}-t${String(tryNo).padStart(2, '0')}`;
     const jobName = `${task.name}__${slug}__${randomBytes(3).toString('hex')}`;
     const rec: AttemptRecord = {
       id,
@@ -1197,7 +1197,7 @@ async function main(): Promise<void> {
       if (!campaign) throw new Error(`--campaign is required\n\n${USAGE}`);
       const keyFile = str('key-file') ?? e.keyFile;
       if (fileExists(keyFile)) throw new Error(`${keyFile} already exists; revoke or move it before minting another key`);
-      const models = str('models')?.split(',').filter(Boolean) ?? [...new Set(panel.families.flatMap((f) => [f.cheap, f.strong]).filter((m): m is string => Boolean(m)))];
+      const models = str('models')?.split(',').filter(Boolean) ?? panelGatewayModels(panel);
       const k = await mintCampaignKey(e.admin, { name: str('name') ?? `bugfarm calibration ${campaign}`, tags: { campaign }, models, maxBudgetUsd: num('max-budget'), keyFile });
       console.log(JSON.stringify({ id: k.id, key_alias: k.key_alias, tags: k.tags, models: k.models, max_budget_usd: k.max_budget_usd, key_file: keyFile }, null, 2));
       break;

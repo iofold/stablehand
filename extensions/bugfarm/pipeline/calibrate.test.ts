@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { toAtifV17 } from './calibrate-atif.ts';
 import { jobConfig, judge, labelsCompose } from './calibrate-harbor.ts';
-import { defaultPanel, knownModel, measuredFamilies, panelDefinition, panelSha, validatePanel } from './calibrate-panel.ts';
+import { defaultPanel, fileSafe, knownModel, measuredFamilies, panelDefinition, panelSha, validatePanel } from './calibrate-panel.ts';
 import { probeRows, probeTable } from './calibrate-probe.ts';
 import { withSolverTools } from './lib/build-env.ts';
 import { BudgetPool, CostModel, calibrationToml, itemKeyFor, ladderPriority, readBugfarmMetadata, readTaskInfo, writeTaskCalibration } from './calibrate.ts';
@@ -106,6 +106,15 @@ describe('panel', () => {
     expect(knownModel('claude-haiku-5-5-autocache')?.pricing.input).toBeCloseTo(0.1e-6);
     expect(knownModel('claude-sonnet-5-autocache')?.pricing.cache_read).toBeCloseTo(0.2e-6);
     expect(knownModel('no-such-model')).toBeUndefined();
+    // `@effort` keeps the gateway model and sends reasoning_effort in the body of every call.
+    const low = knownModel('claude-sonnet-5-5-autocache@low');
+    expect(low?.model).toBe('claude-sonnet-5-5-autocache');
+    expect(low?.call_kwargs).toEqual({ extra_body: { reasoning_effort: 'low' } });
+    expect(() => knownModel('claude-sonnet-5-5@fast')).toThrow();
+    const cfg = jobConfig({ attemptId: 'a', taskDir: '/t', jobsDir: '/j', jobName: 'j', model: low as NonNullable<typeof low>, agentKwargs: {}, gatewayUrl: 'http://gw', gatewayKey: 'k', processTimeoutMs: 1, runId: 'r' });
+    const kwargs = ((cfg.agents as Array<{ kwargs: { llm_call_kwargs: Record<string, unknown> } }>)[0]).kwargs.llm_call_kwargs;
+    expect(kwargs.extra_body).toEqual({ reasoning_effort: 'low' });
+    expect(fileSafe('claude-sonnet-5-5@low')).toBe('claude-sonnet-5-5_low');
   });
 });
 

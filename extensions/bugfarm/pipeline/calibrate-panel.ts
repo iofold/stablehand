@@ -151,10 +151,42 @@ export function panelDefinition(id: string): Panel {
  * An `-autocache` alias and its plain alias share prices, so either finds the other.
  */
 export function knownModel(name: string): PanelModel | undefined {
+  const at = name.lastIndexOf('@');
+  if (at > 0) {
+    // `<gateway model>@<effort>`: the same model with a reasoning effort on every call.
+    const base = knownModel(name.slice(0, at));
+    return base ? withEffort(base, name.slice(at + 1)) : undefined;
+  }
   const all: Record<string, PanelModel> = { ...defaultPanel().models, ...panelV2().models };
   if (all[name]) return all[name];
   const sibling = name.endsWith('-autocache') ? name.slice(0, -'-autocache'.length) : `${name}-autocache`;
   return all[sibling] ? { ...all[sibling], model: name } : undefined;
+}
+
+/**
+ * The model with a reasoning effort on every call. It goes in the request body
+ * (`reasoning_effort`), which the gateway maps to Claude's adaptive thinking with
+ * `output_config.effort`; terminus-2's own client never sees it as a parameter it might drop.
+ */
+export function withEffort(m: PanelModel, effort: string): PanelModel {
+  if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) throw new Error(`unknown effort ${effort}`);
+  const extraBody = { ...((m.call_kwargs?.extra_body as Record<string, unknown> | undefined) ?? {}), reasoning_effort: effort };
+  return { ...m, call_kwargs: { ...(m.call_kwargs ?? {}), extra_body: extraBody } };
+}
+
+/** A model entry name as a file or job-name part (`claude-sonnet-5-5@low` -> `claude-sonnet-5-5_low`). */
+export function fileSafe(name: string): string {
+  return name.replace(/[^A-Za-z0-9._-]/g, '_');
+}
+
+/** The gateway model a panel entry calls (an entry may be `<gateway model>@<effort>`). */
+export function gatewayModel(p: Panel, name: string): string {
+  return p.models[name]?.model ?? name;
+}
+
+/** Every gateway model the panel's families name: what its campaign key must allow. */
+export function panelGatewayModels(p: Panel): string[] {
+  return [...new Set(p.families.flatMap((f) => [f.cheap, f.strong, f.ladder]).filter((m): m is string => Boolean(m)).map((m) => gatewayModel(p, m)))];
 }
 
 /** Families with a measured (ladder) model, in panel order: what the board's dots stand for. */
@@ -222,9 +254,9 @@ export async function freezePanel(input: Panel, opts: { gatewayUrl: string; key:
     if (existing.sha !== sha) throw new Error(`panel ${panel.id} is already frozen with sha ${existing.sha}; results never pool across panels, so use a new id`);
     return existing;
   }
-  const models = [...new Set(panel.families.flatMap((f) => [f.cheap, f.strong]).filter((m): m is string => Boolean(m)))];
+  const models = panelGatewayModels(panel);
   const routes = await checkRoutes(opts.gatewayUrl, opts.key, models, { completionTokensModels: panel.completion_tokens_models, tag: `freeze:${panel.id}` });
-  const needed = new Set([...panel.families.map((f) => f.ladder).filter((m): m is string => Boolean(m)), panel.screen.cheap, panel.screen.frontier]);
+  const needed = new Set([...panel.families.map((f) => f.ladder).filter((m): m is string => Boolean(m)), panel.screen.cheap, panel.screen.frontier].map((m) => gatewayModel(panel, m)));
   const dead = routes.filter((r) => !r.ok && needed.has(r.model));
   if (dead.length) throw new Error(`cannot freeze ${panel.id}: no answer from ${dead.map((r) => `${r.model} (${r.status ?? ''} ${r.detail ?? ''})`).join('; ')}`);
   const frozen: FrozenPanel = { ...panel, frozen_at: new Date().toISOString(), sha, routes };
