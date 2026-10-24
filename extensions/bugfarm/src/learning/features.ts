@@ -40,16 +40,17 @@ export const gitFeatures: GitFeatures = async (repo, sha) => {
   const clone = await ensureClone(repo);
   const profile = profileFor(repo);
   let testLines = 0;
-  let added = 0;
-  let deleted = 0;
+  let linesAdded = 0;
+  let linesDeleted = 0;
   for (const entry of (await numstat(clone.dir, [candidate.sha])).get(candidate.sha) ?? []) {
     const kind = classify(profile, entry.path);
     if (kind === 'test') testLines += entry.added + entry.deleted;
     else if (kind !== 'doc') {
-      added += entry.added;
-      deleted += entry.deleted;
+      linesAdded += entry.added;
+      linesDeleted += entry.deleted;
     }
   }
+  const added = new Set((await describeUnit(clone.dir, candidate.sha)).files.filter((f) => f.status.startsWith('A')).map((f) => f.path));
   const head = await headDate(clone.dir, clone.head);
   const age = Math.round((Date.parse(head) - Date.parse(candidate.date)) / DAY_MS);
   return {
@@ -61,9 +62,11 @@ export const gitFeatures: GitFeatures = async (repo, sha) => {
     source_files: candidate.source_files,
     test_files: candidate.test_files,
     other_files: candidate.other_files,
+    new_test_files: candidate.test_files.filter((path) => added.has(path)).length,
+    new_source_files: candidate.source_files.filter((path) => added.has(path)).length,
     non_test_lines: candidate.non_test_lines,
-    lines_added: added,
-    lines_deleted: deleted,
+    lines_added: linesAdded,
+    lines_deleted: linesDeleted,
     test_lines: testLines,
   };
 };

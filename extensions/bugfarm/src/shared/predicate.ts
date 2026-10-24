@@ -30,6 +30,8 @@ export const FEATURE_FIELDS = {
   source_files: { type: 'strings', description: 'Package source files it changes (repo paths)' },
   test_files: { type: 'strings', description: 'Test files it changes (repo paths)' },
   other_files: { type: 'strings', description: 'Files that are neither source, tests nor docs' },
+  new_test_files: { type: 'number', description: 'Test files the fix adds (rather than edits)' },
+  new_source_files: { type: 'number', description: 'Package source files the fix adds' },
   non_test_lines: { type: 'number', description: 'Lines added plus deleted outside tests and docs' },
   lines_added: { type: 'number', description: 'Lines added outside tests and docs' },
   lines_deleted: { type: 'number', description: 'Lines deleted outside tests and docs' },
