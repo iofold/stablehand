@@ -90,12 +90,28 @@ export async function buildEnvFromDockerfile(opts: {
   };
 }
 
+/**
+ * Harbor's terminus-2 (the calibration solver) drives the task container over tmux, and the task
+ * container has no network, so tmux has to be in the env image. The profile Dockerfiles install
+ * it; an agent-written Dockerfile that does not gets this layer appended. Without it every
+ * calibration attempt fails with "Failed to start tmux session".
+ */
+export const SOLVER_TOOLS_LAYER = [
+  'USER root',
+  'RUN command -v tmux >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends tmux && rm -rf /var/lib/apt/lists/*) || apk add --no-cache tmux',
+].join('\n');
+
+export function withSolverTools(dockerfile: string): string {
+  if (/^\s*RUN\b[^\n]*\btmux\b/im.test(dockerfile)) return dockerfile;
+  return `${dockerfile.replace(/\s*$/, '')}\n# Added by Bugfarm: terminus-2 needs tmux in the task container.\n${SOLVER_TOOLS_LAYER}\n`;
+}
+
 /** CLI-facing step: build the repo's env image at HEAD from its profile (or an override Dockerfile). */
 export async function buildEnv(repo: string, opts: { dockerfileText?: string; force?: boolean } = {}): Promise<EnvBuildResult> {
   const profile = profileFor(repo);
   const head = await ensureHeadTree(repo);
   const custom = opts.dockerfileText !== undefined && opts.dockerfileText !== profile.dockerfile;
-  const dockerfile = opts.dockerfileText ?? profile.dockerfile;
+  const dockerfile = custom ? withSolverTools(opts.dockerfileText as string) : profile.dockerfile;
   const tag = envTag(profile.slug, head.head, custom ? dockerfile : undefined);
   log('env', `${repo}: building ${tag}`);
   const r = await buildEnvFromDockerfile({
