@@ -94,6 +94,20 @@ describe('floor tools', () => {
     await expect(tools.handle('submit_candidates', { candidates: [{ pr: 7, sha: 'abcdef1' }] }, req('t-writer'))).rejects.toBeInstanceOf(ToolError);
   });
 
+  it('drops pull requests an earlier batch of the campaign used, and says which', async () => {
+    const store = new MemoryStore();
+    await store.upsert([
+      { kind: 'turn', key: 't2', payload: { turn_id: 't2', role: 'scout', agent_id: 'a', campaign: 'c', batch: 2, stage: 'scout', item: 'c:batch-2', status: 'running' } },
+      { kind: 'item', key: 'c:x@1', payload: { stage: 'rejected', campaign: 'c', batch: 1, pr: 7 } },
+      { kind: 'item', key: 'other:x@1', payload: { stage: 'rejected', campaign: 'other', batch: 1, pr: 8 } },
+    ]);
+    const tools = createToolHandlers({ jobs: {} as never, store, floor: null, itemContext: () => { throw new Error('unused'); } });
+    const answer = await tools.handle('submit_candidates', { candidates: [{ pr: 7, sha: 'abcdef1', title: 'Fix x' }, { pr: 8, sha: 'abcdef2', title: 'Fix y' }] }, req('t2'));
+    expect(answer).toMatchObject({ accepted: 1, already_used: [7] });
+    expect(String(answer.message)).toContain('#7');
+    await expect(tools.handle('submit_candidates', { candidates: [{ pr: 7, sha: 'abcdef1', title: 'Fix x' }] }, req('t2'))).rejects.toThrow('already used');
+  });
+
   it('finds the turn through its tags when the foreman has not recorded it yet', async () => {
     const store = new MemoryStore();
     const floor = {

@@ -32,6 +32,7 @@ export interface ToolDeps {
   store: {
     latest(kind: 'turn' | 'item', key: string): Promise<BoardRow | null>;
     upsert(rows: UpsertInput[]): Promise<unknown>;
+    currentOfKind(kind: 'item'): Promise<BoardRow<'item'>[]>;
   };
   floor: Pick<FloorApi, 'lookupTurn'> | null;
   itemContext: (repo: string, sha: string) => ItemContext;
@@ -147,10 +148,20 @@ export function createToolHandlers(deps: ToolDeps) {
     if (!parsed.success) throw new ToolError(400, `submit_candidates: ${issues(parsed.error)}`);
     const turn = await turnOf(req);
     if (!turn || turn.role !== 'scout') throw new ToolError(409, 'submit_candidates only works inside a Bugfarm Scout turn.');
-    const parsedCandidates = parseCandidates({ candidates: parsed.data.candidates });
-    const dropped = parsed.data.candidates.length - parsedCandidates.length;
-    if (parsedCandidates.length === 0) {
+    const valid = parseCandidates({ candidates: parsed.data.candidates });
+    const dropped = parsed.data.candidates.length - valid.length;
+    if (valid.length === 0) {
       throw new ToolError(422, 'None of the candidates had both a PR number (pr) and a merge commit sha (sha, 7-40 hex characters). Fix them and submit again.');
+    }
+    // The foreman never re-runs a pull request an earlier batch used; say so now, while the Scout can still replace it.
+    const used = new Set((await deps.store.currentOfKind('item'))
+      .map((row) => row.payload as ItemPayload & { campaign?: string })
+      .filter((item) => item.campaign === turn.campaign && (item.batch ?? 0) < turn.batch && typeof item.pr === 'number')
+      .map((item) => item.pr as number));
+    const repeated = valid.filter((candidate) => used.has(candidate.pr)).map((candidate) => candidate.pr);
+    const parsedCandidates = valid.filter((candidate) => !used.has(candidate.pr));
+    if (parsedCandidates.length === 0) {
+      throw new ToolError(422, `Every pull request you submitted was already used by an earlier batch (${repeated.map((pr) => `#${pr}`).join(', ')}); nothing was recorded. Pick units from the list that the task does not name as used, and submit again.`);
     }
     // Scout filters with a skip_if predicate are code: the worker drops what they match.
     const screen = deps.learning ? await deps.learning.screen(turn, parsedCandidates, parsed.data.candidates) : null;
@@ -166,12 +177,14 @@ export function createToolHandlers(deps: ToolDeps) {
     }]);
     const notes: string[] = [];
     if (dropped > 0) notes.push(`${dropped} had no valid pr or sha and were dropped`);
+    if (repeated.length > 0) notes.push(`${repeated.length} were already used by an earlier batch and were dropped (${repeated.map((pr) => `#${pr}`).join(', ')})`);
     if (skipped.length > 0) {
       notes.push(`the playbook's filters dropped ${skipped.length}: ${skipped.map((s) => `#${s.pr} (${s.rule}: ${s.predicate})`).join('; ')}`);
     }
     return {
       accepted: candidates.length,
       dropped,
+      already_used: repeated,
       skipped: skipped.map((s) => ({ pr: s.pr, rule: s.rule, skip_if: s.predicate })),
       message: notes.length > 0
         ? `Recorded ${candidates.length} candidates; ${notes.join('; ')}. To fill the batch, submit the full list again (kept ones plus replacements); the last submission counts.`
