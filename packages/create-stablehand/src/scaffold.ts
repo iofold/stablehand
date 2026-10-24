@@ -98,6 +98,8 @@ function envFile(template: TemplateDefinition, secrets: { masterKey: string; api
     '# STABLEHAND_IMAGE_TAG=latest',
     '# UI_PORT=3200',
     '# API_PORT=3002',
+    '# Database and object-store ports are local only. Override deliberately after securing them.',
+    '# STABLEHAND_DATA_BIND_ADDRESS=127.0.0.1',
     ...template.env,
     '',
   ].join('\n');
@@ -111,6 +113,8 @@ function envExample(template: TemplateDefinition): string {
     'SECRET_MASTER_KEY=',
     'STABLEHAND_API_TOKEN=',
     'GALLERY_WEBHOOK_SECRET=',
+    '# Database and object-store ports are local only.',
+    '# STABLEHAND_DATA_BIND_ADDRESS=127.0.0.1',
     ...template.env.map((line) => line.replace(/^(GALLERY_API_KEY)=.*/, '$1=')),
     '',
   ].join('\n');

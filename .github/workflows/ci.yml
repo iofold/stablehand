@@ -157,6 +157,11 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify Docker build context excludes credentials
+        run: node scripts/verify-docker-build-context.mjs
       - name: Build orchestrator image
         run: docker build --target orchestrator -t stablehand/orchestrator:ci -f Dockerfile .
       - name: Build UI image

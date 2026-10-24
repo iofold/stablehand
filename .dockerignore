@@ -1,5 +1,19 @@
 node_modules
 **/node_modules
+# Local credentials must never enter a build, including ignored files under
+# examples/ (the orchestrator copies that entire directory into its image).
+**/.env
+**/.env.*
+!**/.env.example
+**/.npmrc
+**/.pypirc
+**/credentials.json
+**/secrets.json
+**/service-account*.json
+**/*.pem
+**/*.key
+**/id_rsa
+**/id_ed25519
 **/.stablehand
 # Local data directories written before the 2026-09-24 rename (contain overlay whiteouts).
 **/.ctxmill

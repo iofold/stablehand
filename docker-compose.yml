@@ -12,7 +12,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stablehand}
       POSTGRES_DB: ${POSTGRES_DB:-stablehand}
     ports:
-      - "${POSTGRES_PORT:-5433}:5432"
+      - "${STABLEHAND_DATA_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -176,8 +176,8 @@ services:
       RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-stablehand-dev}
       RUSTFS_CONSOLE_ENABLE: "true"
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${STABLEHAND_DATA_BIND_ADDRESS:-127.0.0.1}:${MINIO_API_PORT:-9000}:9000"
+      - "${STABLEHAND_DATA_BIND_ADDRESS:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio-data:/data
     networks:
@@ -196,7 +196,7 @@ services:
       PGADMIN_DEFAULT_EMAIL: admin@stablehand.dev
       PGADMIN_DEFAULT_PASSWORD: admin
     ports:
-      - "5050:80"
+      - "${STABLEHAND_DATA_BIND_ADDRESS:-127.0.0.1}:5050:80"
     depends_on:
       - postgres
     profiles:
