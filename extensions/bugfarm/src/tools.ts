@@ -4,7 +4,9 @@ import type { FloorApi } from './floor/api.js';
 import { leakInputFor, type ItemContext } from './foreman/context.js';
 import { parseCandidates } from './foreman/foreman.js';
 import { jobIdFor, type JobRecord, type JobRunner } from './jobs/runner.js';
-import type { LearningLoop } from './learning/loop.js';
+import type { LearningLoop, ScreenResult } from './learning/loop.js';
+
+type ScreenSkip = ScreenResult['skipped'][number];
 import { checkLeaks } from './leak-check.js';
 import type { BoardRow, FloorRole, ItemPayload, JobKind, TurnPayload } from './shared/board.js';
 import type { UpsertInput } from './store/validate.js';
@@ -166,7 +168,10 @@ export function createToolHandlers(deps: ToolDeps) {
     // Scout filters with a skip_if predicate are code: the worker drops what they match.
     const screen = deps.learning ? await deps.learning.screen(turn, parsedCandidates, parsed.data.candidates) : null;
     const candidates = screen?.kept ?? parsedCandidates;
-    const skipped = screen?.skipped ?? [];
+    // Drops add up over the turn: a resubmission replaces the list, not what the filters already dropped.
+    const earlier = ((turn.submission as { skipped?: ScreenSkip[] } | null | undefined)?.skipped ?? []).filter((s) => !(screen?.skipped ?? []).some((now) => now.pr === s.pr));
+    const skipped = screen ? [...earlier, ...screen.skipped] : [];
+    const skippedNow = screen?.skipped ?? [];
     await deps.store.upsert([{
       kind: 'turn',
       key: turn.key,
@@ -178,14 +183,14 @@ export function createToolHandlers(deps: ToolDeps) {
     const notes: string[] = [];
     if (dropped > 0) notes.push(`${dropped} had no valid pr or sha and were dropped`);
     if (repeated.length > 0) notes.push(`${repeated.length} were already used by an earlier batch and were dropped (${repeated.map((pr) => `#${pr}`).join(', ')})`);
-    if (skipped.length > 0) {
-      notes.push(`the playbook's filters dropped ${skipped.length}: ${skipped.map((s) => `#${s.pr} (${s.rule}: ${s.predicate})`).join('; ')}`);
+    if (skippedNow.length > 0) {
+      notes.push(`the playbook's filters dropped ${skippedNow.length}: ${skippedNow.map((s) => `#${s.pr} (${s.rule}: ${s.predicate})`).join('; ')}`);
     }
     return {
       accepted: candidates.length,
       dropped,
       already_used: repeated,
-      skipped: skipped.map((s) => ({ pr: s.pr, rule: s.rule, skip_if: s.predicate })),
+      skipped: skippedNow.map((s) => ({ pr: s.pr, rule: s.rule, skip_if: s.predicate })),
       message: notes.length > 0
         ? `Recorded ${candidates.length} candidates; ${notes.join('; ')}. To fill the batch, submit the full list again (kept ones plus replacements); the last submission counts.`
         : `Recorded ${candidates.length} candidates. You are done; reply with a one-line summary.`,

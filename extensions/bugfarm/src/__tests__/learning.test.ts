@@ -380,6 +380,11 @@ describe('learning loop through the foreman', () => {
     expect(teach[0].task).toContain('Learn from Bugfarm batch 1');
     expect(teach[0].task).toContain('"age_days": 420');
     expect(floor.answers.some((a) => typeof a.message === 'string' && a.message.includes('filters dropped 2'))).toBe(true);
+    // A resubmission keeps the drops of the first submission on the turn.
+    const scout2 = [...store.history].reverse().find((row) => row.kind === 'turn' && (row.payload as TurnPayload).role === 'scout' && (row.payload as TurnPayload).batch === 2);
+    const scoutTurn = scout2?.key ?? '';
+    await floor.tools.handle('submit_candidates', { candidates: [{ pr: 999, sha: 'f'.repeat(40), title: 'Fix z' }] }, { headers: { 'x-turn-id': scoutTurn } } as unknown as IncomingMessage);
+    expect((store.payload<TurnPayload>('turn', scoutTurn)?.submission as { skipped: unknown[] }).skipped).toHaveLength(2);
     // Features ride on the cards for the receipts.
     expect(store.payload<ItemPayload & { features?: CandidateFeatures }>('item', itemKeyFor('c', REPO, sha('a', 1, 1)))?.features).toMatchObject({ age_days: 15, title_prefix: '🐛', labels: ['bug'], scout_rank: 1 });
   });
