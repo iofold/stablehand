@@ -89,7 +89,7 @@ export function renderCard(m: DatasetModel, approval: Approval | null): string {
     ['Tasks', m.tasks.length],
     ['Fixes from', `${m.tasks.map((t) => t.fix_date?.slice(0, 10)).filter(Boolean).sort()[0] ?? '–'} to ${m.tasks.map((t) => t.fix_date?.slice(0, 10)).filter(Boolean).sort().at(-1) ?? '–'}`],
     ['Benchmark', `${def.cells.length} agent and model pairs, ${def.k} tries per task each (run \`${def.id}\`)`],
-    ['Spend, this campaign', usd(ledger.totals.campaign_usd)],
+    ['Spend, calibration and benchmark', usd(ledger.totals.campaign_usd)],
     ['Dataset sha256', `\`${m.sha}\``],
     ['Approved', approval ? `${approval.action === 'approve' ? 'yes' : 'no'}, ${new Date(approval.resolved_at ?? 0).toISOString()}` : 'not yet'],
   ]));
@@ -171,6 +171,7 @@ export function renderCard(m: DatasetModel, approval: Approval | null): string {
   out.push('');
   out.push(table(['Task', 'Authoring', 'Selection (calibration)', 'Measurement (benchmark)', 'Total'], [
     ...ledger.tasks.map((t) => [`\`${t.task}\``, usd(t.authoring_usd), usd(t.selection_usd), usd(t.measurement_usd), usd(t.total_usd)]),
+    ...(ledger.other_selection_usd ? [['Candidates not in this dataset (rejected or undecided)', '–', usd(ledger.other_selection_usd), '–', usd(ledger.other_selection_usd)]] : []),
     ['**Campaign total**', usd(ledger.totals.authoring_usd), usd(ledger.totals.selection_usd), usd(ledger.totals.measurement_usd), `**${usd(ledger.totals.campaign_usd)}**`],
   ]));
   out.push('');
@@ -180,7 +181,7 @@ export function renderCard(m: DatasetModel, approval: Approval | null): string {
     out.push(`- Selection: ${usd(s.tasks_usd)} of calibration attempts on these tasks${s.campaign_total_usd !== null ? `; the calibration campaign${s.campaign ? ` \`${s.campaign}\`` : ''} spent ${usd(s.campaign_total_usd, 4)} in all${s.campaign_calls !== null ? ` over ${s.campaign_calls} calls` : ''}` : ''}${s.gateway_usd !== null ? `, and the gateway's spend log shows ${usd(s.gateway_usd, 4)} for its keys` : ''}. The campaign total counts toward the total above.`);
   }
   if (rec) {
-    out.push(`- Measurement: ${rec.ledger.attempts} tries${rec.ledger.voided_executions ? ` plus ${rec.ledger.voided_executions} interrupted and re-run (${usd(rec.ledger.voided_usd, 4)}, counted in the total but not in any pass rate)` : ''} cost ${usd(rec.ledger.total_usd, 4)}.`);
+    out.push(`- Measurement: ${rec.ledger.attempts} tries${rec.ledger.voided_executions ? ` plus ${rec.ledger.voided_executions} interrupted and re-run (${usd(rec.ledger.voided_usd, 4)}, counted in the total but not in any pass rate)` : ''} cost ${usd(rec.ledger.total_usd, 4)}${rec.ledger.running ? ` (draft: ${rec.ledger.running} trials were still running, so the gateway and budget views below include spend the ledger does not have yet)` : ''}.`);
     if (rec.gateway.total_usd !== null) out.push(`  - Gateway spend log, read independently: ${usd(rec.gateway.total_usd, 4)}${rec.gateway.campaign_key ? ` (campaign key ${usd(rec.gateway.campaign_key.matched_usd, 4)}` : ''}${rec.gateway.sessions ? `${rec.gateway.campaign_key ? ', ' : ' ('}Stablehand sessions ${usd(rec.gateway.sessions.usd, 4)} over ${rec.gateway.sessions.turns_matched} turns)` : rec.gateway.campaign_key ? ')' : ''}; difference ${usd(rec.differences.ledger_vs_gateway_usd, 6)}.`);
     if (rec.stablehand.budget_policy) out.push(`  - Stablehand campaign budget \`${def.campaign}\`: ${usd(rec.stablehand.budget_policy.spend_usd, 4)} of a ${usd(rec.stablehand.budget_policy.cap_usd)} cap${rec.stablehand.other_tagged_turns?.turns ? `, of which ${usd(rec.stablehand.other_tagged_turns.usd, 4)} is ${rec.stablehand.other_tagged_turns.turns} non-benchmark turns (the publish approval)` : ''}; difference ${usd(rec.differences.ledger_vs_budget_usd, 6)}.`);
   }

@@ -73,6 +73,8 @@ export interface Ledger {
   measurement: { campaign: string; attempts: number; voided_executions: number; total_usd: number; by_cell: Record<string, { attempts: number; usd: number }> };
   selection: SelectionSpend | null;
   authoring: AuthoringSpend | null;
+  /** Calibration spent on candidates that are not in this dataset (rejected or undecided). */
+  other_selection_usd: number | null;
   totals: { authoring_usd: number | null; selection_usd: number | null; measurement_usd: number; campaign_usd: number };
   reconciliation: Reconciliation | null;
 }
@@ -222,6 +224,7 @@ export function buildLedger(def: BenchDefinition, store: AttemptStore, rec: Reco
   }
   const measurement = r2(all.reduce((s, a) => s + bestCost(a), 0));
   const selectionUsd = selection ? selection.campaign_total_usd ?? selection.tasks_usd : null;
+  const otherSelection = selection?.campaign_total_usd !== null && selection?.campaign_total_usd !== undefined ? r2(Math.max(0, selection.campaign_total_usd - selection.tasks_usd)) : null;
   const authoringUsd = authoring?.total_usd ?? null;
   return {
     currency: 'USD',
@@ -229,6 +232,7 @@ export function buildLedger(def: BenchDefinition, store: AttemptStore, rec: Reco
     measurement: { campaign: def.campaign, attempts: all.filter((a) => a.status === 'done').length, voided_executions: all.filter((a) => a.status === 'void').length, total_usd: measurement, by_cell: byCell },
     selection,
     authoring,
+    other_selection_usd: otherSelection,
     totals: { authoring_usd: authoringUsd, selection_usd: selectionUsd, measurement_usd: measurement, campaign_usd: r2(measurement + (selectionUsd ?? 0) + (authoringUsd ?? 0)) },
     reconciliation: rec,
   };

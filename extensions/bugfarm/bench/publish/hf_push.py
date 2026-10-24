@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 IGNORE = [".publish/**", ".publish"]
+LARGE_FOLDER_FILES = 2000
 
 
 def manifest_ok(folder: Path, expected_sha: str) -> tuple[bool, str]:
@@ -69,7 +70,8 @@ def main() -> int:
         return 3
     summary = {"repo": args.repo, "repo_type": "dataset", "visibility": args.visibility, "dataset_sha256": args.dataset_sha, **plan(folder)}
     if args.dry_run:
-        print(json.dumps({"ok": True, "dry_run": True, "would": ["create_repo (if missing)", "upload_folder"], **summary}))
+        uploader = "upload_large_folder" if summary["files"] > LARGE_FOLDER_FILES else "upload_folder"
+        print(json.dumps({"ok": True, "dry_run": True, "would": [f"create_repo({args.repo!r}, repo_type='dataset', private={args.visibility != 'public'}) if missing", uploader], **summary}))
         return 0
 
     from huggingface_hub import HfApi
@@ -86,15 +88,21 @@ def main() -> int:
     except RepositoryNotFoundError:
         api.create_repo(args.repo, repo_type="dataset", private=private, exist_ok=False)
         created = True
-    commit = api.upload_folder(
-        folder_path=str(folder),
-        repo_id=args.repo,
-        repo_type="dataset",
-        commit_message=args.commit_message,
-        commit_description=f"dataset sha256 {args.dataset_sha}",
-        ignore_patterns=IGNORE,
-    )
-    print(json.dumps({"ok": True, "dry_run": False, "created_repo": created, "commit_url": getattr(commit, "commit_url", str(commit)), **summary}))
+    if summary["files"] > LARGE_FOLDER_FILES:
+        # Many files (every task holds a repository snapshot): the resumable, multi-commit uploader.
+        api.upload_large_folder(repo_id=args.repo, folder_path=str(folder), repo_type="dataset", ignore_patterns=IGNORE)
+        commit_url = None
+    else:
+        commit = api.upload_folder(
+            folder_path=str(folder),
+            repo_id=args.repo,
+            repo_type="dataset",
+            commit_message=args.commit_message,
+            commit_description=f"dataset sha256 {args.dataset_sha}",
+            ignore_patterns=IGNORE,
+        )
+        commit_url = getattr(commit, "commit_url", str(commit))
+    print(json.dumps({"ok": True, "dry_run": False, "created_repo": created, "commit_url": commit_url, **summary}))
     return 0
 
 

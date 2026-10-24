@@ -230,6 +230,8 @@ export interface Reconciliation {
     voided_usd: number;
     total_usd: number;
     unsettled: number;
+    /** Trials still running: their spend is in the gateway and budget views but not yet in the ledger. */
+    running: number;
     by_cell: Record<string, { attempts: number; usd: number }>;
     by_task: Record<string, { attempts: number; usd: number }>;
   };
@@ -334,6 +336,7 @@ export async function reconcile(store: AttemptStore, def: BenchDefinition, ctx: 
       voided_usd: round(voidUsd, 6),
       total_usd: round(ledgerTotal, 6),
       unsettled: [...done, ...voided].filter((a) => a.cost_state !== 'gateway').length,
+      running: all.filter((a) => a.status === 'running').length,
       by_cell: byCell,
       by_task: byTask,
     },

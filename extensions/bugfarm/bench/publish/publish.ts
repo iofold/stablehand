@@ -131,6 +131,8 @@ export async function publish(argsIn: unknown): Promise<void> {
   if (push && !target) throw new Error('--push needs a target repo: --hf-repo <org/name> or BUGFARM_HF_REPO');
   const targetLabel = target ?? '<target repo not set: BUGFARM_HF_REPO>';
   const store = new AttemptStore(def.id);
+  const running = store.all().filter((x) => x.status === 'running').length;
+  if (running && !args['allow-running']) throw new Error(`${running} trials of ${def.id} are still running; publish when the benchmark is done (or pass --allow-running for a draft)`);
 
   // 1. The numbers: reconcile the benchmark, and look up the other campaigns' spend.
   log('publish', `reconciling ${def.campaign} with the gateway and Stablehand`);
