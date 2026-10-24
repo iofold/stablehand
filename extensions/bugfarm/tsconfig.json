@@ -18,6 +18,7 @@
   },
   "include": [
     "src/**/*.ts",
-    "pipeline/**/*.ts"
+    "pipeline/**/*.ts",
+    "bench/**/*.ts"
   ]
 }

@@ -1,0 +1,40 @@
+{
+  "$comment": "Bugfarm benchmark cells: harness x model. 'stablehand' cells run a Stablehand harness through the StablehandAgent Harbor agent (harbor/); 'terminus-2' cells run Harbor's own agent through the gateway on the campaign key. Every cell gets the same agent timeout. Prices are the gateway's, per million tokens, so Harbor's own cost estimate matches the bill before the spend log catches up.",
+  "defaults": {
+    "k": 3,
+    "concurrency": 6,
+    "agent_timeout_sec": 1200,
+    "max_cost_usd_per_trial": 2,
+    "reserve_factor": 0.5
+  },
+  "terminus2_kwargs": {
+    "parser_name": "json",
+    "record_terminal_session": false,
+    "max_turns": 40,
+    "suppress_max_turns_warning": true
+  },
+  "models": {
+    "claude-sonnet-5": { "family": "anthropic", "max_input_tokens": 1000000, "max_output_tokens": 128000, "usd_per_mtok": { "input": 2, "output": 10, "cache_read": 0.2, "cache_write": 2.5 } },
+    "gpt-6-luna": { "family": "openai", "max_input_tokens": 922000, "max_output_tokens": 128000, "usd_per_mtok": { "input": 0.1, "output": 0.5, "cache_read": 0.01, "cache_write": 0.125 } },
+    "gpt-5.4-mini": { "family": "openai", "max_input_tokens": 272000, "max_output_tokens": 128000, "usd_per_mtok": { "input": 0.75, "output": 4.5, "cache_read": 0.075 } },
+    "cf-kimi-k2.7-code": { "family": "open", "max_input_tokens": 128000, "usd_per_mtok": { "input": 0.95, "output": 4 } }
+  },
+  "cells": [
+    { "id": "claude-agents/claude-sonnet-5", "agent": "stablehand", "harness": "claude-agents", "model": "claude-sonnet-5", "est_attempt_usd": 0.6 },
+    { "id": "pi/gpt-6-luna", "agent": "stablehand", "harness": "pi", "model": "gpt-6-luna", "est_attempt_usd": 0.05 },
+    { "id": "pi/gpt-5.4-mini", "agent": "stablehand", "harness": "pi", "model": "gpt-5.4-mini", "est_attempt_usd": 0.3 },
+    { "id": "pi/cf-kimi-k2.7-code", "agent": "stablehand", "harness": "pi", "model": "cf-kimi-k2.7-code", "est_attempt_usd": 0.3 },
+    { "id": "terminus-2/claude-sonnet-5", "agent": "terminus-2", "model": "claude-sonnet-5", "est_attempt_usd": 0.5 },
+    { "id": "terminus-2/gpt-6-luna", "agent": "terminus-2", "model": "gpt-6-luna", "est_attempt_usd": 0.02 },
+    {
+      "id": "langgraph/gpt-5.4-mini",
+      "enabled": false,
+      "agent": "stablehand",
+      "harness": "langgraph",
+      "model": "gpt-5.4-mini",
+      "native_tools": "none",
+      "est_attempt_usd": 0.15,
+      "notes": ["Harness-native tools off: only the task_* tools. With them on, LangGraph explored and edited its own sandbox's /app instead of the task's."]
+    }
+  ]
+}
