@@ -173,8 +173,14 @@ function count(n: number, of: number): string {
   return `${n} of ${of}`;
 }
 
-function batchLine(label: string, numbers: NonNullable<MeasuredEffect['before']>): string {
-  return `${label} ${numbers.batch}: ${count(numbers.accepted, numbers.decided)} (${pct(numbers.share)}), ${usd(numbers.usd_per_accepted)} each`;
+function batchName(numbers: NonNullable<MeasuredEffect['before']>, capital = false): string {
+  const batches = numbers.batches ?? [numbers.batch];
+  const name = batches.length > 1 ? `batches ${batches[0]}–${batches[batches.length - 1]}` : `batch ${numbers.batch}`;
+  return capital ? name[0].toUpperCase() + name.slice(1) : name;
+}
+
+function batchLine(numbers: NonNullable<MeasuredEffect['before']>, capital = false): string {
+  return `${batchName(numbers, capital)}: ${count(numbers.accepted, numbers.decided)} (${pct(numbers.share)}), ${usd(numbers.usd_per_accepted)} each`;
 }
 
 function Effect({ rule }: { rule: Rule }) {
@@ -186,9 +192,17 @@ function Effect({ rule }: { rule: Rule }) {
   if (effect.accepted_share_pts !== undefined) parts.push(`${signedPts(effect.accepted_share_pts)} accepted`);
   if (effect.usd_per_accepted !== undefined) parts.push(`${signedUsd(effect.usd_per_accepted)} per accepted task`);
   const target = effect.target_reason;
+  const tooSmall = effect.too_small === true;
   return (
     <span className="block text-ink-2">
-      <span className="block">{parts.join(', ') || 'No comparable numbers'}{effect.before && effect.after ? ` (batch ${effect.after.batch} against batch ${effect.before.batch})` : ''}.</span>
+      {tooSmall && effect.after && (
+        <span className="block font-semibold text-ink">
+          {rule.status === 'trial'
+            ? `Too few to judge yet: ${count(effect.after.decided, effect.min_decided ?? 5).replace(' of ', ' decided, ')} needed. It stays on trial and the next batch is pooled with it.`
+            : `Never measurable: only ${effect.after.decided} decided candidate${effect.after.decided === 1 ? '' : 's'} ran with it, ${effect.min_decided ?? 5} needed.`}
+        </span>
+      )}
+      <span className="block">{parts.join(', ') || 'No comparable numbers'}{effect.before && effect.after ? ` (${batchName(effect.after)} against ${batchName(effect.before)})` : ''}{tooSmall ? ', on too few candidates to mean anything' : ''}.</span>
       {target && effect.target_before && effect.target_after && (
         <span className="block">
           {rejectReasonLabel(target)}: {count(effect.target_before.count, effect.target_before.decided)} → {count(effect.target_after.count, effect.target_after.decided)}
@@ -197,7 +211,7 @@ function Effect({ rule }: { rule: Rule }) {
         </span>
       )}
       {effect.before && effect.after && (
-        <span className="block text-ink-3">{batchLine('Batch', effect.before)}; {batchLine('batch', effect.after)}.</span>
+        <span className="block text-ink-3">{batchLine(effect.before, true)}; {batchLine(effect.after)}.</span>
       )}
       {effect.measured_with && effect.measured_with.length > 0 && (
         <span className="block text-ink-3">On trial with {effect.measured_with.length} other rule{effect.measured_with.length === 1 ? '' : 's'}: one shared measurement.</span>
