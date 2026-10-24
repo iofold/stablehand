@@ -206,6 +206,7 @@ function httpTools(role: Role, toolsUrl: string): Array<Record<string, unknown>>
 }
 
 const ROLE_BY_FILE: Record<string, Role> = { 'scout.yaml': 'scout', 'env-builder.yaml': 'env_builder', 'writer.yaml': 'writer', 'teacher.yaml': 'teacher' };
+const AGENT_ENV_BY_ROLE: Record<Role, string> = { scout: 'BUGFARM_SCOUT_AGENT', env_builder: 'BUGFARM_ENV_BUILDER_AGENT', writer: 'BUGFARM_WRITER_AGENT', teacher: 'BUGFARM_TEACHER_AGENT' };
 
 async function seed(args: ReturnType<typeof parseArgs>): Promise<void> {
   const base = env('STABLEHAND_BASE_URL');
@@ -225,8 +226,11 @@ async function seed(args: ReturnType<typeof parseArgs>): Promise<void> {
     if (suffix) manifest.metadata.name = `${manifest.metadata.name}${suffix}`;
     // The manifest snapshot is left out: HTTP tools are not part of the manifest format.
     const input = Object.fromEntries(Object.entries(manifestToAgentCreateInput(manifest)).filter(([key]) => key !== 'manifest'));
-    const body = { ...input, httpTools: httpTools(role, toolsUrl) };
-    const found = existing.find((agent) => agent.name === manifest.metadata.name);
+    // The same names the worker looks its floor agents up by, so two workers on one Stablehand
+    // can each have floor agents whose tools call their own worker.
+    const name = process.env[AGENT_ENV_BY_ROLE[role]] || manifest.metadata.name;
+    const body = { ...input, name, httpTools: httpTools(role, toolsUrl) };
+    const found = existing.find((agent) => agent.name === name);
     const patch = Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'name'));
     const agent = found
       ? await api('PATCH', `/agents/${found.id}`, patch) as { id: string }
@@ -240,7 +244,7 @@ async function seed(args: ReturnType<typeof parseArgs>): Promise<void> {
       const helper = readFileSync(path.join(dir, 'scout', 'mine_prs.py'), 'utf8');
       await api('POST', `/agents/${agent.id}/files`, { path: 'bugfarm/mine_prs.py', content: helper });
     }
-    console.log(`${found ? 'updated' : 'created'} ${manifest.metadata.name} (${manifest.spec.harness}, ${String(manifest.spec.harnessConfig.model)}) ${agent.id}`);
+    console.log(`${found ? 'updated' : 'created'} ${name} (${manifest.spec.harness}, ${String(manifest.spec.harnessConfig.model)}) ${agent.id}`);
   }
 
   const tag = typeof args['budget-tag'] === 'string' ? args['budget-tag'] : process.env.BUGFARM_BUDGET_TAG;
@@ -309,6 +313,7 @@ function launchBody(args: ReturnType<typeof parseArgs>): Record<string, unknown>
     writer_concurrency: num('writers'),
     learning: args['no-learning'] === true ? false : undefined,
     learning_gate: typeof args['learn-gate'] === 'string' ? args['learn-gate'] : undefined,
+    calibration_usd: num('calibration-usd'),
   };
   return Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined));
 }
@@ -411,10 +416,10 @@ const USAGE = `usage: bugfarm <command> [options]
       Create or update the floor agents from agents/*.yaml with their HTTP tools and tools secret,
       upload the Scout's helper, set a budget policy on campaign=TAG, mint a scoped worker key
       into PATH (never printed), and add the starter playbook rules.
-  campaign start --repo owner/name [--candidates 15] [--batches 1] [--cap 15] [--budget-tag TAG] [--id ID]
+  campaign start --repo owner/name [--candidates 15] [--batches 1] [--cap 15] [--budget-tag TAG] [--id ID] [--calibration-usd 1.5]
                  [--no-learning] [--learn-gate auto|controls|calibration] [--follow]
   campaign follow ID
-  run --repo owner/name [--candidates 15] [--cap 15] [--budget-tag TAG]
+  run --repo owner/name [--candidates 15] [--cap 15] [--budget-tag TAG] [--id ID] [--calibration-usd 1.5]
       seed, start a campaign and follow it until it stops.
   rule add --kind scout_filter|writer_rule|env_recipe --text "..." [--repo owner/name] [--id ID]
   status
