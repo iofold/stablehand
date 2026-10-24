@@ -1,4 +1,4 @@
-import { HTTPToolProvider, type HttpEndpointConfig } from '../tool/providers/http.js';
+import { HTTPToolProvider, httpEndpointConfigFingerprint, type HttpEndpointConfig } from '../tool/providers/http.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
 import type { AgentDefinition } from '@stablehand/sandbox-daemon';
 import type { DatabaseRepository } from '../database/repository.js';
@@ -96,6 +96,23 @@ export function mapAgentHttpToolsToConfigs(agentDef: AgentDefinition): HttpEndpo
 
     return [config];
   });
+}
+
+/** Current stored declaration for dispatch-time comparison with a cached provider. */
+export function currentAgentHttpToolFingerprint(
+  metadata: Record<string, unknown> | null | undefined,
+  toolName: string,
+): string | undefined {
+  try {
+    const endpoint = mapAgentHttpToolsToConfigs({
+      name: '', harness: 'langgraph', harnessConfig: {}, systemPrompt: '', tools: [],
+      metadata: metadata ?? undefined,
+    }).find((entry) => entry.name === toolName);
+    return endpoint ? httpEndpointConfigFingerprint(endpoint) : undefined;
+  } catch {
+    // A malformed or no-longer-representable declaration revokes a cached grant.
+    return undefined;
+  }
 }
 
 export function validateAgentHttpToolsConfig(httpTools: unknown): string | null {

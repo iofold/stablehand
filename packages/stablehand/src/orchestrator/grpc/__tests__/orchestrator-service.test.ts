@@ -54,6 +54,7 @@ type ToolDedupRepository = Pick<
   | 'getToolDedup'
   | 'completeToolDedup'
   | 'getTurn'
+  | 'getAgent'
   | 'getTurnDeliveryCapabilityClaims'
   | 'saveArtifactIfDeliveryOwned'
 >;
@@ -99,6 +100,12 @@ function withLiveDeliveryCapability<
 
 function makeDedupRepository(overrides: Partial<ToolDedupRepository> = {}): DatabaseRepository {
   const repository: ToolDedupRepository = {
+    getAgent: vi.fn().mockResolvedValue({
+      id: 'agent-1',
+      tools: ['my-tool', 'boom', 'missing-tool'],
+      manifest: null,
+      metadata: null,
+    }),
     tryAdmitToolRequest: vi.fn().mockResolvedValue('inserted'),
     getToolDedup: vi.fn().mockResolvedValue(undefined),
     completeToolDedup: vi.fn().mockResolvedValue(true),

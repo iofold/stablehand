@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { HTTPToolProvider, type HttpEndpointConfig } from '../providers/http.js';
+import * as httpProvider from '../providers/http.js';
 import type { ToolContext } from '@stablehand/sandbox-daemon';
 
 function makeCtx(): ToolContext {
@@ -146,5 +147,64 @@ describe('HTTPToolProvider – fail-closed config validation', () => {
         authentication: { type: 'api-key', secretName: 'API_KEY' },
       }),
     ])).not.toThrow();
+  });
+});
+
+
+describe('HTTP provider configuration grants', () => {
+  const endpoint = (): HttpEndpointConfig => ({
+    name: 'remote', description: 'Remote tool', url: 'https://api.example.com/tool', method: 'POST',
+    headers: { 'X-Tool-Secret': 'synthetic-only' },
+    authentication: { type: 'bearer', secretName: 'TOOL_TOKEN' },
+    inputSchema: { type: 'object', properties: { message: { type: 'string' } } },
+  });
+
+  it('exposes only a stable hash of the cached declaration and ignores object key order', () => {
+    expect(httpProvider.httpEndpointConfigFingerprint).toBeTypeOf('function');
+    const original = endpoint();
+    const reordered = {
+      ...original,
+      authentication: { secretName: 'TOOL_TOKEN', type: 'bearer' as const },
+      inputSchema: { properties: { message: { type: 'string' } }, type: 'object' },
+      timeoutMs: 30_000, requiresApproval: false, programmatic: false,
+    };
+    const provider = new HTTPToolProvider([original]);
+    expect(provider.configurationFingerprint('remote')).toMatch(/^[a-f0-9]{64}$/);
+    expect(provider.configurationFingerprint('remote')).toBe(httpProvider.httpEndpointConfigFingerprint(reordered));
+    expect(provider.configurationFingerprint('missing')).toBeUndefined();
+  });
+
+  it.each([
+    { url: 'https://api.example.com/other' },
+    { method: 'DELETE' as const },
+    { authentication: { type: 'api-key' as const, secretName: 'TOOL_TOKEN' } },
+    { authentication: { type: 'bearer' as const, secretName: 'OTHER_TOKEN' } },
+    { headers: { 'X-Tool-Secret': 'changed-synthetic-only' } },
+    { requiresApproval: true },
+    { inputSchema: { type: 'object', properties: { message: { type: 'number' } } } },
+    { programmatic: true },
+    { timeoutMs: 12_000 },
+  ])('detects an execution-relevant declaration change %j', (change) => {
+    expect(httpProvider.httpEndpointConfigFingerprint).toBeTypeOf('function');
+    const original = endpoint();
+    expect(httpProvider.httpEndpointConfigFingerprint({ ...original, ...change }))
+      .not.toBe(httpProvider.httpEndpointConfigFingerprint(original));
+  });
+
+  it('keeps the cached executable declaration separate from caller-owned objects', async () => {
+    const original = endpoint();
+    const fetchFn = vi.fn(async () => new Response('ok'));
+    const provider = new HTTPToolProvider([original], { fetchFn, secrets: { TOOL_TOKEN: 'synthetic' } });
+    expect(provider.configurationFingerprint).toBeTypeOf('function');
+    const fingerprint = provider.configurationFingerprint('remote');
+    await provider.listTools();
+    original.url = 'https://changed.example.com/tool';
+    original.requiresApproval = true;
+    original.headers!['X-Tool-Secret'] = 'mutated';
+    await provider.execute('remote', {}, makeCtx());
+    expect(provider.configurationFingerprint('remote')).toBe(fingerprint);
+    expect(fetchFn).toHaveBeenCalledWith('https://api.example.com/tool', expect.objectContaining({
+      headers: expect.objectContaining({ 'X-Tool-Secret': 'synthetic-only' }),
+    }));
   });
 });

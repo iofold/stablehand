@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { ToolProvider, ToolSourceKind } from '../provider.js';
 import type { ToolDefinition, ToolContext } from '@stablehand/sandbox-daemon';
@@ -36,6 +37,33 @@ export interface HttpEndpointConfig {
 }
 
 const DEFAULT_TIMEOUT = 30_000;
+
+/** Hash only the declaration, never the resolved agent or environment secrets. */
+export function httpEndpointConfigFingerprint(endpoint: HttpEndpointConfig): string {
+  const normalized = {
+    name: endpoint.name,
+    url: endpoint.url,
+    method: endpoint.method,
+    description: endpoint.description,
+    inputSchema: endpoint.inputSchema ?? {},
+    headers: endpoint.headers ?? {},
+    timeoutMs: endpoint.timeoutMs ?? DEFAULT_TIMEOUT,
+    authentication: endpoint.authentication ? {
+      type: endpoint.authentication.type,
+      secretName: endpoint.authentication.secretName,
+      allowEnvFallback: endpoint.authentication.allowEnvFallback ?? false,
+    } : null,
+    programmatic: endpoint.programmatic ?? false,
+    requiresApproval: endpoint.requiresApproval ?? false,
+  };
+  const canonical = JSON.stringify(normalized, (_key, value: unknown) => {
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
+    }
+    return value;
+  });
+  return createHash('sha256').update(canonical).digest('hex');
+}
 
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as const;
 type SupportedHttpMethod = (typeof HTTP_METHODS)[number];
@@ -223,13 +251,19 @@ export class HTTPToolProvider implements ToolProvider {
       seen.add(ep.name);
     });
 
-    this.endpoints = endpoints;
+    // Approval/catalog metadata and the executable endpoint must share one snapshot.
+    this.endpoints = structuredClone(endpoints);
     this.name = options?.name ?? 'http';
     if (options?.agentScope !== undefined) {
       this.agentScope = options.agentScope;
     }
     this.secrets = options?.secrets ?? {};
     this.fetchFn = options?.fetchFn ?? globalThis.fetch;
+  }
+
+  configurationFingerprint(toolName: string): string | undefined {
+    const endpoint = this.endpoints.find((entry) => entry.name === toolName);
+    return endpoint ? httpEndpointConfigFingerprint(endpoint) : undefined;
   }
 
   async listTools(): Promise<ToolDefinition[]> {

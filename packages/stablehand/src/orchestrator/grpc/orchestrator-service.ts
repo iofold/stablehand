@@ -8,6 +8,7 @@
  */
 
 import { ConnectError, Code } from '@connectrpc/connect';
+import { McpServerDefinitionSchema } from '@stablehand/contracts';
 import { create } from '@bufbuild/protobuf';
 import {
   RequestToolResponseSchema,
@@ -47,6 +48,23 @@ import {
   editDocumentInputSchema,
   editDocumentResult,
 } from '../../tool/builtin/edit-document.js';
+import { builtinNamesAllowedByPolicy, builtinToolNames } from '../../tool/builtin/index.js';
+import { extractManifestRuntimeFields, resolveAgentToolNames } from '../agent-definition.js';
+import { getAgentMcpServers } from '../../mcp/config.js';
+import { CANONICAL_FRAME_TYPES, KNOWN_BUS_EVENT_NAMES } from '../canonical/frames.js';
+import { currentAgentHttpToolFingerprint, getAgentHttpToolProviderName } from '../http-tools.js';
+
+const RESERVED_CUSTOM_EVENT_TYPES: ReadonlySet<string> = new Set([
+  ...KNOWN_BUS_EVENT_NAMES,
+  ...CANONICAL_FRAME_TYPES,
+  'bus.error',
+]);
+
+function reservedCustomEventError(eventType: string): string | undefined {
+  return RESERVED_CUSTOM_EVENT_TYPES.has(eventType) || eventType.startsWith('stablehand.')
+    ? 'Event type is reserved for the Stablehand runtime; choose an application-specific custom event name'
+    : undefined;
+}
 
 /**
  * Context passed to each orchestrator-side tool handler when dispatching
@@ -79,12 +97,24 @@ export interface OrchestratorToolRegistry {
   get(toolName: string, agentId?: string): OrchestratorToolHandler | undefined;
   set(toolName: string, handler: OrchestratorToolHandler): void;
   has(toolName: string, agentId?: string): boolean;
+  /** Includes provider-attached tools, such as an agent's allowlisted MCP catalog. */
+  offeredToolNames?(declaredToolNames: string[], agentId: string): string[];
+  /** Refuses cached provider tools whose persisted declaration has changed. */
+  isProviderGrantCurrent?(toolName: string, agentId: string, metadata: Record<string, unknown> | null): boolean;
 }
 
 export interface ToolRegistryDelegate {
   getTool(name: string, agentId?: string): {
     handler: (input: unknown, ctx: import('@stablehand/sandbox-daemon').ToolContext) => Promise<string>;
     requiresApproval?: boolean;
+  } | undefined;
+  listForAgent?(declaredToolNames: string[], agentId?: string): Array<{ name: string }>;
+  getProvider?(toolName: string, agentId?: string): {
+    name?: string;
+    source?: string;
+    agentScope?: string;
+    server?: unknown;
+    configurationFingerprint?(toolName: string): string | undefined;
   } | undefined;
 }
 
@@ -282,6 +312,29 @@ export class DefaultOrchestratorToolRegistry implements OrchestratorToolRegistry
     this.handlers.set(toolName, handler);
   }
 
+  offeredToolNames(declaredToolNames: string[], agentId: string): string[] {
+    return this.delegate?.listForAgent?.(declaredToolNames, agentId).map((tool) => tool.name) ?? [];
+  }
+
+  isProviderGrantCurrent(toolName: string, agentId: string, metadata: Record<string, unknown> | null): boolean {
+    const provider = this.delegate?.getProvider?.(toolName, agentId);
+    if (
+      provider?.source === 'http'
+      && (provider.agentScope === agentId || provider.name === getAgentHttpToolProviderName(agentId))
+    ) {
+      const expected = currentAgentHttpToolFingerprint(metadata, toolName);
+      return expected !== undefined && provider.configurationFingerprint?.(toolName) === expected;
+    }
+    if (provider?.source !== 'mcp') return true;
+    const cachedServer = McpServerDefinitionSchema.safeParse(provider.server);
+    if (!cachedServer.success) return false;
+    // Compare the whole declaration, including tool/approval allowlists and
+    // endpoint/auth changes. A replica with stale clients must fail closed
+    // until its registry has synchronized the operator's current grant.
+    const fingerprint = JSON.stringify(cachedServer.data);
+    return getAgentMcpServers(metadata).some((server) => JSON.stringify(server) === fingerprint);
+  }
+
   has(toolName: string, agentId?: string): boolean {
     if (this.handlers.has(toolName)) return true;
     return this.delegate?.getTool(toolName, agentId) != null;
@@ -348,6 +401,38 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           req.deliveryCapability,
           callbackAuthConfig,
         );
+        if (deps.repository) {
+          // A live callback credential identifies the caller; it does not grant
+          // every tool registered in the orchestrator. Re-read operator-owned
+          // configuration so revoking a grant also blocks an existing session.
+          const agent = await deps.repository.getAgent(agentId);
+          if (!agent) {
+            throw new ConnectError('Tool is not granted to this agent', Code.PermissionDenied);
+          }
+          const declaredToolNames = resolveAgentToolNames({
+            tools: agent.tools,
+            metadata: agent.metadata ?? undefined,
+          });
+          const grantedToolNames = new Set([
+            ...declaredToolNames,
+            ...(toolRegistry.offeredToolNames?.(declaredToolNames, agentId) ?? []),
+          ]);
+          const { builtinToolPolicy } = extractManifestRuntimeFields(agent);
+          const allowedBuiltins = builtinNamesAllowedByPolicy(builtinToolNames, builtinToolPolicy);
+          for (const builtinName of builtinToolNames) {
+            if (allowedBuiltins.has(builtinName)) {
+              grantedToolNames.add(builtinName);
+            } else {
+              grantedToolNames.delete(builtinName);
+            }
+          }
+          if (
+            !grantedToolNames.has(toolName)
+            || toolRegistry.isProviderGrantCurrent?.(toolName, agentId, agent.metadata) === false
+          ) {
+            throw new ConnectError('Tool is not granted to this agent', Code.PermissionDenied);
+          }
+        }
         const callbackAuthority = liveDelivery
           ? {
             turnId,
@@ -533,6 +618,10 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
 
         if (!eventType) {
           throw new ConnectError('event_type is required', Code.InvalidArgument);
+        }
+        const reservedError = reservedCustomEventError(eventType);
+        if (reservedError) {
+          throw new ConnectError(reservedError, Code.InvalidArgument);
         }
         const liveDelivery = await admitLiveSandboxCallback(
           deps.repository,
@@ -854,6 +943,10 @@ export function registerDefaultToolHandlers(
     }
 
     const eventType = args.type;
+    const reservedError = reservedCustomEventError(eventType);
+    if (reservedError) {
+      return `Error: ${reservedError}`;
+    }
     const normalized = normalizeEmitEventPayload(args.payload);
     if ('error' in normalized) {
       return normalized.error;
