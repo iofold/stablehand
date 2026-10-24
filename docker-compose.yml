@@ -122,7 +122,7 @@ services:
     image: axllent/mailpit:v1.31.3
     profiles: ["inbox-agent"]
     ports:
-      - "${MAILPIT_UI_PORT:-8025}:8025"
+      - "${STABLEHAND_DATA_BIND_ADDRESS:-127.0.0.1}:${MAILPIT_UI_PORT:-8025}:8025"
     environment:
       MP_MAX_MESSAGES: "500"
     restart: unless-stopped

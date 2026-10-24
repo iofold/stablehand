@@ -8,7 +8,7 @@ interface ComposeFile {
 }
 
 const files = [
-  ['docker-compose.yml', ['postgres', 'minio', 'pgadmin']],
+  ['docker-compose.yml', ['postgres', 'minio', 'pgadmin', 'mailpit']],
   ['packages/create-stablehand/templates/_base/docker-compose.yml', ['postgres', 'minio']],
 ] as const;
 
