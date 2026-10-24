@@ -260,22 +260,6 @@ export async function findBudgetPolicy(a: Api, campaign: string): Promise<{ id: 
 export async function reconcile(store: AttemptStore, def: BenchDefinition, ctx: PricingContext, runtimeKey?: string): Promise<Reconciliation> {
   await settle(store, def, ctx, { final: true });
   const all = store.all();
-  const done = all.filter((a) => a.status === 'done');
-  const voided = all.filter((a) => a.status === 'void');
-  const byCell: Record<string, { attempts: number; usd: number }> = {};
-  const byTask: Record<string, { attempts: number; usd: number }> = {};
-  for (const a of [...done, ...voided]) {
-    const c = (byCell[a.cell] ??= { attempts: 0, usd: 0 });
-    const t = (byTask[a.task] ??= { attempts: 0, usd: 0 });
-    c.attempts++;
-    t.attempts++;
-    c.usd += bestCost(a);
-    t.usd += bestCost(a);
-  }
-  for (const v of [...Object.values(byCell), ...Object.values(byTask)]) v.usd = round(v.usd, 6);
-  const measured = done.reduce((s, a) => s + bestCost(a), 0);
-  const voidUsd = voided.reduce((s, a) => s + bestCost(a), 0);
-  const ledgerTotal = measured + voidUsd;
 
   // Gateway, read independently.
   let campaignKey: Reconciliation['gateway']['campaign_key'] = null;
@@ -302,11 +286,38 @@ export async function reconcile(store: AttemptStore, def: BenchDefinition, ctx: 
         usd += m.usd;
         rows += m.calls;
         matchedTurns++;
+        // A turn that ended by cancellation (an agent timeout) can keep cost coverage `pending` in
+        // Stablehand. Its session key's rows are the bill: settle it from them.
+        if (a.status !== 'running' && a.cost_state !== 'gateway' && Date.now() - (a.finished_at ?? a.started_at) > 5 * 60_000) {
+          a.cost_usd = round(m.usd, 6);
+          a.gateway_calls = m.calls;
+          a.cost_state = 'gateway';
+          if (a.status === 'void') store.saveVoid(a);
+          else store.save(a);
+        }
       }
     }
     sessions = { rows, usd: round(usd, 6), turns_matched: matchedTurns, turns_without_rows: shAttempts.length - matchedTurns };
   }
   const gatewayTotal = campaignKey || sessions ? round((campaignKey?.matched_usd ?? 0) + (sessions?.usd ?? 0), 6) : null;
+
+  // The ledger, after the gateway may have settled the last attempts.
+  const done = all.filter((a) => a.status === 'done');
+  const voided = all.filter((a) => a.status === 'void');
+  const byCell: Record<string, { attempts: number; usd: number }> = {};
+  const byTask: Record<string, { attempts: number; usd: number }> = {};
+  for (const a of [...done, ...voided]) {
+    const c = (byCell[a.cell] ??= { attempts: 0, usd: 0 });
+    const t = (byTask[a.task] ??= { attempts: 0, usd: 0 });
+    c.attempts++;
+    t.attempts++;
+    c.usd += bestCost(a);
+    t.usd += bestCost(a);
+  }
+  for (const v of [...Object.values(byCell), ...Object.values(byTask)]) v.usd = round(v.usd, 6);
+  const measured = done.reduce((s, a) => s + bestCost(a), 0);
+  const voidUsd = voided.reduce((s, a) => s + bestCost(a), 0);
+  const ledgerTotal = measured + voidUsd;
 
   // Stablehand's budget view.
   let policy: Reconciliation['stablehand']['budget_policy'] = null;
