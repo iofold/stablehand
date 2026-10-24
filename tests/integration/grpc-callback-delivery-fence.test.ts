@@ -89,7 +89,7 @@ describe('sandbox callback delivery fence', () => {
       harness: 'claude-agents',
       harnessConfig: JSON.stringify({ model: 'claude-sonnet-4-6' }),
       systemPrompt: 'Test callback ownership.',
-      tools: [],
+      tools: ['callback-probe'],
     });
     const conversation = await testDb.repo.createConversation(agent.id);
     const sandboxSession = await testDb.repo.createSandboxSession({
@@ -328,7 +328,7 @@ describe('sandbox callback delivery fence', () => {
       harness: 'claude-agents',
       harnessConfig: JSON.stringify({ model: 'claude-sonnet-4-6' }),
       systemPrompt: 'Test callback generation ownership.',
-      tools: [],
+      tools: ['generation-probe'],
     });
     const conversation = await testDb.repo.createConversation(agent.id);
     const sandboxSession = await testDb.repo.createSandboxSession({
