@@ -48,11 +48,9 @@ function toHttpAuthentication(value: unknown): HttpEndpointConfig['authenticatio
   if (!isRecord(value)) return undefined;
   const { type, secretName } = value;
   if ((type === 'bearer' || type === 'api-key') && isNonEmptyString(secretName)) {
-    return {
-      type,
-      secretName,
-      ...(value.allowEnvFallback === true ? { allowEnvFallback: true } : {}),
-    };
+    // API-managed and stored agent definitions are not trusted process config.
+    // Never let their secret references fall back to orchestrator credentials.
+    return { type, secretName };
   }
   return undefined;
 }
@@ -115,6 +113,9 @@ export function validateAgentHttpToolsConfig(httpTools: unknown): string | null 
     names.add(httpTool.name);
     if (httpTool.method !== undefined && !isHttpMethod(httpTool.method)) {
       return `Invalid HTTP tool method: ${String(httpTool.method)}`;
+    }
+    if (isRecord(httpTool.authentication) && httpTool.authentication.allowEnvFallback === true) {
+      return 'HTTP tools must use agent-scoped secrets; orchestrator environment fallback is not allowed';
     }
     if (httpTool.authentication !== undefined && toHttpAuthentication(httpTool.authentication) === undefined) {
       return 'HTTP tool authentication requires type bearer or api-key and secretName';

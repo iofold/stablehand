@@ -267,7 +267,10 @@ export const AgentCreateInputSchema = z.strictObject({
   harnessConfig: UnknownRecordSchema,
   systemPrompt: z.string(),
   tools: z.array(z.string().trim().min(1)),
-  httpTools: z.array(HttpToolDefinitionSchema).optional(),
+  httpTools: z.array(HttpToolDefinitionSchema.refine(
+    (tool) => tool.authentication?.allowEnvFallback !== true,
+    { message: 'HTTP tools must use agent-scoped secrets; orchestrator environment fallback is not allowed', path: ['authentication', 'allowEnvFallback'] },
+  )).optional(),
   /** Remote MCP servers whose tools this agent may call (run by the orchestrator). */
   mcpServers: McpServerListSchema.optional(),
   builtinToolPolicy: BuiltinToolPolicySchema.optional(),

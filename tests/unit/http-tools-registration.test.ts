@@ -9,6 +9,7 @@ import {
   mapAgentHttpToolsToConfigs,
   registerAgentHttpTools,
   registerExistingAgentHttpTools,
+  validateAgentHttpToolsConfig,
 } from '../../packages/stablehand/src/orchestrator/http-tools.js';
 
 type RegistrationAgent = Parameters<typeof registerAgentHttpTools>[1];
@@ -305,7 +306,7 @@ describe('http tools registration lifecycle', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('HTTPToolProvider can opt in to process.env fallback for provider secrets', async () => {
+  it('stored agent HTTP tools cannot opt in to orchestrator process.env secrets', async () => {
     const fetchMock = vi.fn(async () => createFetchResponse());
     vi.stubGlobal('fetch', fetchMock);
     process.env.API_TOKEN = 'env-secret';
@@ -325,16 +326,19 @@ describe('http tools registration lifecycle', () => {
     const provider = registry.getProvider('search-api');
     expect(provider).toBeDefined();
 
-    await provider?.execute('search-api', { query: 'stablehand' }, mockCtx);
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://example.com/search',
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: 'Bearer env-secret',
-        }),
-      }),
+    await expect(provider?.execute('search-api', { query: 'stablehand' }, mockCtx)).rejects.toThrow(
+      'HTTPToolProvider: missing secret "API_TOKEN" for tool "search-api"',
     );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects process environment fallback in agent HTTP tool configuration', () => {
+    expect(validateAgentHttpToolsConfig([createHttpTool({
+      authentication: { type: 'bearer', secretName: 'API_TOKEN', allowEnvFallback: true },
+    })])).toEqual(expect.stringContaining('agent-scoped secrets'));
+    expect(validateAgentHttpToolsConfig([createHttpTool({
+      authentication: { type: 'bearer', secretName: 'API_TOKEN', allowEnvFallback: false },
+    })])).toBeNull();
   });
 
   it('registerAgentHttpTools removes the old provider before adding a new one', async () => {

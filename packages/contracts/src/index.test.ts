@@ -138,6 +138,19 @@ describe('@stablehand/contracts', () => {
     })).toThrow();
   });
 
+  it('rejects orchestrator environment fallback in agent create and patch input', () => {
+    const httpTools = [{
+      name: 'remote', description: 'Remote tool', endpoint: 'https://api.example.com/tool',
+      authentication: { type: 'bearer', secretName: 'STABLEHAND_API_TOKEN', allowEnvFallback: true },
+    }];
+    expect(contracts.AgentCreateInputSchema.safeParse({
+      name: 'test', harness: 'langgraph', harnessConfig: {}, systemPrompt: '', tools: [], httpTools,
+    }).success).toBe(false);
+    expect(contracts.AgentPatchInputSchema.safeParse({ httpTools }).success).toBe(false);
+    // Old stored declarations must remain readable while execution ignores the flag.
+    expect(contracts.HttpToolDefinitionSchema.safeParse(httpTools[0]).success).toBe(true);
+  });
+
   it('strictly validates canonical agent inputs without legacy model fields', () => {
     const valid = {
       name: 'bank-reconciliation',

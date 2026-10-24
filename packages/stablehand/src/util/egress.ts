@@ -223,7 +223,18 @@ export function createGuardedFetch(
       if (hop >= policy.maxRedirects) {
         throw new EgressBlockedError(`Egress blocked: exceeded ${policy.maxRedirects} redirects`);
       }
-      currentUrl = new URL(location, currentUrl);
+      const nextUrl = new URL(location, currentUrl);
+      // HTTP tools, MCP clients and webhooks can carry arbitrary credential
+      // headers and private request bodies. A manual redirect loop bypasses
+      // fetch's built-in credential stripping, and no finite header denylist
+      // can cover custom auth headers. Keep those requests on their declared
+      // origin; operators can configure the final URL when an endpoint moves.
+      if (nextUrl.origin !== currentUrl.origin) {
+        throw new EgressBlockedError(
+          'Egress blocked: cross-origin redirects are not allowed; configure the final endpoint URL',
+        );
+      }
+      currentUrl = nextUrl;
       currentInit = nextRedirectInit(currentInit, response.status);
       currentInput = currentUrl.toString();
     }

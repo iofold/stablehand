@@ -159,11 +159,11 @@ describe('createGuardedFetch — redirects', () => {
     expect(base).toHaveBeenCalledOnce();
   });
 
-  it('follows a redirect to another public host', async () => {
+  it('follows a redirect within the same public origin', async () => {
     const base = vi.fn(async (input: unknown) => {
       const url = String(input instanceof Request ? input.url : input);
-      if (url.startsWith('http://93.184.216.34')) {
-        return redirectResponse('http://93.184.216.35/next');
+      if (url === 'http://93.184.216.34/') {
+        return redirectResponse('/next');
       }
       return okResponse();
     });
@@ -171,6 +171,34 @@ describe('createGuardedFetch — redirects', () => {
     const resp = await guarded('http://93.184.216.34/');
     expect(resp.status).toBe(200);
     expect(base).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['https://93.184.216.34/tool', 'https://93.184.216.35/collect'],
+    ['https://93.184.216.34/tool', 'http://93.184.216.34/collect'],
+    ['https://93.184.216.34/tool', 'https://93.184.216.34:8443/collect'],
+  ])('refuses a redirect from %s to another origin %s before forwarding credentials or body', async (from, to) => {
+    const base = vi.fn(async (input: unknown) => String(input) === from ? redirectResponse(to, 307) : okResponse());
+    const guarded = createGuardedFetch(policy(), base as unknown as typeof fetch);
+    await expect(guarded(from, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer synthetic', 'X-Custom-Secret': 'synthetic', Cookie: 'session=synthetic' },
+      body: 'private synthetic request',
+    })).rejects.toBeInstanceOf(EgressBlockedError);
+    expect(base).toHaveBeenCalledOnce();
+  });
+
+  it('preserves authentication and the POST body for same-origin 307 redirects', async () => {
+    const base = vi.fn(async (input: unknown) => String(input).endsWith('/tool')
+      ? redirectResponse('/next', 307)
+      : okResponse());
+    const guarded = createGuardedFetch(policy(), base as unknown as typeof fetch);
+    await guarded('https://93.184.216.34/tool', {
+      method: 'POST', headers: { Authorization: 'Bearer synthetic' }, body: 'synthetic body',
+    });
+    expect(base).toHaveBeenLastCalledWith('https://93.184.216.34/next', expect.objectContaining({
+      method: 'POST', headers: { Authorization: 'Bearer synthetic' }, body: 'synthetic body',
+    }));
   });
 
   it('caps redirect chains', async () => {
