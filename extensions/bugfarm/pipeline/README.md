@@ -402,6 +402,29 @@ that mark the system message and the newest message. On the same task, two attem
   frontier it would make calibration about 12 times cheaper, but "too hard for the frontier"
   would then mean too hard for Haiku.
 
+#### Results: the foreman on fastapi, cal-v2 (2026-10-24, Azure VM)
+
+Campaign `cal2-fastapi-1`: one batch of 12 candidates, a $15 cap on budget tag `bugfarm-dev-cal2`,
+$2 of calibration per card, 6 trial slots. It ran from 01:32 to 03:35 UTC (2 h 3 min).
+
+- **5 accepted, 7 rejected:** 5 `too_easy`, 1 `unsolved_review`, 1 `import_error_only`.
+- **Accepted cards** (frontier, GPT, open):
+  - fastapi@89317c70: 0/4, 1/1, –; $0.88
+  - fastapi@0890e2a3: 1/4, 1/1, –; $2.19
+  - fastapi@d1fd422f: 0/4, 1/1, –; $2.02
+  - fastapi@f5a439d5: 0/4, 0/4, 1/2; $2.10
+  - fastapi@5ef18bfe: 0/4, 0/8, 1/5; about $1.4
+- **Cost:** calibration $12.06 over 82 attempts, $2.41 per accepted task. Floor turns cost $2.48
+  (Scout $0.07, Env builder $0.16, Writer $2.25). All in, $14.54, or $2.91 per accepted task.
+- **Per model:** Sonnet 5.5 cost $0.26 an attempt over 36 attempts and passed 12. luna cost $0.011
+  over 28 and passed 7. kimi cost $0.13 over 15 and passed 2.
+- **Reconciliation:** the attempts total $12.062614, the gateway spend log has $12.062614 for the
+  campaign key (1,853 calls, all tagged with an attempt), and Stablehand's campaign-key spend is
+  $12.062614. Stablehand's budget policy for the tag shows $14.542, the turns plus the key.
+- **Where the money went.** A too-easy card cost $0.10–0.42. An accept cost $0.88–2.19. The
+  unsolved card cost $1.93, mostly 8 kimi attempts. Waiting for a pass from the cheap families
+  (luna to 8, kimi to 8) is the costly path, and it is what three of the accepts took.
+
 ### Panel `cal-v1`
 
 | Family | Cheap | Strong | Ladder model | Price in / out per M tokens |
