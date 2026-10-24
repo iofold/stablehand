@@ -9,7 +9,7 @@
 //   tests/test.sh             hidden tests overlay -> pytest -> grade.py -> /logs/verifier/reward.txt
 //   tests/grade.py, tests/expected.json, tests/hidden/, tests/deleted_tests.txt
 //   solution/solve.sh         applies solution/fix.patch (executable)
-import { chmodSync, cpSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { PIPELINE_DIR, PIPELINE_VERSION, TASKS_DIR } from './config.ts';
@@ -125,7 +125,14 @@ export async function packageTask(check: CheckResult, cand: Candidate, opts: Pac
   const suiteArgs = [...check.suite_modules, ...check.deselect.flatMap((id) => ['--deselect', id])];
 
   // environment/
-  cpSync(join(check.workdir, 'agent'), join(dir, 'environment', 'bugfarm-repo'), { recursive: true });
+  // Dereferenced: a task must be self-contained, and Harbor refuses a task whose files link
+  // outside it (trees checked before the verbatim-symlink fix hold absolute links).
+  cpSync(join(check.workdir, 'agent'), join(dir, 'environment', 'bugfarm-repo'), {
+    recursive: true,
+    dereference: true,
+    // A link to nothing (its target is not in the tree) cannot be dereferenced; leave it out.
+    filter: (src) => existsSync(src),
+  });
   writeText(join(dir, 'environment', 'Dockerfile'), [
     `FROM ${check.env_image}`,
     'LABEL bugfarm=1',

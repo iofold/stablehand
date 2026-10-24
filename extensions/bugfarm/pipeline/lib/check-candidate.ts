@@ -288,11 +288,13 @@ async function headTrees(cand: Candidate, env: EnvBuildResult, dir: string): Pro
   writeFileSync(join(dir, 'test.patch'), testPatch);
   const head = headTreeDir(profile.slug);
   const buggy = join(dir, 'buggy');
-  cpSync(head, buggy, { recursive: true });
+  // verbatimSymlinks: by default cpSync rewrites a relative symlink (pydantic's CONTRIBUTING.md ->
+  // docs/contributing.md) into an absolute path back into the source tree.
+  cpSync(head, buggy, { recursive: true, verbatimSymlinks: true });
   const rs = await revertInto(buggy, join(dir, 'src.patch'), cand.sha, cand.source_files, clone, join(dir, '.merge'));
   if (!rs.ok) return { failure: `source diff does not revert at HEAD: ${rs.message}` };
   const agent = join(dir, 'agent');
-  cpSync(buggy, agent, { recursive: true });
+  cpSync(buggy, agent, { recursive: true, verbatimSymlinks: true });
   const rt = await revertInto(agent, join(dir, 'test.patch'), cand.sha, cand.test_files, clone, join(dir, '.merge'));
   if (!rt.ok) return { failure: `test diff does not revert at HEAD: ${rt.message}` };
   return { base: 'head', fixed: head, fixedRef: env.head, buggy, agent, method: { source: rs.method, tests: rt.method } };
@@ -307,13 +309,13 @@ async function parentTrees(cand: Candidate, dir: string): Promise<Trees> {
   await exportTree(clone, cand.sha, fixed);
   await exportTree(clone, cand.parent, agent);
   rmSync(buggy, { recursive: true, force: true });
-  cpSync(agent, buggy, { recursive: true });
+  cpSync(agent, buggy, { recursive: true, verbatimSymlinks: true });
   for (const f of cand.test_files) {
     const from = join(fixed, f);
     const to = join(buggy, f);
     if (fileExists(from)) {
       ensureDir(dirname(to));
-      cpSync(from, to);
+      cpSync(from, to, { verbatimSymlinks: true });
     } else rmSync(to, { force: true });
   }
   return { base: 'parent', fixed, fixedRef: cand.sha, buggy, agent, method: { source: 'parent', tests: 'parent' } };
