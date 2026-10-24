@@ -315,7 +315,7 @@ class LeaseIdentityTests(unittest.TestCase):
             inner.client_conn = tunnel.client_conn  # no credentials inside the tunnel
             self.assertEqual(run_quiet(addon.requestheaders, inner), [])
             self.assertIsNone(inner.response)
-        self.assertEqual(addon.verifier.calls, ["sess-deny"])
+        self.assertEqual(addon.verifier.calls, ["sess-deny"] * 3)
         # The same request on a connection that never presented a lease is challenged.
         stranger = on_port(request_flow("POST", "api.openai.com", 443, ["api.openai.com"], sni="api.openai.com"), 8081)
         run_quiet(addon.requestheaders, stranger)
@@ -323,6 +323,95 @@ class LeaseIdentityTests(unittest.TestCase):
         data = server_data("api.openai.com", 443, client=tunnel.client_conn)
         run_quiet(addon.server_connect, data)
         self.assertIsNone(data.server.error)
+
+    def test_tunnel_rechecks_a_revoked_lease(self):
+        addon, _ = make_lease_addon(unleased="deny")
+        addon.verifier.leases = dict(LEASES)
+        tunnel = on_port(connect_flow("docs.example.com", 443, "docs.example.com:443",
+                                      [proxy_auth("sess-allow")]), 8081)
+        tunnel.client_conn.sni = "docs.example.com"
+        run_quiet(addon.http_connect, tunnel)
+        self.assertIsNone(tunnel.response)
+        del addon.verifier.leases[("sess-allow", "tok")]
+
+        inner = request_flow("GET", "docs.example.com", 443, ["docs.example.com"])
+        inner.client_conn = tunnel.client_conn
+        logs = run_quiet(addon.requestheaders, inner)
+
+        self.assertIsNotNone(inner.response)
+        self.assertEqual(inner.response.status_code, 403)
+        self.assertEqual(logs[0]["reason"], "invalid_lease")
+        self.assertNotIn(inner.client_conn, addon.connection_policy)
+
+    def test_tunnel_applies_an_agents_changed_egress_policy(self):
+        addon, _ = make_lease_addon()
+        addon.verifier.leases = dict(LEASES)
+        tunnel = on_port(connect_flow("docs.example.com", 443, "docs.example.com:443",
+                                      [proxy_auth("sess-allow")]), 8081)
+        tunnel.client_conn.sni = "docs.example.com"
+        run_quiet(addon.http_connect, tunnel)
+        addon.verifier.leases[("sess-allow", "tok")] = ("deny", None)
+
+        inner = request_flow("GET", "docs.example.com", 443, ["docs.example.com"])
+        inner.client_conn = tunnel.client_conn
+        run_quiet(addon.requestheaders, inner)
+
+        self.assertIsNotNone(inner.response)
+        self.assertEqual(inner.response.status_code, 403)
+        self.assertEqual(json.loads(inner.response.content)["source"], "agent:deny")
+
+    def test_tunnel_refuses_a_lease_that_can_no_longer_be_confirmed(self):
+        addon, _ = make_lease_addon()
+        addon.verifier.leases = dict(LEASES)
+        tunnel = on_port(connect_flow("docs.example.com", 443, "docs.example.com:443",
+                                      [proxy_auth("sess-allow")]), 8081)
+        tunnel.client_conn.sni = "docs.example.com"
+        run_quiet(addon.http_connect, tunnel)
+        addon.verifier.leases[("sess-allow", "tok")] = "unavailable"
+
+        inner = request_flow("GET", "docs.example.com", 443, ["docs.example.com"])
+        inner.client_conn = tunnel.client_conn
+        logs = run_quiet(addon.requestheaders, inner)
+
+        self.assertIsNotNone(inner.response)
+        self.assertEqual(inner.response.status_code, 503)
+        self.assertEqual(logs[0]["reason"], "lease_unverifiable")
+
+    def test_tunnel_uses_the_lease_cache_only_until_its_ttl(self):
+        addon, _ = make_lease_addon()
+        now = [0.0]
+        calls = []
+
+        async def fetch(_url, _body):
+            calls.append(now[0])
+            if now[0] >= 30:
+                return 410, {"code": "session_ended"}
+            return 200, {
+                "sessionId": "sess-allow", "agentId": "agent-sess-allow",
+                "egress": {"mode": "allow", "rules": ["GET docs.example.com/**"]},
+                "ttlSeconds": 30,
+            }
+
+        addon.verifier = lease.LeaseVerifier("http://orchestrator.test/lease", fetch, clock=lambda: now[0])
+        tunnel = on_port(connect_flow("docs.example.com", 443, "docs.example.com:443",
+                                      [proxy_auth("sess-allow")]), 8081)
+        tunnel.client_conn.sni = "docs.example.com"
+        run_quiet(addon.http_connect, tunnel)
+        now[0] = 29
+        cached = request_flow("GET", "docs.example.com", 443, ["docs.example.com"])
+        cached.client_conn = tunnel.client_conn
+        run_quiet(addon.requestheaders, cached)
+        self.assertIsNone(cached.response)
+        self.assertEqual(calls, [0.0])
+
+        now[0] = 31
+        expired = request_flow("GET", "docs.example.com", 443, ["docs.example.com"])
+        expired.client_conn = tunnel.client_conn
+        run_quiet(addon.requestheaders, expired)
+
+        self.assertIsNotNone(expired.response)
+        self.assertEqual(expired.response.status_code, 403)
+        self.assertEqual(calls, [0.0, 31])
 
     def test_deny_denial_names_its_rule_source(self):
         addon, _ = make_lease_addon()

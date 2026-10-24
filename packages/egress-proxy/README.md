@@ -32,8 +32,9 @@ when the session ends.
   setting. It caches valid answers for the TTL the orchestrator names (30 s) and rejections for
   5 s, and makes one call per lease no matter how many requests are waiting.
 - A tunnel is identified once, at CONNECT; every request inside it inherits that identity. Plain
-  HTTP requests carry their own credentials. The credentials are removed before anything is
-  forwarded and never logged.
+  HTTP requests carry their own credentials. Each request inside a leased tunnel checks that
+  lease through the same TTL cache, so policy changes and revocations also reach connections
+  that remain open. The credentials are removed before anything is forwarded and never logged.
 - If the orchestrator cannot be reached, a lease that was valid in the last 5 minutes keeps its
   last answer; otherwise the request gets `503` (`lease_unverifiable`). There is no fallback to
   looser rules.

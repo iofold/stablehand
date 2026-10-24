@@ -261,8 +261,13 @@ class StablehandEgress:
         self.port = DEFAULT_PORT
         self.lease_port = DEFAULT_LEASE_PORT
         self.unleased = "global"
-        # Identity of a CONNECT tunnel, inherited by every request inside it.
+        # Identity of a CONNECT tunnel, inherited by every request inside it. Keep the
+        # credentials separately so each request can refresh the policy through the
+        # lease verifier's bounded cache instead of keeping CONNECT-time rules forever.
         self.tunnels: MutableMapping[connection.Client, lease.SessionPolicy] = weakref.WeakKeyDictionary()
+        self.tunnel_credentials: MutableMapping[connection.Client, lease.LeaseCredentials] = (
+            weakref.WeakKeyDictionary()
+        )
         # The policy of the latest request on a connection, for the server_connect gate.
         self.connection_policy: MutableMapping[connection.Client, lease.SessionPolicy] = (
             weakref.WeakKeyDictionary()
@@ -323,11 +328,16 @@ class StablehandEgress:
         sockname = client.sockname
         return bool(sockname) and sockname[1] == self.lease_port
 
-    async def _identify(self, flow: http.HTTPFlow) -> tuple[Optional[lease.SessionPolicy], Optional[lease.Refusal]]:
-        try:
-            credentials = lease.parse_proxy_authorization(flow.request.headers.get("Proxy-Authorization"))
-        except lease.InvalidLease as error:
-            return None, lease.Refusal(403, "invalid_lease", detail=str(error))
+    async def _identify(
+        self,
+        flow: http.HTTPFlow,
+        credentials: Optional[lease.LeaseCredentials] = None,
+    ) -> tuple[Optional[lease.SessionPolicy], Optional[lease.Refusal]]:
+        if credentials is None:
+            try:
+                credentials = lease.parse_proxy_authorization(flow.request.headers.get("Proxy-Authorization"))
+            except lease.InvalidLease as error:
+                return None, lease.Refusal(403, "invalid_lease", detail=str(error))
         if credentials is None:
             if self._lease_required(flow.client_conn):
                 return None, lease.Refusal(407, "lease_required")
@@ -349,6 +359,9 @@ class StablehandEgress:
         """Identify the tunnel, then refuse it when its real destination (the CONNECT authority)
         is not allowed for that identity."""
         who, refusal = await self._identify(flow)
+        credentials = None
+        if refusal is None:
+            credentials = lease.parse_proxy_authorization(flow.request.headers.get("Proxy-Authorization"))
         flow.request.headers.pop("Proxy-Authorization", None)
         if refusal is not None:
             _log_refusal(flow, refusal)
@@ -362,6 +375,8 @@ class StablehandEgress:
         )
         if decision.allowed:
             self.tunnels[flow.client_conn] = who
+            if credentials is not None:
+                self.tunnel_credentials[flow.client_conn] = credentials
             self.connection_policy[flow.client_conn] = who
             return
         _log("egress.denied", flow, decision, who)
@@ -370,13 +385,21 @@ class StablehandEgress:
     async def requestheaders(self, flow: http.HTTPFlow) -> None:
         """Judge every request before mitmproxy opens an upstream connection or forwards a byte."""
         who = self.tunnels.get(flow.client_conn)
+        credentials = self.tunnel_credentials.get(flow.client_conn)
         refusal: Optional[lease.Refusal] = None
-        if who is None:
+        if credentials is not None:
+            # Never accept an inner request's credentials as a new tunnel identity.
+            # LeaseVerifier handles TTL, outage grace and concurrent refreshes.
+            who, refusal = await self._identify(flow, credentials)
+            if who is not None:
+                self.tunnels[flow.client_conn] = who
+        elif who is None:
             # Plain HTTP through the proxy: every request carries its own credentials.
             who, refusal = await self._identify(flow)
         # Never forward the sandbox's proxy identity to the upstream host.
         flow.request.headers.pop("Proxy-Authorization", None)
         if refusal is not None:
+            self.connection_policy.pop(flow.client_conn, None)
             _log_refusal(flow, refusal)
             if _body_may_be_large(flow):
                 flow.kill()
