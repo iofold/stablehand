@@ -1308,7 +1308,9 @@ async function main(): Promise<void> {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// Run as a script only. Bundled into the worker, import.meta.url is the bundle's (main.js), which is
+// also argv[1], so the file name has to match too.
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href && /\/calibrate\.ts$/.test(import.meta.url)) {
   main().catch((err: unknown) => {
     log('error', err instanceof Error ? err.stack ?? err.message : String(err));
     process.exitCode = 1;
