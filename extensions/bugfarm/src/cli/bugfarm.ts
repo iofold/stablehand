@@ -232,6 +232,9 @@ async function seed(args: ReturnType<typeof parseArgs>): Promise<void> {
       ? await api('PATCH', `/agents/${found.id}`, patch) as { id: string }
       : await api('POST', '/agents', body) as { id: string };
     await api('POST', `/agents/${agent.id}/secrets`, { key: 'BUGFARM_TOOLS_TOKEN', value: toolsToken, scope: 'tools' });
+    // Stablehand reads tools-scope secrets when it registers an agent's HTTP tools, which for a
+    // new agent happened before the secret existed: register them again now that it does.
+    if (!found) await api('PATCH', `/agents/${agent.id}`, { httpTools: body.httpTools });
     if (role === 'scout') {
       if (process.env.GITHUB_TOKEN) await api('POST', `/agents/${agent.id}/secrets`, { key: 'GITHUB_TOKEN', value: process.env.GITHUB_TOKEN, scope: 'sandbox' });
       const helper = readFileSync(path.join(dir, 'scout', 'mine_prs.py'), 'utf8');
