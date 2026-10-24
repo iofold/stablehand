@@ -152,6 +152,11 @@ export interface AttemptRecord {
   verifier_seconds?: number;
   cost_usd?: number;
   cost_usd_estimate?: number;
+  /**
+   * What the budget gate charged for an attempt that finished without a Harbor estimate (an agent
+   * timeout often has none): the reserved estimate, until the spend log prices it.
+   */
+  cost_usd_reserved?: number;
   cost_state: CostState;
   gateway_calls?: number;
   /** Tokens the gateway logged for this attempt's calls (prompt includes cache reads and writes). */
@@ -321,8 +326,9 @@ export function boardAttemptKey(rec: AttemptRecord): string {
   return `${rec.item}:cal.${rec.panel_id}.${rec.cell}:${rec.harness}:${rec.model}:${rec.try}`;
 }
 
-function bestCost(rec: AttemptRecord): number {
-  return rec.cost_usd ?? rec.cost_usd_estimate ?? 0;
+/** Gateway price once known, else Harbor's estimate, else what the gate reserved. */
+export function bestCost(rec: AttemptRecord): number {
+  return rec.cost_usd ?? rec.cost_usd_estimate ?? rec.cost_usd_reserved ?? 0;
 }
 
 export function attemptRow(rec: AttemptRecord): BoardRow {
@@ -680,6 +686,9 @@ export async function calibrate(taskDir: string, panel: FrozenPanel, budget: num
       } catch (e) {
         done = { ...rec, status: 'done', result: 'error', reward: null, exception: `runner: ${e instanceof Error ? e.message : String(e)}`.slice(0, 400), finished_at: Date.now(), seconds: secs(Date.now() - rec.started_at), cost_state: 'estimated' };
       }
+      // No estimate yet (e.g. an agent timeout): keep charging what was reserved, so the gate does
+      // not treat the attempt as free until the spend log prices it.
+      if (done.cost_usd === undefined && done.cost_usd_estimate === undefined) done.cost_usd_reserved = est;
       store.save(done);
       const actual = bestCost(done);
       for (const p of pools) p.settle(est, actual);

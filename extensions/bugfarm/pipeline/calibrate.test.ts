@@ -7,7 +7,7 @@ import { jobConfig, judge, labelsCompose } from './calibrate-harbor.ts';
 import { defaultPanel, fileSafe, knownModel, measuredFamilies, panelDefinition, panelSha, validatePanel } from './calibrate-panel.ts';
 import { probeRows, probeTable } from './calibrate-probe.ts';
 import { withSolverTools } from './lib/build-env.ts';
-import { BudgetPool, CostModel, calibrationToml, itemKeyFor, ladderPriority, readBugfarmMetadata, readTaskInfo, writeTaskCalibration } from './calibrate.ts';
+import { BudgetPool, CostModel, bestCost, calibrationToml, itemKeyFor, ladderPriority, readBugfarmMetadata, readTaskInfo, writeTaskCalibration } from './calibrate.ts';
 
 const tmp = mkdtempSync(join(tmpdir(), 'bugfarm-cal-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -115,6 +115,16 @@ describe('panel', () => {
     const kwargs = ((cfg.agents as Array<{ kwargs: { llm_call_kwargs: Record<string, unknown> } }>)[0]).kwargs.llm_call_kwargs;
     expect(kwargs.extra_body).toEqual({ reasoning_effort: 'low' });
     expect(fileSafe('claude-sonnet-5-5@low')).toBe('claude-sonnet-5-5_low');
+  });
+});
+
+describe('attempt cost', () => {
+  it('charges the reserve for an attempt with no estimate until the gateway prices it', () => {
+    const rec = { cost_state: 'estimated' } as Parameters<typeof bestCost>[0];
+    expect(bestCost(rec)).toBe(0);
+    expect(bestCost({ ...rec, cost_usd_reserved: 0.3 })).toBe(0.3);
+    expect(bestCost({ ...rec, cost_usd_reserved: 0.3, cost_usd_estimate: 0.2 })).toBe(0.2);
+    expect(bestCost({ ...rec, cost_usd_reserved: 0.3, cost_usd: 0.25 })).toBe(0.25);
   });
 });
 

@@ -19,7 +19,7 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Calibrate, CalibrationOutcome, CalibrationPanel, CampaignBudget } from '../src/calibrate.js';
 import type { BoardSink } from './calibrate-board.ts';
-import { AttemptStore, BudgetPool, CostModel, attemptRow, calibrate, panelDir, readTaskInfo, recoverInterrupted, rejectDetail } from './calibrate.ts';
+import { AttemptStore, BudgetPool, CostModel, attemptRow, bestCost, calibrate, panelDir, readTaskInfo, recoverInterrupted, rejectDetail } from './calibrate.ts';
 import type { AttemptRecord, CalibrationResult, GatewayContext } from './calibrate.ts';
 import { SpendLog, readCampaignKey, readDotenv } from './calibrate-gateway.ts';
 import { loadFrozenPanel } from './calibrate-panel.ts';
@@ -78,10 +78,6 @@ export class CampaignPool extends BudgetPool {
   override remaining(): number {
     return super.remaining() - this.otherSpendUsd();
   }
-}
-
-function bestCost(a: AttemptRecord): number {
-  return a.cost_usd ?? a.cost_usd_estimate ?? 0;
 }
 
 function taskStores(panelId: string): AttemptStore[] {
