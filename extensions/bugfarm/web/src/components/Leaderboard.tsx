@@ -158,7 +158,7 @@ export function Leaderboard({ view }: { view: BoardView }) {
   return (
     <div className="mx-4 mt-6 pb-10 sm:mx-6">
       <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
-        <div className="max-w-4xl">
+        <div className="max-w-4xl 2xl:max-w-none">
           <h2 className="wdth-semi text-[1.75rem] font-bold leading-tight sm:text-[2.3rem]">
             Which coding agent is best on {repo}, and what does a solved bug cost?
           </h2>
@@ -185,7 +185,7 @@ export function Leaderboard({ view }: { view: BoardView }) {
       {taskSet && (
         <div
           role="note"
-          className={`mt-4 flex max-w-4xl items-start gap-2.5 rounded-card border px-4 py-2.5 text-[0.92rem] ${taskSet.kind === 'dev_standin' ? 'border-pollen/50 bg-pollen/10' : 'border-line bg-well'}`}
+          className={`mt-4 flex max-w-4xl items-start gap-2.5 rounded-card border px-4 py-2.5 text-[0.92rem] 2xl:max-w-6xl ${taskSet.kind === 'dev_standin' ? 'border-pollen/50 bg-pollen/10' : 'border-line bg-well'}`}
         >
           {taskSet.kind === 'dev_standin' && <FlaskConical size={16} className="mt-0.5 shrink-0 text-pollen" aria-hidden />}
           <span>
