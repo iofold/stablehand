@@ -277,6 +277,13 @@ export function frontierNextLaunch(families: FamilyView[], frontier: Family, cfg
   if (f.tally.pending === 0 && !needsMore(f, true, floor, cfg, band)) return 0;
   const launched = f.tally.attempts + f.tally.pending;
   if (launched >= cap(cfg)) return 0;
+  if (cfg.early) {
+    // With early decisions the frontier stops at the first stage that reaches both the accept and
+    // the unsolved counts: past it, the frontier is too easy, settled, or waiting on the others.
+    const bound = Math.max(cfg.early.accept_after, cfg.early.unsolved_after.frontier);
+    const lastStage = cfg.stages.find((s) => s >= bound) ?? cap(cfg);
+    if (launched >= lastStage) return 0;
+  }
   const target = cfg.stages.find((s) => s > launched) ?? cap(cfg);
   return target - launched;
 }

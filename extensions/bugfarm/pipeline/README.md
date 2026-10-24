@@ -284,6 +284,11 @@ in the `Calibrate` contract from `src/calibrate.ts`:
   stage also has to leave room for the frontier's next stage while that stage is still affordable.
   Spend is tracked per call and across a campaign, and the campaign key's gateway cap is the hard
   stop.
+- **Trial slots.** Every task calibrating at once shares one set of trial slots. A free slot goes
+  to the highest try waiting, so a card's deciding stage does not queue behind every newer card's
+  screen. An attempt that finishes without Harbor's cost estimate (an agent timeout often has
+  none) keeps its reserved estimate as its cost until the spend log prices it, so the gate never
+  treats it as free.
 - **Frozen panel.** `freeze` checks every panel route, hashes the panel and writes
   `.work/calibration/panels/<id>.json`. A frozen id never changes; a new panel needs a new id.
 - **Selection ≠ measurement.** These attempts live under `.work/calibration/<panel>/` and go to the

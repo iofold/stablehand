@@ -176,6 +176,10 @@ describe('early decisions (cal-v2)', () => {
     expect(frontierNextLaunch([view('anthropic', 'FFFF'), view('openai', 'FF')], 'anthropic', L)).toBe(0);
     expect(frontierNextLaunch([view('anthropic', 'P.')], 'anthropic', L)).toBe(2);
     expect(frontierNextLaunch([view('anthropic', 'FFFF'), view('openai', 'FF')], 'anthropic')).toBe(4);
+    // Its last two tries in flight: whatever they return, the frontier stops at 4, so nothing is
+    // held back from the other families' stages (fastapi@5ef18bfe was refused a kimi stage this way).
+    expect(frontierNextLaunch([view('anthropic', 'FF..'), view('openai', 'FF')], 'anthropic', L)).toBe(0);
+    expect(frontierNextLaunch([view('anthropic', 'FF..'), view('openai', 'FF')], 'anthropic')).toBe(4);
   });
 });
 
