@@ -78,7 +78,7 @@ async function ok(base: string, token: string, method: string, pathname: string,
 // ---------------------------------------------------------------------------------------------
 // HTTP tools per role. The orchestrator calls them; the worker answers.
 
-type Role = 'scout' | 'env_builder' | 'writer';
+type Role = 'scout' | 'env_builder' | 'writer' | 'teacher';
 
 function httpTools(role: Role, toolsUrl: string): Array<Record<string, unknown>> {
   const auth = { type: 'bearer', secretName: 'BUGFARM_TOOLS_TOKEN' };
@@ -86,10 +86,11 @@ function httpTools(role: Role, toolsUrl: string): Array<Record<string, unknown>>
   if (role === 'scout') {
     return [{
       name: 'submit_candidates',
-      description: 'Hand Bugfarm your ranked list of bug-fix pull requests, best first. Submitting again replaces the list.',
+      description: 'Hand Bugfarm your ranked list of bug-fix pull requests, best first. Submitting again replaces the list. The playbook\'s skip_if filters drop what they match; the answer says which.',
       endpoint: url('submit_candidates'),
       method: 'POST',
-      timeoutMs: 60_000,
+      // Applying skip_if filters reads each commit from the worker's clone.
+      timeoutMs: 180_000,
       authentication: auth,
       inputSchema: {
         type: 'object',
@@ -111,6 +112,7 @@ function httpTools(role: Role, toolsUrl: string): Array<Record<string, unknown>>
                 issue_title: { description: 'Title of that issue; omit when none.' },
                 issue_body: { description: 'Body of that issue as `details` printed it; omit when none.' },
                 pr_body: { description: 'Pull request description as `details` printed it.' },
+                labels: { type: 'array', items: { type: 'string' }, description: 'Pull request labels from `details`.' },
                 why: { type: 'string', description: 'One sentence: what breaks for a user.' },
               },
             },
@@ -155,6 +157,39 @@ function httpTools(role: Role, toolsUrl: string): Array<Record<string, unknown>>
       },
     ];
   }
+  if (role === 'teacher') {
+    const predicate = { type: 'object', description: 'A condition {"field", "op", "value"}, or {"all": [...]}, {"any": [...]}, {"not": {...}}, over the candidate features listed in the task.' };
+    return [{
+      name: 'propose_rules',
+      description: 'Propose at most 3 playbook rules learned from this batch. Each is checked against the batch (a filter is dry-run on its cards); the answer reports what was recorded and what to fix. The last call counts.',
+      endpoint: url('propose_rules'),
+      method: 'POST',
+      timeoutMs: 60_000,
+      authentication: auth,
+      inputSchema: {
+        type: 'object',
+        required: ['rules'],
+        properties: {
+          summary: { type: 'string', description: 'What went wrong in this batch, in a few sentences.' },
+          rules: {
+            type: 'array',
+            maxItems: 3,
+            items: {
+              type: 'object',
+              required: ['kind', 'text', 'targets', 'expected_effect'],
+              properties: {
+                kind: { type: 'string', enum: ['scout_filter', 'writer_rule', 'env_recipe'] },
+                text: { type: 'string', description: 'The rule in one or two plain sentences.' },
+                skip_if: predicate,
+                targets: { type: 'string', description: 'The rejection reason it should reduce, as the cards name it.' },
+                expected_effect: { type: 'string', description: 'What should change in the next batch.' },
+              },
+            },
+          },
+        },
+      },
+    }];
+  }
   return [{
     name: 'submit_instruction',
     description: 'Record the task instruction and check it for leaks of the fix. Answers clean: true, or the leaks to rewrite. The last submission counts.',
@@ -170,7 +205,7 @@ function httpTools(role: Role, toolsUrl: string): Array<Record<string, unknown>>
   }];
 }
 
-const ROLE_BY_FILE: Record<string, Role> = { 'scout.yaml': 'scout', 'env-builder.yaml': 'env_builder', 'writer.yaml': 'writer' };
+const ROLE_BY_FILE: Record<string, Role> = { 'scout.yaml': 'scout', 'env-builder.yaml': 'env_builder', 'writer.yaml': 'writer', 'teacher.yaml': 'teacher' };
 
 async function seed(args: ReturnType<typeof parseArgs>): Promise<void> {
   const base = env('STABLEHAND_BASE_URL');
@@ -180,10 +215,14 @@ async function seed(args: ReturnType<typeof parseArgs>): Promise<void> {
   const api = (method: string, pathname: string, body?: unknown) => ok(base, admin, method, `/api${pathname}`, body);
   const dir = agentsDir();
   const existing = await api('GET', '/agents') as Array<{ id: string; name: string }>;
+  // A separate set of floor agents for a second worker on the same Stablehand (BUGFARM_AGENT_SUFFIX on the worker).
+  const suffix = typeof args['agent-suffix'] === 'string' ? args['agent-suffix'] : process.env.BUGFARM_AGENT_SUFFIX ?? '';
+  if (suffix && !/^-[a-z0-9-]{1,30}$/.test(suffix)) throw new Error('--agent-suffix must look like -learn');
 
   for (const file of readdirSync(dir).filter((f) => f in ROLE_BY_FILE).sort()) {
     const role = ROLE_BY_FILE[file];
     const manifest = validateManifest(parseManifestString(readFileSync(path.join(dir, file), 'utf8')));
+    if (suffix) manifest.metadata.name = `${manifest.metadata.name}${suffix}`;
     // The manifest snapshot is left out: HTTP tools are not part of the manifest format.
     const input = Object.fromEntries(Object.entries(manifestToAgentCreateInput(manifest)).filter(([key]) => key !== 'manifest'));
     const body = { ...input, httpTools: httpTools(role, toolsUrl) };
@@ -230,7 +269,9 @@ async function seed(args: ReturnType<typeof parseArgs>): Promise<void> {
     console.log(`minted scoped worker key ${created.id} (agents:read, conversations:write, webhooks:manage) into ${keyFile}`);
   }
 
-  if (process.env.BUGFARM_URL && process.env.BUGFARM_INGEST_TOKEN) {
+  if (args['no-starter-rules'] === true) {
+    console.log('playbook: starter rules skipped (--no-starter-rules)');
+  } else if (process.env.BUGFARM_URL && process.env.BUGFARM_INGEST_TOKEN) {
     const state = await workerState();
     const have = new Set(state.rows.filter((row) => row.kind === 'rule').map((row) => row.key));
     const missing = starterRuleRows().filter((row) => !have.has(row.key));
@@ -263,6 +304,8 @@ function launchBody(args: ReturnType<typeof parseArgs>): Record<string, unknown>
     since: typeof args.since === 'string' ? args.since : undefined,
     rebuild_env: args['rebuild-env'] === true ? true : undefined,
     writer_concurrency: num('writers'),
+    learning: args['no-learning'] === true ? false : undefined,
+    learning_gate: typeof args['learn-gate'] === 'string' ? args['learn-gate'] : undefined,
   };
   return Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined));
 }
@@ -295,6 +338,26 @@ async function follow(id: string): Promise<CampaignPayload | null> {
       if (seen.get(row.key) !== line) {
         seen.set(row.key, line);
         console.log(`${new Date().toISOString().slice(11, 19)}  ${row.key.split(':').pop()}  ${line}`);
+      }
+    }
+    // The learning loop: each finished batch's numbers, then every rule it put on trial or measured.
+    for (const row of state.rows) {
+      const payload = row.payload as { campaign?: string; learning?: { batch: number; accepted: number; decided: number; cost_usd: number; usd_per_accepted: number | null; gate: string; reasons: Record<string, number>; teacher?: { state: string; rules?: string[] } | null } };
+      if (row.kind !== 'batch' || payload.campaign !== id || !payload.learning) continue;
+      const l = payload.learning;
+      const line = `learning: batch ${l.batch} ${l.accepted}/${l.decided} ${l.gate === 'controls' ? 'passed the checks' : 'accepted'}, $${l.cost_usd.toFixed(2)}${l.usd_per_accepted === null ? '' : ` ($${l.usd_per_accepted.toFixed(2)} each)`}, rejects ${JSON.stringify(l.reasons)}${l.teacher ? `; Teacher ${l.teacher.state}${l.teacher.rules?.length ? ` (${l.teacher.rules.join(', ')})` : ''}` : ''}`;
+      if (seen.get(`batch:${row.key}`) !== line) {
+        seen.set(`batch:${row.key}`, line);
+        console.log(`${new Date().toISOString().slice(11, 19)}  ${line}`);
+      }
+    }
+    for (const row of state.rows) {
+      const rule = row.payload as { campaign?: string; status?: string; text?: string; effect?: { summary?: string } | null };
+      if (row.kind !== 'rule' || rule.campaign !== id) continue;
+      const line = `rule ${row.key} ${rule.status ?? 'kept'}: ${rule.effect?.summary ?? rule.text ?? ''}`;
+      if (seen.get(`rule:${row.key}`) !== line) {
+        seen.set(`rule:${row.key}`, line);
+        console.log(`${new Date().toISOString().slice(11, 19)}  ${line}`);
       }
     }
     if (campaign && campaign.status !== 'running' && campaign.status !== 'recovering') {
@@ -341,11 +404,12 @@ async function addRule(args: ReturnType<typeof parseArgs>): Promise<void> {
 
 const USAGE = `usage: bugfarm <command> [options]
 
-  seed [--budget-tag TAG --cap USD] [--worker-key-file PATH]
+  seed [--budget-tag TAG --cap USD] [--worker-key-file PATH] [--agent-suffix -NAME] [--no-starter-rules]
       Create or update the floor agents from agents/*.yaml with their HTTP tools and tools secret,
       upload the Scout's helper, set a budget policy on campaign=TAG, mint a scoped worker key
       into PATH (never printed), and add the starter playbook rules.
-  campaign start --repo owner/name [--candidates 15] [--batches 1] [--cap 15] [--budget-tag TAG] [--id ID] [--follow]
+  campaign start --repo owner/name [--candidates 15] [--batches 1] [--cap 15] [--budget-tag TAG] [--id ID]
+                 [--no-learning] [--learn-gate auto|controls|calibration] [--follow]
   campaign follow ID
   run --repo owner/name [--candidates 15] [--cap 15] [--budget-tag TAG]
       seed, start a campaign and follow it until it stops.

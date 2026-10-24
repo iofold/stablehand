@@ -46,6 +46,7 @@ export function scoutTask(input: ScoutTaskInput): string {
     'List the units with:',
     fence('bash', `python3 bugfarm/mine_prs.py units --repo ${input.repo} --since ${input.since} --source-dirs ${input.sourceDirs.join(',')} --test-dirs ${input.testDirs.join(',')}`),
     'Then shortlist by title and files, fetch details for the shortlist, apply the playbook, and call submit_candidates once with the ranked list.',
+    'A scout_filter with a skip_if predicate is applied by the worker: submit_candidates drops the candidates it matches and says which, so send a few extra, and resubmit the full list with replacements if it drops any.',
   ].join('\n');
 }
 

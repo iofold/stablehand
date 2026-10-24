@@ -52,8 +52,8 @@ spec:
     4. Rank, best first: a clear user-visible symptom; then a closed issue with a reproduction;
        then a small, focused fix. Keep the number the task asks for.
     5. Call submit_candidates once with the ranked list. For each: pr, sha (the unit's sha from
-       `units`), title, url, merged_at, issue, issue_title, issue_body and pr_body (copied from
-       `details` as they are), and why: one sentence on what breaks for a user.
+       `units`), title, url, merged_at, labels, issue, issue_title, issue_body and pr_body (copied
+       from `details` as they are), and why: one sentence on what breaks for a user.
 
     If submit_candidates fails because the Bugfarm worker cannot be reached, wait (`sleep 30`)
     and submit again, up to five times; the worker comes back after a restart.
