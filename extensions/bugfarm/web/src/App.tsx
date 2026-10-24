@@ -60,7 +60,8 @@ export function App() {
         />
         {view.simulated && <SimBanner />}
         {error && connection === 'offline' && <ErrorNotice message={error} />}
-        <StatsStrip view={view} />
+        {/* The campaign strip has nothing to say on a board that only holds benchmark rows. */}
+        {(view.campaign || route.tab === 'board') && <StatsStrip view={view} />}
         <main className="flex flex-1 flex-col">
           {route.tab === 'board' && <Board view={view} onOpen={openItem} />}
           {route.tab === 'leaderboard' && <Leaderboard view={view} />}
