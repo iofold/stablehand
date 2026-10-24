@@ -99,8 +99,10 @@ Do not give another workload a key alias that starts with `stablehand-`.
 The `gateway-init` service registers `STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY`
 on every `docker compose up`, before the orchestrator starts, so the value can
 be generated into `.env` up front (`sk-` followed by random hex). It uses
-`bootstrap_keys.py`, restricts the key to every alias in `config.yaml`, and
-does nothing when LiteLLM already knows the key. On a single host the quickstart
+`bootstrap_keys.py` and restricts the key to every alias in `config.yaml`.
+When LiteLLM already knows the key, it only re-scopes the key to the config's
+aliases if they differ, so an alias added later becomes usable after the next
+`docker compose up` (campaign keys may only use models the runtime key allows). On a single host the quickstart
 uses `LITELLM_MASTER_KEY` as the metering and admin key; both stay in the
 orchestrator.
 

@@ -2,7 +2,8 @@
 
 Runs once per `docker compose up` as the `gateway-init` service, inside the
 gateway image (standard library only, plus PyYAML when present). Idempotent:
-when LiteLLM already knows the key it exits without changing anything.
+when LiteLLM already knows the key it only re-scopes the key's model list to
+the config's aliases, if they differ.
 
 The runtime key's value comes from STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY, so it
 can be generated into .env before LiteLLM exists. Per-session keys inherit its
@@ -89,13 +90,32 @@ def ensure_runtime_key(
     models: list[str],
     log: Callable[[str], None] = print,
 ) -> str:
-    """Make sure LiteLLM knows `runtime_key`. Returns "exists" or "created"."""
+    """Make sure LiteLLM knows `runtime_key`. Returns "exists", "updated" or "created"."""
     if not runtime_key.startswith("sk-"):
         raise ValueError("STABLEHAND_MODEL_GATEWAY_RUNTIME_KEY must start with sk- (a LiteLLM key format rule)")
 
     query = urllib.parse.urlencode({"key": key_hash(runtime_key)})
     status, body = call("GET", f"/key/info?{query}", None)
     if status == 200:
+        info = body.get("info") if isinstance(body, dict) else None
+        current = info.get("models") if isinstance(info, dict) else None
+        # A key scoped to a model list misses every alias added to the config
+        # after it was registered, and campaign keys may only use models it
+        # allows. Re-scope it to the config; an empty list (all models) or the
+        # wildcard grant already allows everything and is left alone.
+        if (
+            models
+            and isinstance(current, list)
+            and current
+            and "all-proxy-models" not in current
+            and sorted(set(current)) != sorted(set(models))
+        ):
+            status, _ = call("POST", "/key/update", {"key": key_hash(runtime_key), "models": models})
+            if status != 200:
+                raise RuntimeError(f"key/update answered HTTP {status}")
+            added = sorted(set(models) - set(current))
+            log(f"runtime key re-scoped to {len(models)} models (alias {alias}; added {', '.join(added) or 'none'})")
+            return "updated"
         log(f"runtime key already registered (alias {alias})")
         return "exists"
     if not is_missing_key_response(status, body):

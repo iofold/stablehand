@@ -17,17 +17,22 @@ RUNTIME_KEY = "sk-" + "a" * 48
 
 
 class FakeGateway:
-    def __init__(self, known_hashes: "set[str] | None" = None, info_status: int = 404) -> None:
+    def __init__(self, known_hashes: "set[str] | None" = None, info_status: int = 404, key_models: "list[str] | None" = None) -> None:
         self.known_hashes = set(known_hashes or ())
         self.info_status = info_status
+        self.key_models = list(key_models or [])
         self.calls: list[tuple[str, str, Any]] = []
 
     def __call__(self, method: str, path: str, body: "dict[str, Any] | None") -> "tuple[int, Any]":
         self.calls.append((method, path, body))
+        if path == "/key/update":
+            assert body is not None
+            self.key_models = list(body["models"])
+            return 200, {"key": body["key"]}
         if path.startswith("/key/info"):
             requested = path.split("key=", 1)[1]
             if requested in self.known_hashes:
-                return 200, {"info": {"models": []}}
+                return 200, {"info": {"models": list(self.key_models)}}
             if self.info_status == 404:
                 return 404, {"detail": "Key not found"}
             return self.info_status, {"error": {"message": "Authentication Error"}}
@@ -55,6 +60,25 @@ class EnsureRuntimeKeyTests(unittest.TestCase):
         result = bootstrap_keys.ensure_runtime_key(gateway, RUNTIME_KEY, "stablehand-runtime", [], log=lambda _m: None)
         self.assertEqual(result, "exists")
         self.assertEqual([call[1] for call in gateway.calls if not call[1].startswith("/key/info")], [])
+
+    def test_rescopes_an_existing_key_to_aliases_added_since(self) -> None:
+        gateway = FakeGateway(known_hashes={bootstrap_keys.key_hash(RUNTIME_KEY)}, key_models=["gpt-5.4-mini"])
+        lines: list[str] = []
+        result = bootstrap_keys.ensure_runtime_key(gateway, RUNTIME_KEY, "stablehand-runtime", ["claude-sonnet-5-5", "gpt-5.4-mini"], log=lines.append)
+        self.assertEqual(result, "updated")
+        update = [call for call in gateway.calls if call[1] == "/key/update"]
+        self.assertEqual(len(update), 1)
+        self.assertEqual(update[0][2], {"key": bootstrap_keys.key_hash(RUNTIME_KEY), "models": ["claude-sonnet-5-5", "gpt-5.4-mini"]})
+        self.assertIn("claude-sonnet-5-5", lines[-1])
+        for line in lines:
+            self.assertNotIn(RUNTIME_KEY, line)
+
+    def test_leaves_an_all_models_key_and_a_matching_key_alone(self) -> None:
+        for key_models in ([], ["all-proxy-models"], ["gpt-5.4-mini", "claude-sonnet-5-5"]):
+            gateway = FakeGateway(known_hashes={bootstrap_keys.key_hash(RUNTIME_KEY)}, key_models=key_models)
+            result = bootstrap_keys.ensure_runtime_key(gateway, RUNTIME_KEY, "stablehand-runtime", ["claude-sonnet-5-5", "gpt-5.4-mini"], log=lambda _m: None)
+            self.assertEqual(result, "exists")
+            self.assertFalse(any(call[1] == "/key/update" for call in gateway.calls))
 
     def test_never_puts_the_secret_in_a_url_or_a_log_line(self) -> None:
         gateway = FakeGateway()
