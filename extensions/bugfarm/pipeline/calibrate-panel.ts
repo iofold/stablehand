@@ -101,20 +101,23 @@ export function defaultPanel(id = 'cal-v1'): Panel {
 /**
  * Panel cal-v2: one cost-effective measured model per family, and early ladder decisions.
  *
- * - Claude, the frontier, is measured on claude-sonnet-5-5-autocache: the gateway marks cache
- *   points on terminus-2's growing conversation, so each call reads the conversation so far at
- *   $0.10 per M tokens instead of resending it at $2. claude-haiku-5-5 is the family's cheap model.
+ * - Claude, the frontier, is measured on claude-sonnet-5-5-autocache at its default effort.
+ *   Harbor 0.24 already marks cache points for model names containing "claude", so terminus-2
+ *   reads about 95% of its prompt tokens from the cache on the plain alias too; the autocache
+ *   alias only matters for loops that set none. Sonnet 5.5 bills cache reads at $0.10 per M
+ *   tokens (Sonnet 5: $0.20). claude-haiku-5-5 is the family's cheap model.
  * - GPT is measured on gpt-6-luna ($0.013 an attempt on cal-v1); gpt-5.4-mini is its strong model.
- * - Open weights are measured on cf-kimi-k2.7-code.
+ * - Open weights are measured on cf-kimi-k2.7-code ($0.113 an attempt on cal-v1).
  * - The Gemini slot stays empty until the gateway's Gemini key works.
  *
- * The cost priors are the measured means from the cal-v1 run and the caching probe; the budget
- * gate replaces them with this run's own mean after two attempts of a model.
+ * The cost priors are measured means: cal-v1 for luna and kimi, the 2026-10-24 probes for the
+ * Claude models (sonnet-5-5 at default effort $0.29 over 4 attempts, haiku-5-5 $0.025 over 2). The
+ * budget gate replaces them with this run's own mean after two attempts of a model.
  */
 export function panelV2(id = 'cal-v2'): Panel {
   const models: Record<string, PanelModel> = {
-    'claude-sonnet-5-5-autocache': { model: 'claude-sonnet-5-5-autocache', family: 'anthropic', tier: 'strong', max_input_tokens: 1_000_000, max_output_tokens: 128_000, pricing: { input: 2 * M, output: 10 * M, cache_read: 0.1 * M, cache_write: 2.5 * M }, est_attempt_usd: 0.2 },
-    'claude-haiku-5-5': { model: 'claude-haiku-5-5', family: 'anthropic', tier: 'cheap', max_input_tokens: 1_000_000, max_output_tokens: 128_000, pricing: { input: 0.1 * M, output: 0.5 * M, cache_read: 0.01 * M, cache_write: 0.125 * M }, est_attempt_usd: 0.03 },
+    'claude-sonnet-5-5-autocache': { model: 'claude-sonnet-5-5-autocache', family: 'anthropic', tier: 'strong', max_input_tokens: 1_000_000, max_output_tokens: 128_000, pricing: { input: 2 * M, output: 10 * M, cache_read: 0.1 * M, cache_write: 2.5 * M }, est_attempt_usd: 0.29 },
+    'claude-haiku-5-5': { model: 'claude-haiku-5-5', family: 'anthropic', tier: 'cheap', max_input_tokens: 1_000_000, max_output_tokens: 128_000, pricing: { input: 0.1 * M, output: 0.5 * M, cache_read: 0.01 * M, cache_write: 0.125 * M }, est_attempt_usd: 0.025 },
     'gpt-6-luna': { model: 'gpt-6-luna', family: 'openai', tier: 'cheap', max_input_tokens: 922_000, max_output_tokens: 128_000, pricing: { input: 0.1 * M, output: 0.5 * M, cache_read: 0.01 * M, cache_write: 0.125 * M }, est_attempt_usd: 0.015 },
     'gpt-5.4-mini': { model: 'gpt-5.4-mini', family: 'openai', tier: 'strong', max_input_tokens: 272_000, max_output_tokens: 128_000, pricing: { input: 0.75 * M, output: 4.5 * M, cache_read: 0.075 * M }, est_attempt_usd: 0.1 },
     'cf-kimi-k2.7-code': { model: 'cf-kimi-k2.7-code', family: 'open', tier: 'cheap', max_input_tokens: 128_000, pricing: { input: 0.95 * M, output: 4 * M }, est_attempt_usd: 0.12 },
