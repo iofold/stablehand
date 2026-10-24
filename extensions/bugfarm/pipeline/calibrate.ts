@@ -22,7 +22,7 @@ import { SpendLog, checkRoutes, getCampaignKey, mintCampaignKey, readCampaignKey
 import type { CampaignKeyFile, StablehandAdmin } from './calibrate-gateway.ts';
 import { RUN_LABEL, judge, readTrial, keepTrajectories, runAttempt } from './calibrate-harbor.ts';
 import { toAtifV17 } from './calibrate-atif.ts';
-import { cap, decide, familyState, frontierVerdict, plan, stageFits, tally, wilson } from './calibrate-ladder.ts';
+import { decide, familyState, frontierNextLaunch, plan, stageFits, tally, wilson } from './calibrate-ladder.ts';
 import type { AttemptResult, Decision, Family, FamilyView, Tally } from './calibrate-ladder.ts';
 import { CALIBRATION_DIR, defaultPanel, freezePanel, loadFrozenPanel, readPanelFile } from './calibrate-panel.ts';
 import type { FrozenPanel, PanelModel } from './calibrate-panel.ts';
@@ -581,13 +581,12 @@ export async function calibrate(taskDir: string, panel: FrozenPanel, budget: num
   // The frontier decides the band, so its next stage is protected: another family's stage only
   // launches if the budget also covers the frontier's next stage.
   const frontierHold = (): number => {
-    const f = views().find((v) => v.family === panel.frontier);
-    if (!f || frontierVerdict(f.tally, panel.ladder, panel.band)) return 0;
-    const launched = f.tally.attempts + f.tally.pending;
-    if (launched >= cap(panel.ladder)) return 0;
-    const target = panel.ladder.stages.find((s) => s > launched) ?? cap(panel.ladder);
+    const vs = views();
+    const f = vs.find((v) => v.family === panel.frontier);
+    const k = frontierNextLaunch(vs, panel.frontier, panel.ladder, panel.band);
+    if (!f || k === 0) return 0;
     const est = costModel.estimate(f.model);
-    const need = (target - launched) * (est + est * panel.reserve_factor);
+    const need = k * (est + est * panel.reserve_factor);
     // A stage the budget cannot cover will not run; holding money for it would only starve the rest.
     return need <= remaining() ? need : 0;
   };

@@ -5,22 +5,57 @@
 // (2/2, 3/4 or 4/8 passes). Errors count as attempts and are never replaced. While any attempt is
 // running, nothing is decided. Calibration selects tasks; it does not measure them precisely (the
 // benchmark does, on separate attempts), so it stops as soon as the decision can no longer change.
+//
+// A ladder config with `early` (panels from cal-v2 on) decides sooner: it accepts on the frontier's
+// observed rate after a few attempts instead of waiting until the ceiling is certain, calls a task
+// unsolved once nobody has passed by a fixed stage, and runs the other families only to find out
+// whether anyone can solve the task. Without `early`, the cal-v1 rules apply unchanged.
 
 export type Family = 'anthropic' | 'openai' | 'google' | 'open';
 export const FAMILIES: readonly Family[] = ['anthropic', 'openai', 'google', 'open'];
 
 export type AttemptResult = 'pass' | 'fail' | 'error';
 
+export interface EarlyDecisions {
+  /**
+   * Accept once the frontier has this many finished attempts, has passed at most the band's
+   * ceiling share of them, and some family has passed.
+   */
+  accept_after: number;
+  /**
+   * Call the task unsolved once nobody has passed, with the frontier at `frontier` finished
+   * attempts and every other family at `others`. The other families stop there.
+   */
+  unsolved_after: { frontier: number; others: number };
+}
+
 export interface LadderConfig {
   /** Cumulative attempt targets, ascending. The last one is the cap. */
   stages: number[];
   /** Passes at (or above) which a family stops early as too easy, keyed by stage. */
   too_easy: Record<string, number>;
+  /**
+   * Early decisions (cal-v2 on). With it, the other families only run while nobody has passed:
+   * their job in selection is to show that someone can solve the task. Unset keeps the cal-v1
+   * rules: accept only once the ceiling is certain, and run every ladder to its cap before calling
+   * a task unsolved.
+   */
+  early?: EarlyDecisions;
 }
 
 export const DEFAULT_LADDER: LadderConfig = {
   stages: [2, 4, 8, 16],
   too_easy: { '2': 2, '4': 3, '8': 4 },
+};
+
+/**
+ * The cal-v2 ladder: the same stages and too-easy stops, plus early decisions. Accept after 4
+ * frontier attempts with at most 2 passes and a pass somewhere; unsolved when nobody has passed
+ * with the frontier at 4 and the other families at 8.
+ */
+export const EARLY_LADDER: LadderConfig = {
+  ...DEFAULT_LADDER,
+  early: { accept_after: 4, unsolved_after: { frontier: 4, others: 8 } },
 };
 
 export interface BandConfig {
@@ -122,17 +157,44 @@ export function ceilingCertain(t: Tally, cfg: LadderConfig = DEFAULT_LADDER, ban
   return t.passes + t.pending + remaining <= band.max_frontier_rate * cap(cfg);
 }
 
+/**
+ * Early accept (needs `early`): the frontier has enough finished attempts to read its rate, and the
+ * rate is at or under the ceiling.
+ */
+export function frontierSettled(t: Tally, cfg: LadderConfig = DEFAULT_LADDER, band: BandConfig = DEFAULT_BAND): boolean {
+  if (!cfg.early || t.pending > 0) return false;
+  return t.attempts >= cfg.early.accept_after && t.passes <= band.max_frontier_rate * t.attempts;
+}
+
+function floorMet(families: FamilyView[], band: BandConfig): boolean {
+  return families.some((x) => x.tally.passes >= band.min_passes_any_family);
+}
+
+/** Does this family's ladder still need attempts for the decision? Attempts in flight are ignored. */
+function needsMore(x: FamilyView, isFrontier: boolean, floor: boolean, cfg: LadderConfig, band: BandConfig): boolean {
+  if (familyState({ ...x.tally, pending: 0 }, cfg).kind !== 'next') return false;
+  const e = cfg.early;
+  if (!e) return true;
+  if (isFrontier) {
+    // With a pass somewhere, the frontier stops once its rate can be read. With none, it stops at
+    // the unsolved stage, and the other families look for a pass.
+    const enough = floor ? e.accept_after : Math.max(e.accept_after, e.unsolved_after.frontier);
+    return !(x.tally.attempts >= enough && x.tally.passes <= band.max_frontier_rate * x.tally.attempts);
+  }
+  return !floor && x.tally.attempts < e.unsolved_after.others;
+}
+
 function decideCounting(families: FamilyView[], frontier: Family, cfg: LadderConfig, band: BandConfig): Decision | null {
   const f = families.find((x) => x.family === frontier);
   if (!f) throw new Error(`frontier family ${frontier} has no ladder model on the panel`);
   const verdict = frontierVerdict(f.tally, cfg, band);
   if (verdict) return verdict;
-  const floorMet = families.some((x) => x.tally.passes >= band.min_passes_any_family);
-  if (floorMet && ceilingCertain(f.tally, cfg, band)) return 'accept';
-  const open = families.filter((x) => familyState(x.tally, cfg).kind === 'next');
+  const floor = floorMet(families, band);
+  if (floor && (ceilingCertain(f.tally, cfg, band) || frontierSettled(f.tally, cfg, band))) return 'accept';
+  const open = families.filter((x) => needsMore(x, x.family === frontier, floor, cfg, band));
   if (open.length > 0) return open.every((x) => x.budget_blocked) ? 'over_budget' : null;
-  // Every family stopped (too easy or at the cap).
-  if (!floorMet) return 'unsolved_review';
+  // Every ladder the decision needs has stopped: too easy, at its cap, or at the unsolved stage.
+  if (!floor) return 'unsolved_review';
   const rate = f.tally.attempts > 0 ? f.tally.passes / f.tally.attempts : 0;
   return rate > band.max_frontier_rate ? 'out_of_band' : 'accept';
 }
@@ -147,9 +209,11 @@ function asPasses(t: Tally): Tally {
  *
  * - too_easy: the frontier family stopped early as too easy.
  * - out_of_band: the frontier pass rate is above the ceiling (at the cap, or already certain).
- * - unsolved_review: every family finished its ladder with no passes. "Unsolved" can mean broken,
- *   so a reviewer has to look.
- * - accept: someone passes sometimes, and the frontier cannot end above the ceiling.
+ * - unsolved_review: every family finished its ladder with no passes (with `early`: the frontier
+ *   at `unsolved_after.frontier` attempts and the others at `unsolved_after.others`). "Unsolved"
+ *   can mean broken, so a reviewer has to look.
+ * - accept: someone passes sometimes, and the frontier cannot end above the ceiling. With
+ *   `early`, also as soon as the frontier has `accept_after` attempts at or under the ceiling.
  * - over_budget: the budget gate refused every stage still needed. Calling again with more budget
  *   resumes from the stored attempts.
  * - held: errored attempts could change the decision (it differs when they are read as passes),
@@ -171,22 +235,25 @@ export function decide(families: FamilyView[], frontier: Family, cfg: LadderConf
  * the frontier finished without a verdict, so a task that is too easy for the frontier costs the
  * other families nothing beyond the screen, while each family still runs in parallel with the
  * frontier's next stage. Once the frontier has finished its ladder, the others run freely.
- * Nothing is launched once the decision can no longer change.
+ * Nothing is launched once the decision can no longer change. With `early`, a family only grows
+ * while the decision needs it: the frontier until its rate can be read (or the unsolved stage),
+ * the others only while nobody has passed, up to `unsolved_after.others`.
  */
 export function plan(families: FamilyView[], frontier: Family, cfg: LadderConfig = DEFAULT_LADDER, band: BandConfig = DEFAULT_BAND): Array<{ family: Family; model: string; launch: number; target: number }> {
   const f = families.find((x) => x.family === frontier);
   if (!f) return [];
   if (frontierVerdict(f.tally, cfg, band)) return [];
-  const floorMet = families.some((x) => x.tally.passes >= band.min_passes_any_family);
-  if (floorMet && ceilingCertain(f.tally, cfg, band)) return [];
-  const fState = familyState(f.tally, cfg);
-  const frontierDone = fState.kind === 'too_easy' || fState.kind === 'complete';
+  const floor = floorMet(families, band);
+  if (floor && (ceilingCertain(f.tally, cfg, band) || frontierSettled(f.tally, cfg, band))) return [];
+  const frontierDone = f.tally.pending === 0 && !needsMore(f, true, floor, cfg, band);
   const frontierStage = stageReached(f.tally.attempts, cfg);
   const out: Array<{ family: Family; model: string; launch: number; target: number }> = [];
   for (const x of families) {
     const st = familyState(x.tally, cfg);
     if (st.kind !== 'next') continue;
+    if (!needsMore(x, x.family === frontier, floor, cfg, band)) continue;
     let target = st.target;
+    if (x.family !== frontier && cfg.early) target = Math.min(target, cfg.early.unsolved_after.others);
     if (x.family !== frontier && !frontierDone) {
       const allowed = Math.min(target, frontierStage);
       if (allowed <= x.tally.attempts) continue;
@@ -196,6 +263,22 @@ export function plan(families: FamilyView[], frontier: Family, cfg: LadderConfig
     if (launch > 0) out.push({ family: x.family, model: x.model, launch, target });
   }
   return out;
+}
+
+/**
+ * Attempts the frontier's next stage would launch, or 0 when the frontier needs no more. The
+ * calibrator holds budget for that stage while other families' stages run.
+ */
+export function frontierNextLaunch(families: FamilyView[], frontier: Family, cfg: LadderConfig = DEFAULT_LADDER, band: BandConfig = DEFAULT_BAND): number {
+  const f = families.find((x) => x.family === frontier);
+  if (!f || frontierVerdict(f.tally, cfg, band)) return 0;
+  const floor = floorMet(families, band);
+  if (floor && (ceilingCertain(f.tally, cfg, band) || frontierSettled(f.tally, cfg, band))) return 0;
+  if (f.tally.pending === 0 && !needsMore(f, true, floor, cfg, band)) return 0;
+  const launched = f.tally.attempts + f.tally.pending;
+  if (launched >= cap(cfg)) return 0;
+  const target = cfg.stages.find((s) => s > launched) ?? cap(cfg);
+  return target - launched;
 }
 
 /** Budget gate: a stage of k attempts starts only if the remaining budget covers k × (estimate + reserve). */
