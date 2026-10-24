@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { digestWorkspace } from '../../../workspace/digest.js';
 import { validateAndExtractTarball } from '../../../workspace/tar-upload.js';
+import {
+  withWorkspaceDirectory, withWorkspaceFile, workspaceDirectoryPath, workspaceEntryMetadata,
+} from '../../../workspace/safe-file-access.js';
 import { isBlockedPath, resolveWorkspaceTarget } from '../agent-helpers.js';
 import { chownRecursive, getRequestAgent, safeError } from './helpers.js';
 import type { AgentSubRouteOptions } from './types.js';
@@ -52,28 +55,23 @@ export async function fileRoutes(
       const targetDir = resolvedTarget.target;
 
       try {
-        const dirEntries = await readdir(targetDir, { withFileTypes: true });
-        const entries = await Promise.all(
-          dirEntries
-            .filter((entry) => !entry.name.startsWith('.') && entry.name !== 'node_modules' && !isBlockedPath(entry.name))
-            .map(async (entry) => {
-              const entryPath = join(targetDir, entry.name);
-              let size = 0;
-              try {
-                const entryStat = await stat(entryPath);
-                size = entryStat.size;
-              } catch (err) {
-                request.log.warn({ err }, 'Failed to stat file');
-              }
-              return {
-                name: entry.name,
-                type: entry.isDirectory() ? ('directory' as const) : ('file' as const),
-                sizeBytes: size,
-              };
-            }),
-        );
-
-        return reply.send({ entries });
+        return await withWorkspaceDirectory(resolvedTarget.baseDir, targetDir, false, async (directory) => {
+          const dirEntries = await readdir(workspaceDirectoryPath(directory), { withFileTypes: true });
+          const entries = await Promise.all(
+            dirEntries
+              .filter((entry) => !entry.name.startsWith('.') && entry.name !== 'node_modules' && !isBlockedPath(entry.name))
+              .map(async (entry) => {
+                const metadata = await workspaceEntryMetadata(directory, entry.name);
+                if (!metadata) return null;
+                return {
+                  name: entry.name,
+                  type: metadata.isDirectory() ? ('directory' as const) : ('file' as const),
+                  sizeBytes: metadata.size,
+                };
+              }),
+          );
+          return reply.send({ entries: entries.filter((entry) => entry !== null) });
+        });
       } catch (err) {
         return reply.status(400).send(safeError('Cannot read directory', err));
       }
@@ -101,28 +99,36 @@ export async function fileRoutes(
       const targetFile = resolvedTarget.target;
 
       try {
-        const fileStat = await stat(targetFile);
-
-        if (fileStat.isDirectory()) {
-          return reply.status(400).send({ error: 'Path is a directory, not a file' });
-        }
-
-        if (fileStat.size > 50 * 1024) {
-          return reply.status(400).send({
-            error: 'File too large',
-            code: 'file_too_large',
-            sizeBytes: fileStat.size,
-            maxSizeBytes: 50 * 1024,
+        return await withWorkspaceFile(resolvedTarget.baseDir, targetFile, {}, async (file, fileStat) => {
+          const maxSizeBytes = 50 * 1024;
+          // Bound the read too: an agent may grow a file after fstat.
+          const buffer = Buffer.alloc(maxSizeBytes + 1);
+          let bytesRead = 0;
+          if (fileStat.size <= maxSizeBytes) {
+            while (bytesRead < buffer.length) {
+              const read = await file.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+              if (read.bytesRead === 0) break;
+              bytesRead += read.bytesRead;
+            }
+          }
+          if (fileStat.size > maxSizeBytes || bytesRead > maxSizeBytes) {
+            return reply.status(400).send({
+              error: 'File too large',
+              code: 'file_too_large',
+              sizeBytes: Math.max(fileStat.size, bytesRead),
+              maxSizeBytes,
+            });
+          }
+          return reply.send({
+            path: query.path,
+            content: buffer.subarray(0, bytesRead).toString('utf8'),
+            sizeBytes: bytesRead,
           });
-        }
-
-        const content = await readFile(targetFile, 'utf-8');
-        return reply.send({
-          path: query.path,
-          content,
-          sizeBytes: fileStat.size,
         });
       } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'EISDIR') {
+          return reply.status(400).send({ error: 'Path is a directory, not a file' });
+        }
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
           return reply.status(404).send({ error: 'File not found' });
         }
@@ -153,10 +159,14 @@ export async function fileRoutes(
       const targetFile = resolvedTarget.target;
 
       try {
-        await mkdir(dirname(targetFile), { recursive: true });
-        await writeFile(targetFile, body.content, 'utf-8');
-        const fileStat = await stat(targetFile);
-        return reply.status(201).send({ path: body.path, sizeBytes: fileStat.size });
+        return await withWorkspaceFile(resolvedTarget.baseDir, targetFile, {
+          writable: true, create: true, createParents: true,
+        }, async (file) => {
+          await file.truncate(0);
+          await file.writeFile(body.content!, 'utf8');
+          const fileStat = await file.stat();
+          return reply.status(201).send({ path: body.path, sizeBytes: fileStat.size });
+        });
       } catch (err) {
         return reply.status(400).send(safeError('Cannot create file', err));
       }
@@ -185,15 +195,16 @@ export async function fileRoutes(
       const targetFile = resolvedTarget.target;
 
       try {
-        const fileStat = await stat(targetFile);
-        if (fileStat.isDirectory()) {
+        return await withWorkspaceFile(resolvedTarget.baseDir, targetFile, { writable: true }, async (file) => {
+          await file.truncate(0);
+          await file.writeFile(body.content!, 'utf8');
+          const updatedStat = await file.stat();
+          return reply.send({ path: body.path, sizeBytes: updatedStat.size });
+        });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'EISDIR') {
           return reply.status(400).send({ error: 'Path is a directory, not a file' });
         }
-
-        await writeFile(targetFile, body.content, 'utf-8');
-        const updatedStat = await stat(targetFile);
-        return reply.send({ path: body.path, sizeBytes: updatedStat.size });
-      } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
           return reply.status(404).send({ error: 'File not found' });
         }
@@ -223,14 +234,14 @@ export async function fileRoutes(
       const targetFile = resolvedTarget.target;
 
       try {
-        const fileStat = await stat(targetFile);
-        if (fileStat.isDirectory()) {
+        return await withWorkspaceFile(resolvedTarget.baseDir, targetFile, {}, async (_file, _metadata, path) => {
+          await unlink(path);
+          return reply.status(204).send();
+        });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'EISDIR') {
           return reply.status(400).send({ error: 'Path is a directory, not a file' });
         }
-
-        await unlink(targetFile);
-        return reply.status(204).send();
-      } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
           return reply.status(404).send({ error: 'File not found' });
         }
