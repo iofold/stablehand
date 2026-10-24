@@ -321,9 +321,11 @@ container over tmux, so the container keeps `network_mode: none`.
 ### Commands
 
 ```bash
-# Once per VM: a board, a frozen panel and a campaign key.
-node --experimental-strip-types calibrate.ts freeze --panel cal-v1 --key-file <probe key file>
-node --experimental-strip-types calibrate.ts mint-key --campaign bugfarm-dev-cal --max-budget 19
+# Once per VM: a probe key, a frozen panel, and a campaign key per budget tag.
+node --experimental-strip-types calibrate.ts mint-key --campaign my-probe --max-budget 3 --key-file probe-key.json --models claude-sonnet-5-5,claude-sonnet-5-5-autocache
+node --experimental-strip-types calibrate.ts probe .work/tasks/fastapi/fastapi-f90d036938 --models claude-sonnet-5-5,claude-sonnet-5-5-autocache --tries 2
+node --experimental-strip-types calibrate.ts freeze --panel-id cal-v2 --key-file probe-key.json
+node --experimental-strip-types calibrate.ts mint-key --campaign bugfarm-dev-cal2 --max-budget 12.5
 
 # One task (what the foreman calls), or a whole dataset within one budget.
 node --experimental-strip-types calibrate.ts one .work/tasks/fastapi/fastapi-0f3e7bd682 --budget 1.5
@@ -341,6 +343,59 @@ Settings come from the environment: `BUGFARM_GATEWAY_URL` (default `http://local
 `.env` to read `STABLEHAND_API_TOKEN` and `STABLEHAND_MODEL_GATEWAY_METERING_KEY` from),
 `STABLEHAND_URL`, and `BUGFARM_URL` with `BUGFARM_INGEST_TOKEN` for the board. Secrets are read,
 never printed.
+
+`probe` runs one task on several models with the panel's solver settings and no ladder, then
+prices each attempt from the spend log with its prompt, cache-read, cache-write and output tokens.
+A model written `<gateway model>@<effort>` sends `reasoning_effort` in every request body (the
+gateway maps it to Claude's adaptive thinking and `output_config.effort`); a panel entry can use
+the same form.
+
+### Panel `cal-v2`
+
+Frozen 2026-10-24 01:30 UTC, sha `4706e664510f2243`, after the probes below. All five routes
+answered.
+
+| Family | Cheap | Strong | Measured (ladder) model | Price in / out per M tokens | Cost prior per attempt |
+|---|---|---|---|---|---|
+| Claude (frontier) | claude-haiku-5-5 | claude-sonnet-5-5-autocache | claude-sonnet-5-5-autocache, default effort | $2 / $10 (cache read $0.10, write $2.50) | $0.29 |
+| GPT | gpt-6-luna | gpt-5.4-mini | gpt-6-luna | $0.10 / $0.50 (cache read $0.01) | $0.015 |
+| Open weights | cf-kimi-k2.7-code | — | cf-kimi-k2.7-code | $0.95 / $4 (no caching) | $0.12 |
+| Gemini | — | — | — | slot held: the gateway's Gemini key is invalid | — |
+
+Screen: gpt-6-luna and claude-sonnet-5-5-autocache. Ladder: 2/4/8/16 with the early decisions
+above. terminus-2 settings as in cal-v1 (JSON parser, at most 40 turns, 900 s agent timeout).
+
+#### What the probes showed (fastapi-f90d036938, 2026-10-24)
+
+The plan was to cut the frontier's cost with prompt caching: autocache aliases on the gateway
+that mark the system message and the newest message. On the same task, two attempts each:
+
+| Model | Passes | Calls | Prompt tokens | Cache reads | Output tokens | $ per attempt | $ per call |
+|---|---|---|---|---|---|---|---|
+| claude-sonnet-5-5 | 2/2 | 66 | 1,407,215 | 95% | 37,911 | $0.352 | $0.0107 |
+| claude-sonnet-5-5-autocache | 1/2 | 50 | 807,619 | 94% | 24,655 | $0.226 | $0.0091 |
+| claude-sonnet-5-5-autocache@medium | 1/2 | 53 | 981,495 | 94% | 27,204 | $0.257 | $0.0097 |
+| claude-sonnet-5-5-autocache@low | 0/2 | 47 | 615,805 | 93% | 14,387 | $0.155 | $0.0066 |
+| claude-haiku-5-5-autocache | 0/2 | 52 | 1,249,422 | 93% | 54,361 | $0.025 | $0.0010 |
+
+- **The plain alias already caches.** Harbor 0.24's LiteLLM wrapper marks the newest 4 content
+  blocks of every request whose model name contains "claude" (`harbor/llms/utils.py`,
+  `add_anthropic_caching`), so terminus-2 read 95% of its prompt tokens from the cache on
+  `openai/claude-sonnet-5-5`. cal-v1 did too: its 31 priced Sonnet 5 attempts read 95% of 21.8M
+  prompt tokens from the cache. With Harbor's 4 cache points in place, LiteLLM's hook adds none
+  (it never goes past Anthropic's limit of 4), so the autocache alias changes nothing for
+  terminus-2. The cost differences in the table come from conversation length (25 against 33
+  calls per attempt), not from caching. The aliases stay for agent loops that set no cache points
+  of their own.
+- **What did cut the cost is Sonnet 5.5 itself.** Its cache reads cost $0.10 per M tokens against
+  Sonnet 5's $0.20, and on this task it wrote about 16k output tokens per attempt. That gives
+  $0.29 per attempt over the four default-effort attempts, against cal-v1's $0.47 for Sonnet 5.
+  Output is now about half of the bill: it carries adaptive thinking, and caching cannot touch it.
+- **Effort:** medium cost about the same as the default ($0.26 against $0.29); low saved 45% and
+  passed 0 of 2. Neither is a clean lever, so cal-v2 measures at the default effort.
+- **Haiku 5.5 costs a tenth of a cent per call**, $0.025 an attempt, and passed 0 of 2 here. As a
+  frontier it would make calibration about 12 times cheaper, but "too hard for the frontier"
+  would then mean too hard for Haiku.
 
 ### Panel `cal-v1`
 
@@ -413,7 +468,9 @@ example, a Wilson upper bound under 50%) instead of a certain one.
 
 - **terminus-2 needs tmux in the image.** Without it, terminus-2 tries `apt-get install tmux`
   inside a container that has no network, and the trial fails with "Failed to start tmux
-  session". Env images now install tmux.
+  session". The profile Dockerfiles install tmux. The Env builder's own Dockerfiles did not, so
+  every attempt on an agent-built env failed this way; `buildEnv` now appends a tmux layer to a
+  custom Dockerfile that lacks one.
 - **The spend log rejects big pages.** `/spend/logs/v2` answers 422 to `page_size` above 100.
 - **Harbor's estimate matches the gateway** when `model_info` carries the gateway's prices,
   cache read and write included, so the budget gate runs on accurate numbers before the spend log
