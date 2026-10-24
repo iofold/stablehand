@@ -84,7 +84,9 @@ function summaryReason(m: DatasetModel, req: Omit<ApprovalRequest, 'reason'>): s
   const repo = m.def.repo;
   const kind = m.def.task_set.kind === 'dev_standin' ? ' (dev stand-in)' : '';
   const where = req.dry_run ? `dry run of ${req.target}` : `${req.target} (${req.visibility})`;
-  return `Publish ${m.tasks.length} Bugfarm ${repo} tasks${kind} to the Hugging Face Hub: ${where}. Spend so far $${req.total_spend_usd.toFixed(2)}.${req.board_url ? ` Board: ${req.board_url}` : ''}`;
+  const t = m.ledger.totals;
+  const parts = [t.selection_usd ? `calibration $${t.selection_usd.toFixed(2)}` : null, `benchmark $${t.measurement_usd.toFixed(2)}`].filter(Boolean).join(', ');
+  return `Publish ${m.tasks.length} Bugfarm ${repo} tasks${kind} to the Hugging Face Hub: ${where}. Spend $${req.total_spend_usd.toFixed(2)} (${parts}).${req.board_url ? ` Board: ${req.board_url}` : ''}`;
 }
 
 function readState(out: string): PublishState | undefined {
