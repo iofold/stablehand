@@ -4,12 +4,16 @@
 //   tasks/<task>/                the Harbor tasks, exactly as the benchmark measured them
 //   data/swebench.jsonl          one SWE-bench-style row per task, for trainers that don't read Harbor
 //   leaderboard.json             the benchmark's cells
-//   spend/ledger.json, .csv      cost per task and per campaign, with the gateway reconciliation
+//   spend/ledger.json, .csv      cost per task and per campaign
+//   spend/reconciliation.json    the ledger against the gateway's spend log and Stablehand's budget
 //   provenance/manifest.json     sha256 of every file above; its hash is the dataset sha
 //   provenance/approval.json     who approved publishing, when and why (after approval)
 //
-// The dataset sha covers everything except the card and the approval, so an approval is bound to
-// exact contents: change a task and the old approval no longer applies.
+// The dataset sha covers everything except the card, the approval and the reconciliation snapshot,
+// so an approval is bound to exact contents: change a task, a result or a ledger figure and the old
+// approval no longer applies. The snapshot is left out because asking for approval is itself a
+// (tiny) tagged turn that moves the campaign budget, and because it carries the time it was taken.
+// The card renders it, and it is refreshed on every build.
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
@@ -27,6 +31,7 @@ import type { TaskInfo } from '../lib/tasks.ts';
 export const CARD = 'README.md';
 export const APPROVAL = 'provenance/approval.json';
 export const MANIFEST = 'provenance/manifest.json';
+export const RECONCILIATION = 'spend/reconciliation.json';
 
 export interface LeaderboardCell extends CellStats {
   cell: string;
@@ -283,10 +288,11 @@ export async function buildDataset(def: BenchDefinition, store: AttemptStore, op
 
   const ledger = buildLedger(def, store, opts.reconciliation, opts.selection, opts.authoring);
   mkdirSync(join(out, 'spend'), { recursive: true });
-  writeFileSync(join(out, 'spend', 'ledger.json'), JSON.stringify(ledger, null, 2) + '\n');
+  writeFileSync(join(out, 'spend', 'ledger.json'), JSON.stringify({ ...ledger, reconciliation: undefined }, null, 2) + '\n');
   writeFileSync(join(out, 'spend', 'ledger.csv'), csv(ledger));
+  writeFileSync(join(out, RECONCILIATION), JSON.stringify(ledger.reconciliation, null, 2) + '\n');
 
-  const files = walk(out, (rel) => rel === '.publish' || rel === CARD || rel === APPROVAL || rel === MANIFEST);
+  const files = walk(out, (rel) => rel === '.publish' || rel === CARD || rel === APPROVAL || rel === MANIFEST || rel === RECONCILIATION);
   const manifest = files.map((f) => ({ path: f, sha256: sha256File(join(out, f)), bytes: statSync(join(out, f)).size }));
   const sha = createHash('sha256').update(manifest.map((m) => `${m.sha256}  ${m.path}`).join('\n')).digest('hex');
   mkdirSync(join(out, 'provenance'), { recursive: true });

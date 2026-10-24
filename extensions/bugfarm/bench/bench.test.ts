@@ -196,6 +196,10 @@ describe('dataset and card', () => {
     const m = await dataset.buildDataset(def, s, opts);
     const again = await dataset.buildDataset(def, s, opts);
     expect(again.sha).toBe(m.sha);
+    // The reconciliation snapshot moves with every approval turn and carries a timestamp: not hashed.
+    const snapshot = { at: Date.now(), campaign: 'bugfarm-test' } as unknown as import('./lib/spend.ts').Reconciliation;
+    expect((await dataset.buildDataset(def, s, { ...opts, reconciliation: snapshot })).sha).toBe(m.sha);
+    expect(JSON.parse(readFileSync(join(out, 'spend', 'reconciliation.json'), 'utf8')).campaign).toBe('bugfarm-test');
     const row = JSON.parse(readFileSync(join(out, 'data', 'swebench.jsonl'), 'utf8').trim());
     expect(row).toMatchObject({ instance_id: 'example__demo-0123456789ab', repo: 'example/demo', base_commit: 'fedcba9876543210fedcba9876543210fedcba98', FAIL_TO_PASS: ['tests/test_wrap.py::test_last_glyph'], canary: '11111111-2222-3333-4444-555555555555', harbor_task: 'tasks/demo-0123456789' });
     expect(row.problem_statement).toBe('# Wrap drops the last glyph\n');

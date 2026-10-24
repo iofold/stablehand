@@ -101,8 +101,9 @@ export function renderCard(m: DatasetModel, approval: Approval | null): string {
   out.push('tasks/<task>/              Harbor 0.24 task: instruction.md, task.toml, environment/, tests/, solution/');
   out.push('data/swebench.jsonl        one row per task (instance_id, repo, base_commit, patch, test_patch, FAIL_TO_PASS, PASS_TO_PASS, ...)');
   out.push('leaderboard.json           the benchmark below, per agent and model pair');
-  out.push('spend/ledger.json, .csv    cost per task and for the campaign, with the gateway reconciliation');
-  out.push('provenance/manifest.json   sha256 of every file; the dataset sha is the hash of this list');
+  out.push('spend/ledger.json, .csv    cost per task and for the campaign');
+  out.push('spend/reconciliation.json the ledger against the gateway spend log and the Stablehand budget');
+  out.push('provenance/manifest.json   sha256 of every other file; the dataset sha is the hash of this list');
   out.push('provenance/approval.json   who approved publishing, when, and why');
   out.push('```');
   out.push('');
