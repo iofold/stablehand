@@ -128,4 +128,40 @@ Other options:
 
 ## Dev validation (2026-10-24, the Azure VM)
 
-Results of the dev run go here once it finishes.
+Calibration had accepted only one task (`fastapi@f90d0369`), fewer than the three a benchmark needs. So this run uses a **dev stand-in**, and the board, the card and `leaderboard.json` all say so. The stand-in is that task plus the two undecided tasks closest to the band (`fastapi@d1fd422f`, `fastapi@5e6a1eec`), all from the 12 tasks that passed their controls.
+
+Settings:
+- bench `dev-bench2`, campaign `bugfarm-dev-bench2`;
+- a $12 cap, gated at $11.50;
+- k = 2, six cells, 6 trials at a time;
+- a 1,200 s agent timeout, and $1.50 per StablehandAgent try.
+
+| # | Cell | pass@1 | 95% interval | Solved | $ per solve | Cell spend | Median agent time |
+|---|---|---|---|---|---|---|---|
+| 1 | terminus-2 / gpt-6-luna | 67% | 50–100% | 4 of 6 | $0.03 | $0.11 | 4m 58s |
+| 2 | pi / gpt-6-luna | 50% | 0–100% | 3 of 6 | $0.02 | $0.07 | 3m 52s |
+| 3 | claude-agents / claude-sonnet-5 | 17% | 0–50% | 1 of 5 | $4.99 | $4.99 | 8m 59s |
+| 4 | pi / gpt-5.4-mini | 0% | – | 0 of 6 | – | $2.75 | 4m 17s |
+| 5 | pi / cf-kimi-k2.7-code | 0% | – | 0 of 5 | – | $0.81 | 20m (timeouts) |
+| 6 | terminus-2 / claude-sonnet-5 | 0% | – | 0 of 5 | – | $2.56 | 5m 41s |
+
+- **The budget gate held.** 33 of the 36 planned tries ran. The gate held back three: one Claude try in each Claude cell, and one kimi re-run. Those cells say "of 6" on the board.
+- **The provider failed two kimi tries.** Workers AI answered 429 ("inference request per min rate reached"). Both tries were voided and ran again. The kimi cell now runs at most two trials at a time.
+- **Two Claude tries hit their caps.** Two claude-agents tries stopped at the $1.50 cap; one of them had already solved its task.
+- **This is not a model ranking.** The instructions are still placeholders (the Writer has not rewritten them), and three tasks is a tiny sample: look at the interval widths. The run validates the machinery, not the models.
+- **Spend reconciles.**
+
+  | View | USD |
+  |---|---|
+  | Ledger: 33 tries + 2 voided executions | 11.515488 |
+  | Gateway spend log: campaign key rows by attempt id ($2.6678) + 24 session-key turns by correlation id ($8.8477) | 11.515487 |
+  | Stablehand campaign budget: the ledger + four publish-approval turns ($0.0077) | 11.523154 |
+
+  The differences are ±$0.000001, and the total is under the $12 cap.
+- **The runner resumed twice.** It was SIGKILLed twice mid-run. Each time, the next `run` adopted the 6 live Harbor processes by pid. There were no double counts: one record per (cell, task, try). No containers labelled `bugfarm.run=bench:dev-bench2` were left.
+- **Publish dry run.**
+  - The folder is 3 tasks, 9,738 files and 113 MB, with dataset sha256 `7e18b06a…`. The repo snapshots are most of it; packing them before a real push is a follow-up.
+  - `bugfarm-publisher` raised `request-approval` with the summary: "Publish 3 Bugfarm fastapi/fastapi tasks (dev stand-in) to the Hugging Face Hub: dry run of bugfarm-dev/fastapi-standin. Spend $30.12 (calibration $18.60, benchmark $11.52). Board: …". It showed in `GET /api/interrupts?status=pending`, the list the dashboard reads.
+  - It was approved through `POST /api/agents/:id/interrupt` with a reason, by a scoped key named `bugfarm-phone-approver`. The card names that key, the time and the reason, and `provenance/approval.json` holds the record.
+  - Re-running `publish` reused the approval: the sha did not change.
+  - `hf_push.py` printed its plan: `create_repo(..., private=True)` and `upload_large_folder`. Nothing was uploaded.
