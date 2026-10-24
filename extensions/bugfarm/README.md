@@ -16,10 +16,10 @@ A campaign is a repository, a number of batches, a candidate count per batch and
    - a **check job**: the fix's tests must fail on the buggy state and pass on the fixed one, three times each, and a subset of related tests must keep passing (**Fails→Passes**);
    - a **Writer turn** drafts an issue-style instruction that describes the symptom, then a second **review turn** checks it for leaks of the fix and rewrites it if needed. A deterministic leak check runs on every submission and once more at the end;
    - a **package job** writes the Harbor task, and a **controls job** runs the reference fix (must score 1) and doing nothing (must score 0) (**Controls ✓**);
-   - the card is handed to calibration with `calibrate(taskDir, panel, budget)` and waits in **Calibrating**. Calibration is a separate module; until it lands the hand-off records nothing.
+   - **calibration** (**Calibrating**): solver attempts on a frozen panel measure how hard the task is for each model family ([pipeline/README.md](pipeline/README.md#calibration-calibratets)). Calibration runs only on the final, leak-checked instruction; a task packaged with any other text is rejected as `instruction_mismatch`. An accepted task moves to **Accepted**; any other decision moves it to **Rejected** with its reason (`too_easy`, `unsolved_review`, `out_of_band`, `over_budget`, `held_errors`) and the pass counts per family. Each stage of solver attempts launches only if what is left of the campaign's cap, after floor turns and earlier calibration, covers it.
 4. **Learning**, when the batch is done and before the next batch's Scout turn: the batch's numbers go on the curve, the rules that were on trial in it are kept or reverted on measurement, and the **Teacher** proposes rules from its rejects for the next batch. See [How it learns](#how-it-learns).
 
-Every turn starts through the Stablehand API with the tags `{campaign, batch, stage, item}`, so spend lands on the campaign's budget and `GET /api/turns?tag=` finds it. The foreman waits with `waitForTurn` and adds each turn's `usage.cost` to its card, its batch and the campaign.
+Every turn starts through the Stablehand API with the tags `{campaign, batch, stage, item}`, so spend lands on the campaign's budget and `GET /api/turns?tag=` finds it. The foreman waits with `waitForTurn` and adds each turn's `usage.cost` to its card, its batch and the campaign. Calibration's model calls go through the gateway on a campaign key whose `campaign` tag is the same budget tag, so one budget covers both; each attempt's gateway-priced cost is added to its card, its batch and the campaign as well.
 
 **Crash-safe.** All foreman state is in the board store. A turn's idempotency key and task text are written before the turn is requested, and its id right after; a job's id is fixed by what it does. Kill the worker mid-batch and start it again: it finds the campaign still running, adds one to the board's **Recovered from crash** counter, logs `RECOVERED campaign … resuming batch N where it left off`, waits on the turns Stablehand kept running, re-sends any turn that never left, and resumes jobs in flight. Nothing that finished runs twice.
 
@@ -117,6 +117,13 @@ The worker drives Docker and Harbor itself, so the simplest setup runs it on the
    cat /tmp/key.env >> ~/.config/bugfarm/worker.env && rm /tmp/key.env   # STABLEHAND_API_KEY, never printed
    scripts/host-worker.sh start
    ```
+   **For calibration**, freeze the panel and mint a gateway key for the campaign's budget tag once, with the worker's `BUGFARM_WORK_DIR` and a Stablehand `.env` that has the master token (`BUGFARM_STABLEHAND_ENV`), then add `BUGFARM_CAMPAIGN_KEY_FILE` and `BUGFARM_STABLEHAND_ENV` to `worker.env`:
+   ```bash
+   cd pipeline
+   node --experimental-strip-types calibrate.ts mint-key --campaign my-campaign --max-budget 12 --key-file ~/.config/bugfarm/campaign-key.json
+   BUGFARM_CAMPAIGN_KEY_FILE=~/.config/bugfarm/campaign-key.json node --experimental-strip-types calibrate.ts freeze --panel-id cal-v2
+   ```
+   The worker logs `calibration on: panel cal-v2 …` when it starts, or why calibration is off.
 6. **Run a campaign**, one command; it seeds again (idempotent), starts the campaign and prints every card move until it stops:
    ```bash
    node dist/server/bugfarm.js run --repo fastapi/fastapi --candidates 15 --budget-tag my-campaign --cap 15
@@ -191,6 +198,12 @@ For page work, `pnpm --filter @stablehand-ext/bugfarm dev:web` serves the page w
 | `BUGFARM_FOREMAN` | `1` | `0` runs the board and tools without driving campaigns. The foreman also needs `STABLEHAND_BASE_URL` and `STABLEHAND_API_KEY`. |
 | `BUGFARM_SCOUT_AGENT` / `BUGFARM_ENV_BUILDER_AGENT` / `BUGFARM_WRITER_AGENT` / `BUGFARM_TEACHER_AGENT` | `bugfarm-scout` / `bugfarm-env-builder` / `bugfarm-writer` / `bugfarm-teacher` | Floor agents, by name. |
 | `BUGFARM_AGENT_SUFFIX` | empty | Appended to the default floor-agent names, for a second worker on the same Stablehand with its own agents (`bugfarm seed --agent-suffix` creates them). |
+| `BUGFARM_CALIBRATION` | `1` | `0` leaves cards that passed their controls waiting in Calibrating. |
+| `BUGFARM_CALIBRATION_PANEL` | `cal-v2` | Frozen panel id (under `<work dir>/calibration/panels/`) or file. Freeze it first: `node --experimental-strip-types pipeline/calibrate.ts freeze --panel-id cal-v2`. |
+| `BUGFARM_CAMPAIGN_KEY_FILE` | required for calibration | Campaign gateway key file from `pipeline/calibrate.ts mint-key --campaign <budget tag>`. Its `campaign` tag must be the campaign's budget tag. |
+| `BUGFARM_GATEWAY_URL` | `http://localhost:4400` | The LiteLLM gateway the solvers call. |
+| `BUGFARM_STABLEHAND_ENV` / `BUGFARM_GATEWAY_METERING_KEY` | empty | A Stablehand `.env` holding `STABLEHAND_MODEL_GATEWAY_METERING_KEY`, or the key itself: prices each attempt from the gateway's spend log. Without it, costs stay Harbor's estimates. |
+| `BUGFARM_CALIBRATION_SLOTS` | `6` | Solver trials at once, across every card calibrating. |
 | `BUGFARM_CHECK_CONCURRENCY` / `BUGFARM_CONTROLS_CONCURRENCY` | `3` / `2` | Check and controls jobs at once. |
 | `BUGFARM_WORK_DIR` | `pipeline/.work` | Clones, trees, results and Harbor tasks. |
 | `BUGFARM_MAX_CONTAINERS` | `4` | Containers the checks may run at once. |
