@@ -12,7 +12,7 @@
 // CLI: node --experimental-strip-types calibrate.ts <command>   (run without one for help)
 import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PROFILES } from './lib/repos.ts';
 import { Semaphore, ensureDir, fileExists, isDir, log, mapLimit, parseArgs, readJson, secs, writeJson } from './lib/util.ts';
@@ -973,9 +973,23 @@ export async function reconcile(panelId: string, ctx: { gateway: GatewayContext;
         store.save(rec);
         rows.push(attemptRow(rec));
       } else if (!s && rec.cost_state !== 'gateway') {
-        unsettled++;
+        if (snap && Date.now() - (rec.finished_at ?? 0) > 5 * 60_000) {
+          // Finished long ago and the gateway logged no call for it: it cost nothing.
+          rec.cost_usd = 0;
+          rec.gateway_calls = 0;
+          rec.cost_state = 'gateway';
+          store.save(rec);
+          rows.push(attemptRow(rec));
+        } else unsettled++;
       }
       cost += bestCost(rec);
+    }
+    // Keep the task summary's cost in step with its re-priced attempts.
+    const summaryPath = join(dirname(store.dir), 'summary.json');
+    if (fileExists(summaryPath)) {
+      const sum = readJson<CalibrationResult & Record<string, unknown>>(summaryPath);
+      const taskCost = Math.round(store.all().filter((a) => a.status === 'done').reduce((s, a) => s + bestCost(a), 0) * 1e6) / 1e6;
+      if (sum.cost !== taskCost) writeJson(summaryPath, { ...sum, cost: taskCost, cost_settled: true });
     }
   }
   if (rows.length && ctx.board) await ctx.board.write(rows);
@@ -1212,7 +1226,7 @@ async function main(): Promise<void> {
       if (fileExists(e.keyFile)) {
         const key = readCampaignKey(e.keyFile);
         const all = summaries(panel.id);
-        const spend = all.reduce((s, r) => s + r.cost, 0);
+        const spend = all.reduce((s, r) => s + new AttemptStore(panel.id, r.task).all().filter((a) => a.status === 'done').reduce((t, a) => t + bestCost(a), 0), 0);
         const repo = all[0] ? readJson<{ task_info: TaskInfo }>(join(taskStoreDir(panel.id, all[0].task), 'summary.json')).task_info.repo : '';
         rows.push(campaignRow({ key: key.tags.campaign ?? key.id, name: str('campaign-name') ?? `Calibration ${panel.id}`, repo, cap_usd: key.max_budget_usd ?? 0 }, spend));
       }
