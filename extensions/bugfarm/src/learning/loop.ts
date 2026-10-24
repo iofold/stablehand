@@ -6,7 +6,7 @@ import type { BatchLearning, LearningGate } from '../shared/learning.js';
 import { describePredicate, matches, type CandidateFeatures, type Predicate } from '../shared/predicate.js';
 import type { UpsertInput } from '../store/validate.js';
 import { extrasFromRaw, textFeatures, type GitFeatures } from './features.js';
-import { judgeRule } from './lifecycle.js';
+import { judgeRule, MIN_DECIDED, poolBatches } from './lifecycle.js';
 import { batchMetrics, gateFromItems, passedControls } from './metrics.js';
 import { MAX_RULES_PER_BATCH, ProposeRulesSchema, reviewProposals, type ExistingRule, type Proposal, type ProposalCard, type ProposalReport } from './proposals.js';
 import { teacherTask, type TeacherCard, type TeacherRule } from './teacher-task.js';
@@ -45,6 +45,8 @@ interface Logger {
 export interface LearningDeps {
   store: LearningStore;
   features: GitFeatures;
+  /** A trial with fewer decided candidates is pooled with the next batch (default MIN_DECIDED). */
+  minDecided?: number;
   logger?: Logger;
   now?: () => number;
 }
@@ -135,7 +137,7 @@ export class LearningLoop {
     const stored = (await this.payload<{ learning?: BatchLearning }>('batch', batchKey))?.learning;
     await this.deps.store.upsert([{ kind: 'batch', key: batchKey, payload: { n, learning: { ...metrics, teacher: stored?.teacher ?? null } } }]);
 
-    await this.measureTrials(id, n, metrics);
+    await this.measureTrials(id, n, metrics, end.last);
     this.logger.log(`[bugfarm] learning: batch ${n} of ${id}: ${metrics.accepted}/${metrics.decided} ${gate === 'controls' ? 'passed the checks' : 'accepted'}, $${metrics.cost_usd.toFixed(2)}${metrics.usd_per_accepted === null ? '' : ` ($${metrics.usd_per_accepted.toFixed(2)} each)`}, rejects ${JSON.stringify(metrics.reasons)}`);
 
     if (stored?.teacher && stored.teacher.state !== 'failed') return;
@@ -184,26 +186,43 @@ export class LearningLoop {
     });
   }
 
-  /** Measure the rules on trial in batch n against batch n−1, as the batch rows recorded them. */
-  private async measureTrials(id: string, n: number, after: BatchLearning): Promise<void> {
-    const trials = await this.rows<RulePayload>('rule', (p) => !p.simulated && p.campaign === id && p.status === 'trial' && p.batch_introduced === n);
+  /**
+   * Measure the rules on trial in this campaign against the batch before their trial began, as
+   * the batch rows recorded them. A trial that is still too small pools every batch since.
+   */
+  private async measureTrials(id: string, n: number, current: BatchLearning, last: boolean): Promise<void> {
+    const trials = await this.rows<RulePayload>('rule', (p) => !p.simulated && p.campaign === id && p.status === 'trial' && p.batch_introduced >= 2 && p.batch_introduced <= n);
     if (trials.length === 0) return;
-    const before = (await this.payload<{ learning?: BatchLearning }>('batch', `${id}:${n - 1}`))?.learning;
-    if (!before) {
-      this.logger.warn(`[bugfarm] learning: no numbers for batch ${n - 1} of ${id}; ${trials.length} trial rule(s) stay on trial`);
-      return;
-    }
+    const learningOf = async (b: number) => (b === n ? current : (await this.payload<{ learning?: BatchLearning }>('batch', `${id}:${b}`))?.learning ?? null);
     const rows: UpsertInput[] = [];
     for (const rule of trials) {
+      const start = rule.payload.batch_introduced;
+      const before = await learningOf(start - 1);
+      const trialBatches: BatchLearning[] = [];
+      for (let b = start; b <= n; b++) {
+        const batch = await learningOf(b);
+        if (batch) trialBatches.push(batch);
+      }
+      if (!before || trialBatches.length === 0) {
+        this.logger.warn(`[bugfarm] learning: no numbers for batch ${start - 1} of ${id}; rule ${rule.key} stays on trial`);
+        continue;
+      }
+      const after = trialBatches.length === 1 ? trialBatches[0] : poolBatches(trialBatches);
       const verdict = judgeRule({
         target: rule.payload.targets,
         before,
         after,
         ...(rule.payload.kind === 'scout_filter' && rule.payload.skip_if ? { filtered: after.filtered_by[rule.key] ?? 0 } : {}),
-        measuredWith: trials.filter((other) => other.key !== rule.key).map((other) => other.key),
+        measuredWith: trials.filter((other) => other.key !== rule.key && other.payload.batch_introduced === start).map((other) => other.key),
+        minDecided: this.deps.minDecided ?? MIN_DECIDED,
+        final: last,
       });
-      rows.push({ kind: 'rule', key: rule.key, payload: { status: verdict.status, measured_batch: n, measured_at: this.now(), effect: verdict.effect as Record<string, unknown> } });
-      this.logger.log(`[bugfarm] learning: rule ${rule.key} ${verdict.status}: ${verdict.effect.summary}`);
+      rows.push({
+        kind: 'rule',
+        key: rule.key,
+        payload: { status: verdict.status, measured_batch: verdict.status === 'trial' ? null : n, measured_at: this.now(), effect: verdict.effect as Record<string, unknown> },
+      });
+      this.logger.log(`[bugfarm] learning: rule ${rule.key} ${verdict.status === 'trial' ? 'stays on trial' : verdict.status}: ${verdict.effect.summary}`);
     }
     await this.deps.store.upsert(rows);
   }

@@ -8,7 +8,7 @@ import type { ItemContext } from '../foreman/context.js';
 import { DEFAULT_CONFIG, Foreman, itemKeyFor, type CampaignConfig } from '../foreman/foreman.js';
 import type { JobRecord } from '../jobs/runner.js';
 import { titlePrefix } from '../learning/features.js';
-import { judgeRule } from '../learning/lifecycle.js';
+import { judgeRule, poolBatches } from '../learning/lifecycle.js';
 import { LearningLoop } from '../learning/loop.js';
 import { batchMetrics, gateFromItems } from '../learning/metrics.js';
 import { reviewProposals, type ProposalCard } from '../learning/proposals.js';
@@ -119,6 +119,28 @@ describe('rule lifecycle', () => {
     const v = judgeRule({ target: 'instruction_leaks_fix', before: learning(1, 5, 10, 2, { instruction_leaks_fix: 1, flaky: 4 }), after: learning(2, 8, 10, 2, { instruction_leaks_fix: 1, flaky: 1 }) });
     expect(v.status).toBe('reverted');
     expect(v.effect.checks).toEqual({ target_dropped: false, share_improved: true, usd_improved: true });
+  });
+
+  it('defers a verdict on a batch too small to say anything, then pools the next batch', () => {
+    const before = learning(2, 9, 10, 1.9, { env_drift: 1 });
+    const tiny = learning(3, 1, 1, 0.48, {});
+    const deferred = judgeRule({ target: 'env_drift', before, after: tiny });
+    expect(deferred.status).toBe('trial');
+    expect(deferred.effect).toMatchObject({ too_small: true, min_decided: 5 });
+    expect(deferred.effect.summary).toContain('Too few to judge');
+    const pooled = poolBatches([tiny, learning(4, 6, 8, 1.6, { flaky: 2 })]);
+    expect(pooled).toMatchObject({ batches: [3, 4], accepted: 7, decided: 9, reasons: { flaky: 2 } });
+    expect(pooled.usd_per_accepted).toBeCloseTo(2.08 / 7, 4);
+    const verdict = judgeRule({ target: 'env_drift', before, after: pooled });
+    expect(verdict.status).toBe('reverted');
+    expect(verdict.effect.after).toMatchObject({ batch: 4, batches: [3, 4], accepted: 7, decided: 9 });
+    expect(verdict.effect.summary).toContain('batches 3–4 vs batch 2');
+  });
+
+  it('reverts a rule still too small to measure when the campaign ends', () => {
+    const v = judgeRule({ target: 'env_drift', before: learning(2, 9, 10, 1.9, { env_drift: 1 }), after: learning(3, 1, 1, 0.48, {}), final: true });
+    expect(v.status).toBe('reverted');
+    expect(v.effect.summary).toContain('fewer than the 5 needed');
   });
 
   it('reverts a rule when its target fell but neither number improved', () => {
@@ -302,7 +324,7 @@ describe('learning loop through the foreman', () => {
     const store = new MemoryStore();
     const floor = new LearningFloor(store);
     const jobs = new Jobs();
-    const learningLoop = new LearningLoop({ store, features: fakeFeatures, logger: quiet });
+    const learningLoop = new LearningLoop({ store, features: fakeFeatures, logger: quiet, minDecided: 3 });
     floor.tools = createToolHandlers({ jobs, store, floor, itemContext, learning: learningLoop });
     const foreman = new Foreman({
       store, jobs, floor, calibrate: pendingCalibration, panel: { entries: [] }, envContext, itemContext, logger: quiet, costSettleMs: 0, learning: learningLoop,

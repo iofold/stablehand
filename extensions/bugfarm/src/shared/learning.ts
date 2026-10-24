@@ -21,7 +21,10 @@ export const GATE_LABELS: Record<LearningGate, string> = {
 
 /** The numbers one rule is judged on: a batch, measured at the campaign's gate. */
 export interface BatchNumbers {
+  /** The batch; for a trial pooled over several batches, the last of them. */
   batch: number;
+  /** Set when several trial batches were pooled into one measurement. */
+  batches?: number[];
   accepted: number;
   decided: number;
   share: number | null;
@@ -82,4 +85,7 @@ export interface MeasuredEffect {
   filtered?: number;
   /** Other rules on trial in the same batch: they share one measurement. */
   measured_with?: string[];
+  /** The trial had fewer decided candidates than `min_decided`: no verdict from it on its own. */
+  too_small?: boolean;
+  min_decided?: number;
 }
