@@ -39,6 +39,49 @@ model_list:
     litellm_params:
       model: anthropic/claude-opus-5
       api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-sonnet-5-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-haiku-5-5
+    litellm_params:
+      model: anthropic/claude-haiku-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  # Autocache aliases, for agent loops that set no cache breakpoints of their
+  # own (Harbor's terminus-2 resends its whole growing conversation on every
+  # call). LiteLLM marks the system message and the newest message as cache
+  # points, so each call reads the conversation so far from the cache and
+  # writes only the new turn. Anthropic accepts at most 4 cache points per
+  # request; the hook counts the client's own and never adds past 4.
+  # The plain aliases stay unchanged: the Claude Agents harness sets its own
+  # cache points, and extra ones would compete with them.
+  - model_name: claude-sonnet-5-5-autocache
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+  - model_name: claude-haiku-5-5-autocache
+    litellm_params:
+      model: anthropic/claude-haiku-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+  - model_name: claude-sonnet-5-autocache
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
   - model_name: gemini-3.8-flash
     litellm_params:
       model: gemini/gemini-3.8-flash

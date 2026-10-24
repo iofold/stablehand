@@ -105,6 +105,54 @@ describe('model gateway deployment', () => {
     );
   });
 
+  it('adds autocache aliases for third-party agent loops and leaves the plain aliases unchanged', () => {
+    const config = readYaml<ModelGatewayConfig>(
+      'deploy/compose/model-gateway/config.yaml',
+    );
+
+    expect(config.model_list).toEqual(expect.arrayContaining([
+      {
+        model_name: 'claude-sonnet-5-5',
+        litellm_params: {
+          model: 'anthropic/claude-sonnet-5-5',
+          api_key: 'os.environ/ANTHROPIC_API_KEY',
+        },
+      },
+      {
+        model_name: 'claude-haiku-5-5',
+        litellm_params: {
+          model: 'anthropic/claude-haiku-5-5',
+          api_key: 'os.environ/ANTHROPIC_API_KEY',
+        },
+      },
+    ]));
+
+    // terminus-2 sets no cache breakpoints and resends its whole conversation
+    // on every call. The autocache aliases mark the system message and the
+    // newest message; LiteLLM 1.93's hook never goes past Anthropic's limit of
+    // 4 breakpoints and never overwrites a client's own (2026-10-24).
+    const injected = (config.model_list ?? []).filter(
+      (entry) => (entry.litellm_params as Record<string, unknown> | undefined)?.cache_control_injection_points !== undefined,
+    );
+    const expectedBackends: Record<string, string> = {
+      'claude-sonnet-5-5-autocache': 'anthropic/claude-sonnet-5-5',
+      'claude-haiku-5-5-autocache': 'anthropic/claude-haiku-5-5',
+      'claude-sonnet-5-autocache': 'anthropic/claude-sonnet-5',
+    };
+    expect(injected.map((entry) => entry.model_name)).toEqual(Object.keys(expectedBackends));
+    for (const entry of injected) {
+      expect(entry.model_name).toMatch(/-autocache$/);
+      expect(entry.litellm_params).toEqual({
+        model: expectedBackends[entry.model_name as string],
+        api_key: 'os.environ/ANTHROPIC_API_KEY',
+        cache_control_injection_points: [
+          { location: 'message', role: 'system' },
+          { location: 'message', index: -1 },
+        ],
+      });
+    }
+  });
+
   it('routes current Google Gemini traffic with a deployment-owned key', () => {
     const config = readYaml<ModelGatewayConfig>(
       'deploy/compose/model-gateway/config.yaml',
