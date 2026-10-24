@@ -18,11 +18,14 @@ interface Point {
   running: boolean;
 }
 
-function pointOf(batch: Batch): Point {
+function pointOf(batch: Batch, measured: boolean): Point {
   const learn = batch.learn;
   if (learn) {
     return { batch, share: learn.share, perAccepted: learn.usd_per_accepted, accepted: learn.accepted, decided: learn.decided, cost: learn.cost_usd, running: false };
   }
+  // In a campaign the learning loop measures, a batch has numbers only once it is measured: the
+  // batch row's own counts are calibration's and mean something else at the controls gate.
+  if (measured) return { batch, share: null, perAccepted: null, accepted: 0, decided: 0, cost: null, running: true };
   const accepted = batch.accepted ?? 0;
   const decided = batch.status === 'done' && batch.candidates ? batch.candidates : accepted + (batch.rejected ?? 0);
   return { batch, share: batch.share, perAccepted: batch.usdPerAccepted, accepted, decided, cost: batch.cost_usd ?? null, running: batch.status !== 'done' };
@@ -295,9 +298,10 @@ function gateOf(points: Point[]): LearningGate | null {
 }
 
 export function Learning({ view }: { view: BoardView }) {
-  const points = view.batches.map(pointOf);
+  const measured = view.batches.some((batch) => batch.learn);
+  const points = view.batches.map((batch) => pointOf(batch, measured));
   const gate = gateOf(points);
-  const sizes = points.filter((point) => point.decided > 0).map((point) => point.decided);
+  const sizes = points.filter((point) => !point.running && point.decided > 0).map((point) => point.decided);
   const typical = sizes.length > 0 ? Math.round(sizes.reduce((a, b) => a + b, 0) / sizes.length) : 0;
   const setup = points.reduce((sum, point) => sum + (point.batch.learn?.setup_usd ?? 0), 0);
   return (
@@ -377,7 +381,7 @@ export function Learning({ view }: { view: BoardView }) {
                   <tr key={point.batch.n}>
                     <td className="px-4 py-2.5 font-semibold">{point.batch.n}{point.running && <span className="ml-2 font-normal text-ink-3">running</span>}</td>
                     <td className="px-4 py-2.5 text-right">{point.batch.learn?.candidates ?? point.batch.candidates ?? '—'}{point.batch.learn?.filtered ? <span className="text-ink-3"> +{point.batch.learn.filtered} dropped</span> : null}</td>
-                    <td className="px-4 py-2.5 text-right">{count(point.accepted, point.decided)}</td>
+                    <td className="px-4 py-2.5 text-right">{point.running && measured ? '—' : count(point.accepted, point.decided)}</td>
                     <td className="px-4 py-2.5 text-right">{pct(point.share)}</td>
                     <td className="px-4 py-2.5 text-right">{usd(point.cost)}</td>
                     <td className="px-4 py-2.5 text-right">{usd(point.perAccepted)}</td>
