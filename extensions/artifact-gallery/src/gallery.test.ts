@@ -84,6 +84,21 @@ describe('artifact-gallery classification and serving', () => {
     expect(png['Content-Security-Policy']).toBeUndefined();
     expect(png['X-Content-Type-Options']).toBe('nosniff');
   });
+
+  it.each([
+    'image/svg+xml',
+    'image/svg+xml; charset=utf-8',
+    'IMAGE/SVG+XML; CHARSET=UTF-8',
+    'image/svg+xml ; charset=utf-8',
+    'text/html; charset=utf-8',
+    'TEXT/HTML; CHARSET=UTF-8',
+  ])('isolates active artifact content with MIME type %s', (mimeType) => {
+    expect(isCacheableMime(mimeType)).toBe(true);
+    const headers = blobResponseHeaders(mimeType);
+    expect(headers['Content-Type']).toBe(mimeType);
+    expect(headers['Content-Security-Policy']).toContain('sandbox allow-scripts;');
+    expect(headers['Content-Security-Policy']).not.toContain('allow-same-origin');
+  });
 });
 
 describe('artifact-gallery index and rendering', () => {

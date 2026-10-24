@@ -90,12 +90,13 @@ export function isHtmlMime(mimeType: string): boolean {
  * fetch anything beyond itself; everything gets nosniff.
  */
 export function blobResponseHeaders(mimeType: string): Record<string, string> {
+  const normalizedMimeType = mimeType.toLowerCase().split(';')[0].trim();
   const headers: Record<string, string> = {
     'Content-Type': mimeType,
     'X-Content-Type-Options': 'nosniff',
     'Cache-Control': 'public, max-age=300',
   };
-  if (isHtmlMime(mimeType) || mimeType.toLowerCase() === 'image/svg+xml') {
+  if (normalizedMimeType === 'text/html' || normalizedMimeType === 'image/svg+xml') {
     headers['Content-Security-Policy'] =
       "sandbox allow-scripts; default-src 'self' 'unsafe-inline' data: blob:;";
   }

@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { readWebhookBody } from './webhook-body.js';
 import {
   EMPTY_INDEX,
   MAX_CACHED_BYTES,
@@ -187,12 +188,6 @@ async function waitForStablehand(): Promise<Response> {
   }
 }
 
-async function readBody(req: import('node:http').IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString('utf8');
-}
-
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', PUBLIC_URL);
@@ -219,7 +214,12 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && url.pathname === '/hooks/stablehand') {
-      const rawBody = await readBody(req);
+      const rawBody = await readWebhookBody(req);
+      if (rawBody === undefined) {
+        res.writeHead(413, { 'Content-Type': 'application/json', Connection: 'close' });
+        res.end(JSON.stringify({ error: 'webhook body exceeds the 1 MiB limit' }));
+        return;
+      }
       const valid = verifyWebhookSignature({
         secret: WEBHOOK_SECRET,
         rawBody,
