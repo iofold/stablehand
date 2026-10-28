@@ -3,6 +3,7 @@ import { CONTAINER_SCOPE_LABEL } from '../../container-scope.js';
 import {
   buildDockerContainerSpec,
   buildKubernetesJobSpec,
+  resolveKubernetesWorkloadProfile,
   buildSandboxOtelEnv,
   buildSandboxEgressEnv,
   SANDBOX_EGRESS_DEFAULT_NO_PROXY,
@@ -372,6 +373,61 @@ describe('sandbox runtime spec builders', () => {
         type: 'DirectoryOrCreate',
       },
     }]);
+  });
+
+  it('builds a bounded PVC worker with a session subpath and approved digest', () => {
+    const profile = resolveKubernetesWorkloadProfile({ STABLEHAND_K8S_WORKLOAD_PROFILE: JSON.stringify({
+      workspaceClaimName: 'workspaces',
+      harnessImages: { 'claude-agents': `registry.example/harness@sha256:${'a'.repeat(64)}` },
+      nodeSelector: { 'iofold.com/workload-pool': 'experiments' },
+      tolerations: [{ key: 'iofold.com/lane', operator: 'Equal', value: 'experiments', effect: 'NoSchedule' }],
+      egressCaSecretName: 'egress-public-ca',
+    }) });
+    const spec = buildKubernetesJobSpec({
+      options: { ...createOptions, workspaceDir: '/var/lib/stablehand/data/agents/a/session-1' },
+      namespace: 'stablehand-workers', imagePrefix: 'legacy/harness', scopeId: 'test', defaults,
+      startupGraceMs: 90_000, startedAtIso: '2026-10-28T00:00:00Z', orchestratorUrl: 'http://orchestrator:3001',
+      dataHostPathRoot: '/var/lib/stablehand/data', workloadProfile: profile,
+    });
+    expect(spec.manifest.spec).toMatchObject({
+      backoffLimit: 0, activeDeadlineSeconds: 1290, podReplacementPolicy: 'Failed', completions: 1, parallelism: 1,
+    });
+    const pod = spec.manifest.spec.template.spec;
+    expect(pod).toMatchObject({ activeDeadlineSeconds: 1290, automountServiceAccountToken: false,
+      securityContext: { runAsNonRoot: true, runAsUser: 1000 }, nodeSelector: profile?.nodeSelector });
+    expect(pod.volumes).toEqual([
+      { name: 'workspace', persistentVolumeClaim: { claimName: 'workspaces' } },
+      { name: 'egress-ca', secret: { secretName: 'egress-public-ca' } },
+    ]);
+    expect(pod.containers[0]).toMatchObject({
+      image: `registry.example/harness@sha256:${'a'.repeat(64)}`,
+      resources: { requests: { 'ephemeral-storage': '256Mi' }, limits: { 'ephemeral-storage': '2Gi' } },
+      securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ['ALL'] } },
+      volumeMounts: [
+        { name: 'workspace', mountPath: '/workspace', subPath: 'agents/a/session-1' },
+        { name: 'egress-ca', mountPath: '/etc/stablehand/egress-ca', readOnly: true },
+      ],
+    });
+    expect(JSON.stringify(spec.manifest)).not.toContain('hostPath');
+  });
+
+  it('refuses PVC root/escape workspaces and unapproved harnesses', () => {
+    const profile = resolveKubernetesWorkloadProfile({ STABLEHAND_K8S_WORKLOAD_PROFILE: JSON.stringify({
+      workspaceClaimName: 'workspaces', harnessImages: { 'claude-agents': `r/h@sha256:${'a'.repeat(64)}` },
+      nodeSelector: { 'iofold.com/workload-pool': 'experiments' },
+    }) });
+    const input = { options: { ...createOptions, workspaceDir: '/var/lib/stablehand/data/run-1' },
+      namespace: 'workers', imagePrefix: 'legacy', scopeId: 'test', defaults, startupGraceMs: 90_000,
+      startedAtIso: '2026-10-28T00:00:00Z', orchestratorUrl: 'http://orchestrator:3001',
+      dataHostPathRoot: '/var/lib/stablehand/data', workloadProfile: profile };
+    for (const workspaceDir of ['/var/lib/stablehand/data', '/etc', '/var/lib/stablehand/data/../secret']) {
+      expect(() => buildKubernetesJobSpec({ ...input, options: { ...input.options, workspaceDir } })).toThrow('child');
+    }
+    expect(() => buildKubernetesJobSpec({ ...input, options: { ...input.options, harnessName: 'unknown' } })).toThrow('approved');
+    expect(resolveKubernetesWorkloadProfile({})).toBeUndefined();
+    expect(() => resolveKubernetesWorkloadProfile({ STABLEHAND_K8S_WORKLOAD_PROFILE: JSON.stringify({
+      workspaceClaimName: 'workspaces', harnessImages: { 'claude-agents': 'r/h:latest' }, nodeSelector: {},
+    }) })).toThrow();
   });
 
   it('sanitizes Kubernetes names with the current truncation policy', () => {

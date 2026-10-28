@@ -13,6 +13,7 @@ import {
   kubernetesSandboxSecretName,
   resolveContainerStartupGraceMs,
   resolveSandboxRuntimeDefaults,
+  resolveKubernetesWorkloadProfile,
   runtimeLabelsToContainerInfo,
   sanitizeKubernetesName,
 } from './spec.js';
@@ -213,6 +214,7 @@ export class KubernetesContainerDriver {
       orchestratorUrl: process.env.ORCHESTRATOR_CALLBACK_URL || 'http://orchestrator:3001',
       dataHostPathRoot: this.dataHostPathRoot,
       imagePullPolicy: this.imagePullPolicy,
+      workloadProfile: resolveKubernetesWorkloadProfile(),
     });
 
     console.debug(`${TAG} creating sandbox Job ${spec.jobName} in namespace ${namespace}`);
