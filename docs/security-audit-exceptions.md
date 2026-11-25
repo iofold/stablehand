@@ -26,6 +26,7 @@ in the root `package.json` and must be documented here with a rationale and a re
 ## Override pins
 
 `pnpm.overrides` in the root `package.json` pins vulnerable transitives to patched releases
-(protobufjs, hono, undici, ws, shell-quote, brace-expansion, proxy-addr, @fastify/busboy, @grpc/grpc-js, and others). When bumping a direct
+(protobufjs, hono, undici, ws, shell-quote, brace-expansion, proxy-addr, @fastify/busboy, @grpc/grpc-js,
+systeminformation via OpenTelemetry host metrics for GHSA-3f7j-7jwc-fxfj, and others). When bumping a direct
 dependency that owns one of these chains, re-check whether the corresponding override is still
 needed and drop it if upstream now resolves clean.

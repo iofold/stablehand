@@ -90,6 +90,7 @@
       "@opentelemetry/instrumentation-oracledb@<0.46.0": "0.46.0",
       "@opentelemetry/instrumentation-tedious@<0.40.0": "0.40.0",
       "@opentelemetry/instrumentation-cassandra-driver@<0.66.0": "0.66.0",
+      "systeminformation@<5.33.16": "5.33.26",
       "vitest@>=3 <3.2.6": "3.2.6",
       "vite@>=6 <6.4.4": "6.4.4",
       "postcss@>=8 <8.5.23": "8.5.23",
