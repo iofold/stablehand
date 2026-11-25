@@ -89,7 +89,8 @@ jobs:
 
   e2e:
     name: E2E (Playwright)
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, where Playwright 1.58 cannot install Chromium.
+    runs-on: ubuntu-24.04
     needs: test
     # Job-level so both `docker compose up` (the orchestrator reads them) and the
     # Playwright step see them. Unset secrets resolve to empty strings; the smoke tests
