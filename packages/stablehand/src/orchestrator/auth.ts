@@ -158,8 +158,34 @@ function routeConfig(request: FastifyRequest): FastifyRequest['routeOptions']['c
   return request.routeOptions?.config;
 }
 
-function pathnameFor(request: FastifyRequest): string {
-  return new URL(request.url, 'http://stablehand.local').pathname;
+/**
+ * The request path as the router sees it: percent-escapes decoded, repeated
+ * slashes collapsed and lower-cased, so no spelling of `/api` escapes the
+ * prefix check. Undecodable input stays raw; the router rejects it anyway.
+ */
+function normalizedPathname(rawUrl: string): string {
+  const rawPath = rawUrl.split(/[?#]/, 1)[0] ?? '';
+  return decodePathOrRaw(rawPath).replace(/\/{2,}/g, '/').toLowerCase();
+}
+
+function decodePathOrRaw(rawPath: string): string {
+  try {
+    return decodeURIComponent(rawPath);
+  } catch {
+    return rawPath;
+  }
+}
+
+/**
+ * Whether a request targets the /api control plane. Decided from the route the
+ * router matched, with the normalized path as a fallback for unmatched paths.
+ * The raw URL alone is not enough: the router decodes `/%61pi/keys` and routes
+ * it to `/api/keys`, so a raw-URL prefix check let such requests skip auth.
+ */
+function isApiRequest(request: FastifyRequest): boolean {
+  const matchedRoute = request.routeOptions?.url;
+  if (typeof matchedRoute === 'string' && isApiPath(matchedRoute)) return true;
+  return isApiPath(normalizedPathname(request.url));
 }
 
 function unauthorized(reply: FastifyReply) {
@@ -285,8 +311,7 @@ export function registerApiAuth(
   app.addHook('onRequest', async (request, reply) => {
     if (request.method === 'OPTIONS') return;
 
-    const pathname = pathnameFor(request);
-    if (!isApiPath(pathname)) return;
+    if (!isApiRequest(request)) return;
 
     const configForRoute = routeConfig(request);
     if (configForRoute?.public === true) return;

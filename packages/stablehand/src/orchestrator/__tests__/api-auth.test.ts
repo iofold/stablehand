@@ -161,6 +161,53 @@ describe('registerApiAuth', () => {
     });
   });
 
+  // The router decodes percent-escapes before matching, so `/%61pi/private`
+  // reaches the /api/private handler. A raw-URL prefix check let these skip auth.
+  it.each([
+    ['GET', '/%61pi/private'],
+    ['GET', '/%61%70%69/private'],
+    ['GET', '/%2561pi/private'],
+    ['GET', '/a%70i/private'],
+    ['GET', '/%61pi/private?x=1'],
+    ['POST', '/%61pi/private'],
+    ['GET', '/api%2Fprivate'],
+    ['GET', '//api/private'],
+    ['GET', '/API/private'],
+    ['GET', '/%41PI/private'],
+    ['GET', '/%61pi/nope'],
+  ])('never serves %s %s without a token', async (method, url) => {
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      const res = await app.inject({ method: method as 'GET' | 'POST', url });
+      expect(res.statusCode).not.toBe(200);
+      expect(res.statusCode).not.toBe(204);
+    });
+  });
+
+  it('answers 401 for an encoded /api path that the router matches', async () => {
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      const res = await app.inject({ method: 'GET', url: '/%61pi/private' });
+      expect(res.statusCode).toBe(401);
+      expect(res.headers['www-authenticate']).toBe('Bearer realm="stablehand"');
+    });
+  });
+
+  it('still serves an encoded /api path to the master token', async () => {
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/%61pi/private',
+        headers: { Authorization: 'Bearer secret' },
+      });
+      expect(res.statusCode).toBe(200);
+    });
+  });
+
+  it('keeps an encoded public /api route public', async () => {
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      expect((await app.inject({ method: 'GET', url: '/%61pi/health' })).statusCode).toBe(200);
+    });
+  });
+
   it('records route auth metadata for coverage tests', async () => {
     await withApp({ mode: 'open' }, async (app) => {
       expect(app.apiRouteTable).toEqual(expect.arrayContaining([
@@ -208,6 +255,24 @@ describe('scoped api keys (WO-5)', () => {
       expect(res.statusCode).toBe(200);
       expect(store.touched).toEqual([]);
     }, store);
+  });
+
+  it('applies capability checks to an encoded /api path', async () => {
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      const undeclared = await app.inject({
+        method: 'GET',
+        url: '/%61pi/private',
+        headers: { Authorization: `Bearer ${SCOPED_TOKEN}` },
+      });
+      expect(undeclared.statusCode).toBe(403);
+
+      const missingCapability = await app.inject({
+        method: 'POST',
+        url: '/%61pi/scoped-emit',
+        headers: { Authorization: `Bearer ${SCOPED_TOKEN}` },
+      });
+      expect(missingCapability.statusCode).toBe(403);
+    }, storeWith(principal));
   });
 
   it('rejects a scoped key on an undeclared route — fail-closed master-only', async () => {
